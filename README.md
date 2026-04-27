@@ -1,0 +1,390 @@
+# RegisterService
+
+这个目录是从 `NeuroPlugin` 中裁剪出来的、当前真实在用的注册运行时闭包。
+
+目标不是复制整个旧工程，而是保留当前已经跑通的：
+
+- DST 顶层编排
+- DST 统一调度器
+- EasyEmail / EasyProxy / EasyProtocol 调度适配器
+- 通过 `EasyProtocol -> PythonProtocol` 执行协议语义步骤
+- 调用 Easy 网络中各服务实例所需的客户端代码
+
+当前刻意 **没有** 迁移的内容：
+
+- EasyProxy 服务实现
+- EasyEmail 服务实现
+- EasyBrowser 服务实现
+- 旧工程中的测试、调试、快照、历史产物
+
+这些 EasyXXX 服务仍然应由原始仓库或容器实例提供，`RegisterService` 只负责调用它们。
+
+另外，迁移过程中已经移除了不属于当前 DST 主链热路径的旧入口文件，例如：
+
+- `first_register.py`
+- `second_oauth.py`
+- `protocol_runtime/platform_protocol_register.py`
+- `protocol_runtime/semantic_auth_flow.py`
+
+## 当前目录结构
+
+- `compose/`
+  - `RegisterService` 容器实例的单独编排入口
+- `server/services/orchestration_service/flows/`
+  - 顶层 DST / semantic-flow
+- `server/services/orchestration_service/src/`
+  - 顶层调度器
+  - EasyEmail / EasyProxy / EasyProtocol 适配层
+  - `others/` 公共模型、路径、运行时辅助
+- `server/services/python_shared/src/`
+  - 调用 EasyEmail / EasyProxy 的客户端代码
+
+`RegisterService` 当前不再内嵌本地协议执行器，协议执行边界已经变成：
+
+- `RegisterService` -> `EasyProtocol` -> `PythonProtocol`
+
+## 当前主流程
+
+顶层 DST 入口：
+
+- `server/services/orchestration_service/src/dst_flow.py`
+
+当前顶层步骤：
+
+1. `acquire_mailbox`
+2. `acquire_proxy_chain`
+3. `create_openai_account`
+4. `invite_codex_member`
+5. `obtain_codex_oauth`
+6. `revoke_codex_member`
+7. `release_proxy_chain`
+8. `release_mailbox`
+9. `upload_file_to_r2`（启用时上传最终 auth JSON）
+
+## 运行前提
+
+运行这套代码需要外部 Easy 网络实例已经可用：
+
+- EasyEmail
+- EasyProxy
+- EasyProtocol
+- PythonProtocol
+
+并且需要提供：
+
+- team auth json
+- 可访问的 EasyEmail / EasyProxy 容器实例
+- 可访问的 EasyProtocol / PythonProtocol 容器实例
+
+如果未显式传入环境变量，当前代码会优先尝试：
+
+- `MAILBOX_SERVICE_BASE_URL = http://localhost:18080`
+- `MAILBOX_SERVICE_API_KEY`
+  - 从当前工作树向上搜索已有的 `EmailService/deploy/EasyEmail/config.yaml`
+  - 不在 `RegisterService` 内部单独维护一份 EasyEmail 配置
+
+当前邮箱策略已经收口成“由 `EasyEmail` 决定 provider 路由”：
+
+- `RegisterService` 默认不再本地维护 provider 主次顺序
+- 主注册 / 续跑 / team 三类实例默认都直接调用 `EasyEmail` 的 mailbox 能力接口
+- 如果不显式设置邮箱策略相关环境变量，就使用 `EasyEmail` 自己的默认 strategy mode
+- 当前默认会请求 `EasyEmail` 的 `high-availability` routing profile
+- `REGISTER_MAILBOX_PROVIDERS` 现在只作为可选的 provider group 过滤条件透传给 `EasyEmail`
+- `REGISTER_MAILBOX_STRATEGY_MODE_ID` 现在只作为可选的 strategy mode 透传给 `EasyEmail`
+- `REGISTER_MAILBOX_ROUTING_PROFILE_ID` 现在只作为可选的 routing profile id 透传给 `EasyEmail`
+
+`high-availability` 是 `EasyEmail` 内部的通用路由档位，不是 `RegisterService`
+里的业务白名单。当前它会把高可用邮箱优先收敛到 `m2u + moemail`，以后如果你要
+调整高可用池，应优先在 `EasyEmail` 内部变更这个档位，而不是改业务侧代码。
+
+其中 provider 的具体能力差异都应由 `EasyEmail` 内部处理。
+
+- `RegisterService` 默认只关心 open / read / release 这些统一邮箱能力
+- 如果某个 provider 不支持 delete / release mailbox，`EasyEmail` 会返回统一的 skip/no-op 语义
+- `RegisterService` 不再根据 provider 名字分支处理 release 成功条件
+
+Team 凭证读取推荐通过环境变量控制：
+
+- `REGISTER_TEAM_AUTH_PATH`
+  - 直接指定某一个 team json 文件
+- `REGISTER_TEAM_AUTH_PATHS`
+  - 直接指定多个 team json 文件，优先级最高
+- `REGISTER_TEAM_AUTH_DIR`
+  - 指定 team 凭证目录，系统会按 glob 选择最新文件
+- `REGISTER_TEAM_AUTH_LOCAL_DIR`
+  - 本地 team 凭证目录，默认优先搜索
+- `REGISTER_TEAM_AUTH_DEFAULT_DIR`
+  - 默认 team 凭证目录，本地目录为空时再回退搜索
+- `REGISTER_TEAM_AUTH_DIRS`
+  - 指定多个 team 凭证目录，使用系统路径分隔符分隔
+- `REGISTER_TEAM_AUTH_GLOB`
+  - 指定目录搜索模式，默认是 `*-team.json`
+
+默认优先级是：
+
+1. `REGISTER_TEAM_AUTH_PATHS`
+2. `REGISTER_TEAM_AUTH_PATH`
+3. `REGISTER_TEAM_AUTH_DIRS`
+4. `REGISTER_TEAM_AUTH_LOCAL_DIR`
+5. `REGISTER_TEAM_AUTH_DEFAULT_DIR`
+
+team 凭证选择规则：
+
+- 优先匹配文件名以 `codex-team-mother-` 开头的母号凭证
+- 如果没有显式母号文件，则扫描 team 凭证内容，优先识别 `auth_provider=passwordless` 且 `amr` 包含 `otp` / `otp_email` 的母号候选
+- 从可用母号候选中先排除冷却中的凭证，然后随机选取，避免始终挑最新文件
+
+R2 上传如果要在 DST 主链里启用，至少需要提供目标文件夹：
+
+- `--r2-target-folder`
+
+如果没有显式指定 `--r2-target-folder`，当前调度器会默认使用
+DST 的 `platform` 字段作为上传目录。以当前流程为例，最终 auth JSON
+默认会组织成：
+
+- `codex/<最终auth-json文件名>`
+
+其他参数既可以通过 DST CLI 显式传入，也可以由 `PythonProtocol` 执行器环境变量提供：
+
+- `--r2-bucket`
+- `--r2-object-name`
+- `--r2-account-id`
+- `--r2-endpoint-url`
+- `--r2-access-key-id`
+- `--r2-secret-access-key`
+- `--r2-region`
+- `--r2-public-base-url`
+
+## 直接运行示例
+
+```powershell
+python "C:\Users\Public\nas_home\AI\GameEditor\RegisterService\server\services\orchestration_service\src\dst_flow.py" `
+  --output-dir "C:\Users\Public\nas_home\AI\GameEditor\RegisterService\tmp\run" `
+  --team-auth "C:\Users\vmjcv\.cli-proxy-api\codex-1dfcda64-moddc8da@sall.cc-team.json"
+```
+
+## 容器编排入口
+
+`RegisterService` 的容器实例编排不再放在 `deploy/` 下，当前单独入口是：
+
+- `compose/docker-compose.yaml`
+
+典型启动命令：
+
+```powershell
+docker compose -f "C:\Users\Public\nas_home\AI\GameEditor\RegisterService\compose\docker-compose.yaml" up -d
+```
+
+本地迭代时，compose 默认会用已有的 `registerservice/register-service:local`
+作为构建基底，只覆盖当前代码层，避免每次代码更新都重新拉取基础镜像和 PyPI
+依赖。如果是全新机器首次构建，可以显式设置：
+
+```powershell
+$env:REGISTER_SERVICE_BASE_IMAGE="python:3.10-bookworm"
+```
+
+当前 compose 会拉起三类 `RegisterService` 实例：
+
+- `register-service`
+  - 主注册 flow
+  - 负责持续产出新的 `small_success`
+  - 暴露运行态面板
+  - 默认 `7` 个 worker
+- `register-continue-service`
+  - 小成功续跑 flow
+  - 负责从 `small-success-pool` 中 claim 一个 `small_success`，继续跑后半段
+  - 默认按 `free` 本地分流比例写入 `free` 本地存储目录，不再上传
+  - 只有把 `REGISTER_FREE_LOCAL_SPLIT_PERCENT` 调低后，未命中本地分流的 free 成品才会上传
+  - 默认 `2` 个 worker
+- `register-team-service`
+  - team 扩容 flow
+  - 负责把 `small-success-pool` 中的文件随机补充到 `others/team-pre-pool`
+  - 监控你手动放入 `team-mother-pool` 的 mother 凭证
+  - 自动完成 mother 二次登录、team workspace 选择、4 个成员邀请、4 个成员 OAuth
+  - 最终 team 成品默认会上传到 `codex-team/<文件名>` 并删除 `team-oauth-pool` 中的本地文件
+  - 如果命中 `team` 本地分流比例，则改为写入 `team` 本地存储目录，不再上传
+  - 默认 `1` 个 worker
+
+两个实例都采用“单实例 supervisor + 多 worker 进程”模型：
+
+- 容器内只有一个中心控制端
+- supervisor 负责拉起多个独立 worker 进程
+- 每个 worker 串行执行一整条 DST
+- 多个 worker 可以并发跑不同任务
+- worker 之间通过进程隔离，避免代理/邮箱运行时全局状态互相污染
+
+相关环境变量：
+
+- `REGISTER_WORKER_COUNT`
+  - 主注册 worker 数量，默认 `7`
+- `REGISTER_WORKER_STAGGER_SECONDS`
+  - 主注册 worker 启动错峰秒数，默认 `20`
+- `REGISTER_LOOP_DELAY_SECONDS`
+  - 每个 worker 完成一轮后的等待秒数
+- `REGISTER_INFINITE_MAX_RUNS`
+  - 整个 supervisor 总共允许启动的任务数；`0` 表示无限
+- `REGISTER_CONTINUE_WORKER_COUNT`
+  - 续跑 worker 数量，默认 `2`
+- `REGISTER_CONTINUE_WORKER_STAGGER_SECONDS`
+  - 续跑 worker 启动错峰秒数，默认 `5`
+- `REGISTER_CONTINUE_LOOP_DELAY_SECONDS`
+  - 续跑 worker 每轮完成后的等待秒数，默认 `15`
+- `REGISTER_TEAM_WORKER_COUNT`
+  - team 扩容 worker 数量，默认 `1`
+- `REGISTER_TEAM_WORKER_STAGGER_SECONDS`
+  - team 扩容 worker 启动错峰秒数，默认 `5`
+- `REGISTER_TEAM_LOOP_DELAY_SECONDS`
+  - team 扩容 worker 每轮完成后的等待秒数，默认 `20`
+- `REGISTER_TEAM_PRE_FILL_COUNT`
+  - 每轮最多从 `small-success-pool` 随机移动到 `others/team-pre-pool` 的文件数，默认 `1`
+- `REGISTER_TEAM_MEMBER_COUNT`
+  - 每个 mother 凭证扩容时要从 `others/team-pre-pool` claim 的成员数，默认 `4`
+- `REGISTER_TEAM_PRE_POOL_DIR`
+  - 默认 `/shared/register-output/others/team-pre-pool`
+- `REGISTER_TEAM_MOTHER_POOL_DIR`
+  - 默认 `/shared/register-output/team-mother-pool`
+- `REGISTER_TEAM_MOTHER_CLAIMS_DIR`
+  - 默认 `/shared/register-output/others/team-mother-claims`
+- `REGISTER_TEAM_MEMBER_CLAIMS_DIR`
+  - 默认 `/shared/register-output/others/team-member-claims`
+- `REGISTER_TEAM_POST_POOL_DIR`
+  - 默认 `/shared/register-output/others/team-post-pool`
+- `REGISTER_TEAM_POOL_DIR`
+  - 默认 `/shared/register-output/team-oauth-pool`
+- `REGISTER_TEAM_WORKSPACE_SELECTOR`
+  - 传给协议执行器的 workspace 选择策略，默认 `first_team`
+- `REGISTER_FREE_LOCAL_SPLIT_PERCENT`
+  - `free` 最终凭证本地分流比例，支持 `0-100` 或 `0-1` 写法，默认 `100`
+- `REGISTER_FREE_LOCAL_DIR`
+  - `free` 最终凭证的本地存储目录，默认 `/shared/local-free-store`
+- `REGISTER_TEAM_LOCAL_SPLIT_PERCENT`
+  - `team` 最终凭证本地分流比例，支持 `0-100` 或 `0-1` 写法，默认 `100`
+- `REGISTER_TEAM_LOCAL_DIR`
+  - `team` 最终凭证的本地存储目录，默认 `/shared/local-team-store`
+
+## 资源容量兜底
+
+主注册和续跑 flow 都会在失败或异常退出时执行资源释放。除此之外，
+supervisor 还内置了两类容量兜底：
+
+- Codex team 容量兜底
+  - 当邀请持续失败并判定所有 team 凭证都进入容量冷却时，会触发一次
+    `cleanup_codex_capacity`
+  - 该步骤只清理 Codex 相关席位和 pending invite，不清理 owner
+- 邮箱容量兜底
+  - 当 `acquire-mailbox` 连续命中 `mailbox_unavailable` 时，supervisor 会触发一次
+    `recover_mailbox_capacity`
+  - `RegisterService` 只把失败 detail 上报给 `EasyEmail`，由 `EasyEmail` 内部判断是否需要执行
+    某个 provider 的容量恢复动作
+  - 当前 `EasyEmail` 内部会在匹配到 `MoEmail` 容量故障特征时执行对应清理，默认最多处理 `30` 个邮箱
+  - 这个操作可能使正在运行的任务失去邮箱，但可以接受，用于快速释放被卡住的 provider 容量
+
+邮箱容量恢复相关环境变量：
+
+- `REGISTER_MAILBOX_CLEANUP_FAILURE_THRESHOLD`
+  - 连续多少次 mailbox 容量失败后触发强制清理，默认 `3`
+- `REGISTER_MAILBOX_CLEANUP_COOLDOWN_SECONDS`
+  - 两次强制清理之间的最小间隔，默认 `120`
+- `REGISTER_MAILBOX_CLEANUP_MAX_DELETE_COUNT`
+  - 单次强制清理最多删除的 MoEmail mailbox 数，默认 `30`
+
+## Team 扩容流程
+
+新增第三个 flow 的目录语义是：
+
+- `small-success-pool/`
+  - 主注册失败后保留下来的 `small_success` 种子池
+- `team-mother-pool/`
+  - 你手动完成 team 套餐订阅后的 mother 凭证池
+- `free-oauth-pool/`
+  - `free` 非本地分流路径的临时本地池
+  - 默认仍按现有逻辑上传后删除
+- `team-oauth-pool/`
+  - `team` 非本地分流路径的临时本地池
+  - 默认上传到 `codex-team/<文件名>` 成功后删除
+- `others/`
+  - 存放内部运行目录和中间目录，例如 `main-runs/`、`continue-runs/`、`team-runs/`、`team-pre-pool/`、`team-post-pool/`、claims、dashboard/state、debug 等
+  - 也包含默认的 `free-local-store/` 和 `team-local-store/`
+
+这条链路分为人工阶段和自动阶段：
+
+- 人工阶段
+  - `register-team-service` 会把随机挑出的预备账号移动到 `others/team-pre-pool`
+  - 你手动从 `others/team-pre-pool` 选一个账号，登录并开通 team 套餐
+  - 完成后你把这个 mother 凭证移动到 `team-mother-pool`
+- 自动阶段
+  - flow 监控 `team-mother-pool`，claim 一个 mother 凭证
+  - 通过 `EasyProtocol -> PythonProtocol` 做 mother 二次登录
+  - 如果登录后存在多个 workspace，优先选择有效 team workspace，当前默认策略是第一个 team space
+  - 生成新的 mother team 凭证，并先写入 `team-oauth-pool`
+  - 再从 `others/team-pre-pool` 随机 claim 4 个成员账号
+  - 邀请这 4 个邮箱加入 mother 的 team workspace
+  - 对这 4 个成员账号做一次 OAuth，拿到对应的 team 凭证
+  - 将这 4 个成员 team 凭证写入 `team-oauth-pool`
+  - 对未命中本地分流的成品自动上传到 `codex-team/<文件名>` 并删除本地文件
+
+如果自动阶段失败：
+
+- mother 凭证会放回 `team-mother-pool`
+- 已 claim 的 4 个成员账号会放回 `others/team-pre-pool`
+- 已经命中本地分流并写入本地目录的结果文件不会自动回滚
+
+## 运行态面板
+
+主注册实例内置一个轻量 HTTP 面板，默认地址是：
+
+- `http://127.0.0.1:19790/`
+
+机器可读 JSON 地址是：
+
+- `http://127.0.0.1:19790/api/status`
+
+面板会展示：
+
+- 每个 `PythonProtocol` 执行器的当前活跃请求数
+- 每个执行器的命中次数、成功次数、失败次数
+- 主注册实例的配置 worker 数和当前活跃 worker 数
+- 小成功续跑实例的配置 worker 数和当前活跃 worker 数
+- `small-success-pool` 当前文件数
+- 最近成功上传到 R2 的 auth JSON
+
+相关环境变量：
+
+- `REGISTER_DASHBOARD_ENABLED`
+  - 是否在主注册实例中启用面板，默认 `true`
+- `REGISTER_DASHBOARD_PORT_HOST`
+  - 宿主机映射端口，默认 `19790`
+- `REGISTER_DASHBOARD_LISTEN`
+  - 容器内监听地址，默认 `0.0.0.0:9790`
+- `REGISTER_DASHBOARD_RECENT_WINDOW_SECONDS`
+  - 最近上传统计窗口，默认 `900`
+- `EASY_PROTOCOL_CONTROL_TOKEN`
+  - 读取 `EasyProtocol` internal stats 的控制面 token，默认 `123456`
+
+当一轮任务最终完成并且 `upload_file_to_r2` 已成功上传 auth JSON 后，
+对应的整轮输出目录会自动删除，避免 `docker-output` 持续膨胀。
+也就是说，默认会清理：
+
+- `worker-XX/run-...`
+
+不会保留已经成功上传到 R2 的本地运行产物。主注册 flow 如果在上传前失败，
+会把 `small_success/*.json` 复制进：
+
+- `small-success-pool/`
+
+然后删除失败轮次目录。续跑 flow 会从这个池里 claim 文件，成功后删除 claim，
+失败后放回池中。
+
+## 当前 smoke 结果
+
+`RegisterService` 本地复制后的 DST smoke 已跑过：
+
+- `create_openai_account` 成功
+- `create_openai_account` 已通过 `EasyProtocol -> PythonProtocol` 路径成功
+- `EasyProxy` 任务级代理链路正常
+- `release_proxy_chain / release_mailbox` 正常
+
+如果后续失败，当前最常见的不是迁移代码本身，而是：
+
+- team workspace 席位已满
+- 某条 EasyProxy 线路瞬时不可用

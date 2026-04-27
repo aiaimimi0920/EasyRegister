@@ -1,0 +1,245 @@
+{
+  "definition": {
+    "version": "1",
+    "id": "codex-team-expand-v1",
+    "name": "Codex Team Expand Flow",
+    "platform": "codex-team",
+    "kind": "semantic-flow",
+    "description": "Fill the team-pre pool from small_success artifacts, wait for a manually upgraded mother credential, then expand that mother workspace into one owner team credential plus four invited member team credentials.",
+    "resourcePolicies": [],
+    "metadata": {
+      "taskRetry": {
+        "maxAttempts": 3,
+        "backoffSeconds": 3,
+        "retryOnSteps": [
+          "acquire-proxy-chain",
+          "obtain-team-mother-oauth",
+          "cleanup-team-all-seats",
+          "invite-team-members",
+          "obtain-team-member-oauth-batch"
+        ],
+        "retryOnCodes": [
+          "proxy_connect_failed",
+          "authorize_missing_login_session",
+          "flow_timeout_exceeded",
+          "transport_error"
+        ]
+      }
+    },
+    "steps": [
+      {
+        "id": "fill-team-pre-pool",
+        "type": "fill_team_pre_pool",
+        "input": {
+          "output_dir": "{{task.output_dir}}",
+          "pool_dir": "{{task.small_success_pool_dir}}",
+          "team_pre_pool_dir": "{{task.team_pre_pool_dir}}",
+          "max_move_count": "{{task.team_pre_fill_count}}"
+        },
+        "saveAs": "fill_team_pre_pool",
+        "metadata": {
+          "owner": "orchestration",
+          "stage": "team-pre-fill"
+        }
+      },
+      {
+        "id": "acquire-team-mother-artifact",
+        "type": "acquire_team_mother_artifact",
+        "input": {
+          "output_dir": "{{task.output_dir}}",
+          "team_mother_pool_dir": "{{task.team_mother_pool_dir}}",
+          "team_mother_claims_dir": "{{task.team_mother_claims_dir}}"
+        },
+        "saveAs": "team_mother_artifact",
+        "metadata": {
+          "owner": "orchestration",
+          "stage": "team-mother-acquire"
+        }
+      },
+      {
+        "id": "acquire-proxy-chain",
+        "type": "acquire_proxy_chain",
+        "input": {
+          "flow_name": "codex_team_expand_task",
+          "metadata": {
+            "taskAttempt": "{{task.taskAttempt}}",
+            "motherEmail": "{{team_mother_artifact.email}}"
+          },
+          "probe_url": "https://platform.openai.com/login",
+          "probe_expected_statuses": [
+            200
+          ],
+          "avoid_proxy_urls": "{{task.avoidProxyUrls}}",
+          "required": true,
+          "max_acquire_attempts": 4
+        },
+        "saveAs": "proxy_chain",
+        "metadata": {
+          "owner": "easyproxy",
+          "stage": "proxy-acquire",
+          "enabledWhen": "{{team_mother_artifact.claimed_path}}"
+        }
+      },
+      {
+        "id": "obtain-team-mother-oauth",
+        "type": "obtain_team_mother_oauth",
+        "input": {
+          "source_path": "{{team_mother_artifact.source_path}}",
+          "output_dir": "{{task.output_dir}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}",
+          "workspace_selector": "{{task.team_workspace_selector}}"
+        },
+        "saveAs": "team_mother_oauth",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "mother-oauth",
+          "enabledWhen": "{{team_mother_artifact.claimed_path}}"
+        }
+      },
+      {
+        "id": "cleanup-team-all-seats",
+        "type": "cleanup_team_all_seats",
+        "input": {
+          "team_mother_source_path": "{{team_mother_artifact.source_path}}",
+          "team_auth_path": "{{team_mother_oauth.successPath}}",
+          "team_auth_payload": "{{team_mother_oauth.auth}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}"
+        },
+        "saveAs": "cleanup_team_all_seats",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "team-seat-cleanup",
+          "enabledWhen": "{{team_mother_oauth.successPath}}"
+        }
+      },
+      {
+        "id": "acquire-team-member-candidates",
+        "type": "acquire_team_member_candidates",
+        "input": {
+          "output_dir": "{{task.output_dir}}",
+          "team_pre_pool_dir": "{{task.team_pre_pool_dir}}",
+          "team_member_claims_dir": "{{task.team_member_claims_dir}}",
+          "member_count": "{{task.team_member_count}}",
+          "mother_artifact": "{{team_mother_artifact}}"
+        },
+        "saveAs": "team_member_candidates",
+        "metadata": {
+          "owner": "orchestration",
+          "stage": "member-acquire",
+          "enabledWhen": "{{team_mother_artifact.claimed_path}}"
+        }
+      },
+      {
+        "id": "invite-team-members",
+        "type": "invite_team_members",
+        "input": {
+          "team_mother_source_path": "{{team_mother_artifact.source_path}}",
+          "team_mother_auth_path": "{{team_mother_oauth.successPath}}",
+          "team_mother_auth_payload": "{{team_mother_oauth.auth}}",
+          "members": "{{team_member_candidates.members}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}",
+          "output_dir": "{{task.output_dir}}",
+          "workspace_selector": "{{task.team_workspace_selector}}",
+          "team_pool_dir": "{{task.team_pool_dir}}"
+        },
+        "saveAs": "invite_team_members",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "member-invite",
+          "enabledWhen": "{{team_member_candidates.member_count}}"
+        }
+      },
+      {
+        "id": "obtain-team-member-oauth-batch",
+        "type": "obtain_team_member_oauth_batch",
+        "input": {
+          "members": "{{team_member_candidates.members}}",
+          "invite_result": "{{invite_team_members}}",
+          "output_dir": "{{task.output_dir}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}",
+          "workspace_selector": "{{task.team_workspace_selector}}"
+        },
+        "saveAs": "team_member_oauth_batch",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "member-oauth",
+          "enabledWhen": "{{invite_team_members.memberOauthRequired}}"
+        }
+      },
+      {
+        "id": "revoke-team-members",
+        "type": "revoke_team_members",
+        "input": {
+          "team_auth_path": "{{team_mother_oauth.successPath}}",
+          "team_auth_payload": "{{team_mother_oauth.auth}}",
+          "members": "{{team_member_candidates.members}}",
+          "invite_result": "{{invite_team_members}}",
+          "oauth_artifacts": "{{team_member_oauth_batch.artifacts}}"
+        },
+        "saveAs": "revoke_team_members",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "member-revoke",
+          "alwaysRun": true,
+          "enabledWhen": "{{team_mother_artifact.claimed_path}}"
+        }
+      },
+      {
+        "id": "collect-team-pool-artifacts",
+        "type": "collect_team_pool_artifacts",
+        "input": {
+          "output_dir": "{{task.output_dir}}",
+          "team_post_pool_dir": "{{task.team_post_pool_dir}}",
+          "team_pool_dir": "{{task.team_pool_dir}}",
+          "invite_result": "{{invite_team_members}}",
+          "mother_claim_artifact": "{{team_mother_artifact}}",
+          "mother_artifact": "{{team_mother_oauth}}",
+          "member_artifacts": "{{team_member_oauth_batch.artifacts}}"
+        },
+        "saveAs": "collect_team_pool_artifacts",
+        "metadata": {
+          "owner": "orchestration",
+          "stage": "team-pool-collect",
+          "alwaysRun": true,
+          "enabledWhen": "{{team_mother_oauth.successPath}}"
+        }
+      },
+      {
+        "id": "release-proxy-chain",
+        "type": "release_proxy_chain",
+        "input": {
+          "proxy_chain": "{{proxy_chain}}",
+          "error_code": "{{task.errorCode}}"
+        },
+        "saveAs": "release_proxy_chain",
+        "metadata": {
+          "owner": "easyproxy",
+          "stage": "cleanup",
+          "alwaysRun": true,
+          "enabledWhen": "{{proxy_chain.proxy_url}}"
+        }
+      },
+      {
+        "id": "finalize-team-batch",
+        "type": "finalize_team_batch",
+        "input": {
+          "output_dir": "{{task.output_dir}}",
+          "team_pre_pool_dir": "{{task.team_pre_pool_dir}}",
+          "team_mother_pool_dir": "{{task.team_mother_pool_dir}}",
+          "collect_result": "{{collect_team_pool_artifacts}}",
+          "invite_result": "{{invite_team_members}}",
+          "oauth_result": "{{team_member_oauth_batch}}",
+          "mother_artifact": "{{team_mother_artifact}}",
+          "member_artifacts": "{{team_member_candidates.members}}",
+          "task_error_code": "{{task.errorCode}}"
+        },
+        "saveAs": "finalize_team_batch",
+        "metadata": {
+          "owner": "orchestration",
+          "stage": "cleanup",
+          "alwaysRun": true
+        }
+      }
+    ]
+  }
+}

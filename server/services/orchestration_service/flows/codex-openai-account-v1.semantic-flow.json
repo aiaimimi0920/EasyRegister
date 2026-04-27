@@ -1,0 +1,281 @@
+{
+  "definition": {
+    "version": "1",
+    "id": "codex-openai-account-v1",
+    "name": "Codex OpenAI Account Flow",
+    "platform": "codex",
+    "kind": "semantic-flow",
+    "description": "Top-level generic account orchestration. A unified dispatcher parses this DST and hands medium business steps to EasyEmail or EasyProtocol. Lower layers decide how to implement each step.",
+    "resourcePolicies": [],
+    "metadata": {
+      "taskRetry": {
+        "maxAttempts": 6,
+        "backoffSeconds": 3,
+        "retryOnSteps": [
+          "acquire-mailbox",
+          "acquire-proxy-chain",
+          "create-openai-account",
+          "initialize-platform-organization",
+          "initialize-chatgpt-login-session",
+          "obtain-codex-oauth"
+        ],
+        "retryOnCodes": [
+          "user_register_400",
+          "authorize_continue_blocked",
+          "authorize_missing_login_session",
+          "password_verify_blocked",
+          "existing_account_detected",
+          "proxy_connect_failed",
+          "mailbox_unavailable",
+          "flow_timeout_exceeded",
+          "transport_error"
+        ]
+      }
+    },
+    "steps": [
+      {
+        "id": "acquire-mailbox",
+        "type": "acquire_mailbox",
+        "input": {
+          "preallocated_email": "{{task.preallocated_email}}",
+          "preallocated_session_id": "{{task.preallocated_session_id}}",
+          "preallocated_mailbox_ref": "{{task.preallocated_mailbox_ref}}"
+        },
+        "saveAs": "mailbox",
+        "metadata": {
+          "owner": "easyemail",
+          "stage": "mailbox-acquire"
+        }
+      },
+      {
+        "id": "acquire-proxy-chain",
+        "type": "acquire_proxy_chain",
+        "input": {
+          "flow_name": "codex_openai_account_task",
+          "metadata": {
+            "taskAttempt": "{{task.taskAttempt}}",
+            "teamAuthPath": "{{task.team_auth_path}}"
+          },
+          "probe_url": "https://platform.openai.com/login",
+          "probe_expected_statuses": [
+            200
+          ],
+          "avoid_proxy_urls": "{{task.avoidProxyUrls}}",
+          "required": true,
+          "max_acquire_attempts": 4
+        },
+        "saveAs": "proxy_chain",
+        "metadata": {
+          "owner": "easyproxy",
+          "stage": "proxy-acquire"
+        }
+      },
+      {
+        "id": "create-openai-account",
+        "type": "create_openai_account",
+        "input": {
+          "output_dir": "{{task.output_dir}}",
+          "preallocated_email": "{{mailbox.email}}",
+          "preallocated_session_id": "{{mailbox.session_id}}",
+          "preallocated_mailbox_ref": "{{mailbox.mailbox_ref}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}"
+        },
+        "saveAs": "create_openai_account",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "account-create"
+        }
+      },
+      {
+        "id": "initialize-platform-organization",
+        "type": "initialize_platform_organization",
+        "input": {
+          "source_path": "{{create_openai_account.storage_path}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}",
+          "organization_name": "personal",
+          "organization_title": "personal",
+          "developer_persona": "student"
+        },
+        "saveAs": "initialize_platform_organization",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "platform-org-init"
+        }
+      },
+      {
+        "id": "initialize-chatgpt-login-session",
+        "type": "initialize_chatgpt_login_session",
+        "input": {
+          "source_path": "{{create_openai_account.storage_path}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}",
+          "mailbox_ref": "{{mailbox.mailbox_ref}}",
+          "mailbox_session_id": "{{mailbox.session_id}}"
+        },
+        "saveAs": "initialize_chatgpt_login_session",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "chatgpt-login-init"
+        }
+      },
+      {
+        "id": "refresh-team-auth-on-demand",
+        "type": "obtain_team_mother_oauth",
+        "input": {
+          "source_path": "{{task.team_auth_path}}",
+          "output_dir": "{{task.output_dir}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}",
+          "workspace_selector": "{{task.team_workspace_selector}}"
+        },
+        "saveAs": "team_mother_oauth_refresh",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "team-auth-refresh",
+          "enabledWhen": "{{task.__disabled_team_auth_refresh__}}"
+        }
+      },
+      {
+        "id": "invite-codex-member",
+        "type": "invite_codex_member",
+        "input": {
+          "source_path": "{{create_openai_account.storage_path}}",
+          "team_auth_path": "{{task.team_auth_path}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}"
+        },
+        "saveAs": "invite_codex_member",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "invite",
+          "retry": {
+            "maxAttempts": 2,
+            "retryOnCodes": [
+              "team_auth_token_invalidated"
+            ],
+            "refreshSavedStates": [
+              "team_mother_oauth_refresh"
+            ]
+          }
+        }
+      },
+      {
+        "id": "wait-free-oauth-after-invite",
+        "type": "sleep_seconds",
+        "input": {
+          "seconds": "{{task.free_oauth_delay_seconds}}",
+          "reason": "wait_for_personal_workspace_after_invite"
+        },
+        "saveAs": "wait_free_oauth_after_invite",
+        "metadata": {
+          "owner": "orchestration",
+          "stage": "post-invite-wait"
+        }
+      },
+      {
+        "id": "obtain-codex-oauth",
+        "type": "obtain_codex_oauth",
+        "input": {
+          "source_path": "{{create_openai_account.storage_path}}",
+          "output_dir": "{{task.output_dir}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}",
+          "workspace_selector": "{{task.free_workspace_selector}}"
+        },
+        "saveAs": "obtain_codex_oauth",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "oauth"
+        }
+      },
+      {
+        "id": "validate-free-personal-oauth",
+        "type": "validate_free_personal_oauth",
+        "input": {
+          "oauth_result": "{{obtain_codex_oauth}}",
+          "invite_result": "{{invite_codex_member}}"
+        },
+        "saveAs": "validate_free_personal_oauth",
+        "metadata": {
+          "owner": "orchestration",
+          "stage": "oauth-validate"
+        }
+      },
+      {
+        "id": "revoke-codex-member",
+        "type": "revoke_codex_member",
+        "input": {
+          "source_path": "{{create_openai_account.storage_path}}",
+          "team_auth_path": "{{task.team_auth_path}}",
+          "invite_email": "{{create_openai_account.email}}",
+          "member_user_id": "{{obtain_codex_oauth.userId}}"
+        },
+        "saveAs": "revoke_codex_member",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "revoke",
+          "alwaysRun": true,
+          "enabledWhen": "{{task.free_stop_after_validate_cleanup_enabled}}"
+        }
+      },
+      {
+        "id": "release-proxy-chain",
+        "type": "release_proxy_chain",
+        "input": {
+          "proxy_chain": "{{proxy_chain}}",
+          "error_code": "{{task.errorCode}}"
+        },
+        "saveAs": "release_proxy_chain",
+        "metadata": {
+          "owner": "easyproxy",
+          "stage": "cleanup",
+          "alwaysRun": true,
+          "enabledWhen": "{{task.free_stop_after_validate_cleanup_enabled}}"
+        }
+      },
+      {
+        "id": "release-mailbox",
+        "type": "release_mailbox",
+        "input": {
+          "source_path": "{{create_openai_account.storage_path}}",
+          "mailbox_ref": "{{mailbox.mailbox_ref}}",
+          "mailbox_session_id": "{{mailbox.session_id}}"
+        },
+        "saveAs": "release_mailbox",
+        "metadata": {
+          "owner": "easyemail",
+          "stage": "cleanup",
+          "alwaysRun": true,
+          "enabledWhen": "{{task.free_stop_after_validate_cleanup_enabled}}"
+        }
+      },
+      {
+        "id": "upload-oauth-artifact",
+        "type": "upload_file_to_r2",
+        "input": {
+          "source_path": "{{obtain_codex_oauth.successPath}}",
+          "bucket": "{{task.r2_bucket}}",
+          "target_folder": "{{task.r2_target_folder}}",
+          "object_name": "{{task.r2_object_name}}",
+          "account_id": "{{task.r2_account_id}}",
+          "endpoint_url": "{{task.r2_endpoint_url}}",
+          "access_key_id": "{{task.r2_access_key_id}}",
+          "secret_access_key": "{{task.r2_secret_access_key}}",
+          "region": "{{task.r2_region}}",
+          "public_base_url": "{{task.r2_public_base_url}}",
+          "overwrite": true
+        },
+        "saveAs": "upload_file_to_r2",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "artifact-upload",
+          "enabledWhen": "{{task.r2_upload_enabled}}",
+          "retry": {
+            "maxAttempts": 2,
+            "backoffSeconds": 2,
+            "retryOnCodes": [
+              "transport_error",
+              "upload_file_to_r2_failed"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}
