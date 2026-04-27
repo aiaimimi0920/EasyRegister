@@ -1,4 +1,4 @@
-# RegisterService
+# EasyRegister
 
 这个目录是从 `NeuroPlugin` 中裁剪出来的、当前真实在用的注册运行时闭包。
 
@@ -158,8 +158,8 @@ DST 的 `platform` 字段作为上传目录。以当前流程为例，最终 aut
 ## 直接运行示例
 
 ```powershell
-python "C:\Users\Public\nas_home\AI\GameEditor\RegisterService\server\services\orchestration_service\src\dst_flow.py" `
-  --output-dir "C:\Users\Public\nas_home\AI\GameEditor\RegisterService\tmp\run" `
+python "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\server\services\orchestration_service\src\dst_flow.py" `
+  --output-dir "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\tmp\run" `
   --team-auth "C:\Users\vmjcv\.cli-proxy-api\codex-1dfcda64-moddc8da@sall.cc-team.json"
 ```
 
@@ -172,7 +172,27 @@ python "C:\Users\Public\nas_home\AI\GameEditor\RegisterService\server\services\o
 典型启动命令：
 
 ```powershell
-docker compose -f "C:\Users\Public\nas_home\AI\GameEditor\RegisterService\compose\docker-compose.yaml" up -d
+docker compose -f "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\compose\docker-compose.yaml" up -d
+```
+
+## 隔离测试 compose
+
+用于本仓开发验证的隔离入口是：
+
+- `compose/docker-compose.test.yaml`
+
+这份 compose 与当前线上 `register-*` 容器做了明确隔离：
+
+- 容器名前缀固定为 `easyregister-test-*`
+- 默认镜像名为 `easyregister/easyregister-test:local`
+- 默认 dashboard 宿主机端口为 `29790`
+- 默认宿主机输出目录使用仓库内 `tmp/easyregister-test-output`
+- 默认本地 free / team 输出目录分别使用 `tmp/easyregister-test-free` 与 `tmp/easyregister-test-team`
+
+典型启动命令：
+
+```powershell
+docker compose -f "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\compose\docker-compose.test.yaml" up -d --build
 ```
 
 本地迭代时，compose 默认会用已有的 `registerservice/register-service:local`

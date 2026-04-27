@@ -19,11 +19,16 @@
   - dashboard 默认仅监听本机
   - 缺少安全 control token 时不启动 dashboard
 - cleanup 锁具备 stale lock recovery 能力
+- 已建立新仓首个导入提交，并创建恢复基线 tag `easyregister-import-baseline`
+- 已新增隔离测试 compose：`compose/docker-compose.test.yaml`
+  - 默认容器名前缀为 `easyregister-test-*`
+  - 默认 dashboard 宿主机端口为 `29790`
+  - 默认测试输出目录位于仓库内 `tmp/easyregister-test-*`
 
 注意：
 
-- 上述内容是从旧仓复制过来的代码状态，不代表新仓已经完成 Git 基线提交。
-- 新仓当前是一个全新的本地 Git 仓库，`main` 分支下尚无提交。
+- 上述运行时代码主体仍然是从旧仓复制过来的状态，后续结构优化应继续按“小步、可测、可回退”的规则推进。
+- 恢复基线 tag 只用于回退和比对，后续结构性改动不应复用或覆盖该 tag。
 
 ## 3. 总体优化目标
 
@@ -204,10 +209,9 @@
 
 新仓重新开始对话后的推荐顺序：
 
-1. 在新仓创建首个导入基线提交。
-2. 建立新仓专用的基线 tag。
-3. 规划并创建测试专用 compose 文件。
-4. 开始 `infinite_runner.py` 第一批模块拆分。
+1. 使用隔离测试 compose 作为后续验证入口，先确认新的容器名、镜像名、端口和输出目录不会碰生产实例。
+2. 开始 `infinite_runner.py` 第一批模块拆分。
+3. 优先为重复 helper、DST retry 规则、artifact pool 关键路径补最小单元测试。
 
 ## 10. 重要提醒
 
@@ -218,4 +222,3 @@
 - 每轮可提交
 - 每轮可回退
 - 不影响旧仓线上运行实例
-
