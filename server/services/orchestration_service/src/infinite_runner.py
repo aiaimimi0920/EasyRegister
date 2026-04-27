@@ -23,6 +23,7 @@ if __package__ in (None, ""):
     from dst_flow import run_dst_flow_once
     from easyemail_flow import dispatch_easyemail_step
     from easyprotocol_flow import dispatch_easyprotocol_step
+    from errors import ErrorCodes, result_error_matches, result_error_message, result_step_error
     from others.common import (
         decode_jwt_payload as _decode_jwt_payload,
         ensure_directory as _ensure_directory,
@@ -70,6 +71,7 @@ else:
     from .dst_flow import run_dst_flow_once
     from .easyemail_flow import dispatch_easyemail_step
     from .easyprotocol_flow import dispatch_easyprotocol_step
+    from .errors import ErrorCodes, result_error_matches, result_error_message, result_step_error
     from .others.common import (
         decode_jwt_payload as _decode_jwt_payload,
         ensure_directory as _ensure_directory,
@@ -2333,34 +2335,10 @@ def _infer_mailbox_capacity_provider_type_key(*, detail: str) -> str:
 
 
 def _mailbox_capacity_failure_detail(*, result_payload: dict[str, Any]) -> str:
-    error_step = str(result_payload.get("errorStep") or "").strip().lower()
-    if error_step != "acquire-mailbox":
+    if str(result_payload.get("errorStep") or "").strip().lower() != "acquire-mailbox":
         return ""
-    combined_parts = [str(result_payload.get("error") or "").strip()]
-    step_errors = result_payload.get("stepErrors") or {}
-    mailbox_error = step_errors.get("acquire-mailbox") or {}
-    mailbox_error_code = str(mailbox_error.get("code") or "").strip().lower()
-    combined_parts.append(str(mailbox_error.get("message") or "").strip())
-    combined_parts.append(str(mailbox_error.get("code") or "").strip())
-    combined = " ".join(part for part in combined_parts if part).strip().lower()
-    if mailbox_error_code in {
-        "mailbox_unavailable",
-        "moemail_capacity_exhausted",
-        "moemail_upstream_transient",
-    } or any(
-        marker in combined
-        for marker in (
-            "mailbox_unavailable",
-            "code=mailbox_capacity_unavailable",
-            "code=mailbox_upstream_transient",
-            "moemail_capacity_exhausted",
-            "moemail_upstream_transient",
-            "maximum mailbox",
-            "mailbox count limit",
-            "最大邮箱数量限制",
-        )
-    ):
-        return " ".join(part for part in combined_parts if part).strip()
+    if result_error_matches(result_payload, ErrorCodes.MAILBOX_UNAVAILABLE, step_id="acquire-mailbox"):
+        return result_error_message(result_payload, "acquire-mailbox")
     return ""
 
 
@@ -2590,17 +2568,10 @@ def _trigger_codex_capacity_cleanup(*, shared_root: Path, team_auth_pool: list[s
 
 
 def _team_capacity_failure_detail(*, result_payload: dict[str, Any]) -> str:
-    error_step = str(result_payload.get("errorStep") or "").strip().lower()
-    if error_step != "invite-codex-member":
+    if str(result_payload.get("errorStep") or "").strip().lower() != "invite-codex-member":
         return ""
-    combined_parts = [str(result_payload.get("error") or "").strip()]
-    step_errors = result_payload.get("stepErrors") or {}
-    invite_error = step_errors.get("invite-codex-member") or {}
-    combined_parts.append(str(invite_error.get("message") or "").strip())
-    combined_parts.append(str(invite_error.get("code") or "").strip())
-    combined = " ".join(part for part in combined_parts if part).lower()
-    if "workspace has reached maximum number of seats" in combined or "team_seats_full" in combined:
-        return " ".join(part for part in combined_parts if part).strip()
+    if result_error_matches(result_payload, ErrorCodes.TEAM_SEATS_FULL, step_id="invite-codex-member"):
+        return result_error_message(result_payload, "invite-codex-member")
     return ""
 
 
@@ -2723,23 +2694,7 @@ def _team_auth_blacklist_reason(*, result_payload: dict[str, Any]) -> str:
     }:
         return ""
 
-    step_errors = result_payload.get("stepErrors") or {}
-    step_error = step_errors.get(error_step) or {}
-    combined = " ".join(
-        part
-        for part in (
-            str(result_payload.get("error") or "").strip(),
-            str(step_error.get("message") or "").strip(),
-            str(step_error.get("code") or "").strip(),
-        )
-        if part
-    ).lower()
-    if not (
-        "token_invalidated" in combined
-        or "authentication token has been invalidated" in combined
-        or ("status_code': 401" in combined and "please try signing in again" in combined)
-        or ('"status_code": 401' in combined and "please try signing in again" in combined)
-    ):
+    if not result_error_matches(result_payload, ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED, step_id=error_step):
         return ""
 
     step_attempts = result_payload.get("stepAttempts") or {}
@@ -2749,12 +2704,12 @@ def _team_auth_blacklist_reason(*, result_payload: dict[str, Any]) -> str:
     if error_step == "invite-codex-member":
         invite_attempts = int(step_attempts.get("invite-codex-member") or 0)
         if refresh_attempts >= 1 and invite_attempts >= 2:
-            return combined.strip()
+            return result_error_message(result_payload, error_step)
         return ""
 
     if error_step in {"invite-team-members", "cleanup-team-all-seats", "revoke-team-members", "refresh-team-auth-on-demand", "obtain-team-mother-oauth"}:
         if refresh_attempts >= 1 or mother_refresh_attempts >= 1:
-            return combined.strip()
+            return result_error_message(result_payload, error_step)
 
     return ""
 
@@ -3562,53 +3517,26 @@ def _payload_looks_like_oauth_credential(payload: dict[str, Any]) -> bool:
 def _team_mother_failure_cooldown_seconds(*, result: Any) -> float:
     payload = _result_payload(result)
     error_step = str(payload.get("errorStep") or "").strip().lower()
-    error_text = str(payload.get("error") or "").strip().lower()
-    step_errors = payload.get("stepErrors") or {}
 
     if error_step == "obtain-team-mother-oauth":
-        oauth_error = step_errors.get("obtain-team-mother-oauth") or {}
-        combined = " ".join(
-            part
-            for part in (
-                error_text,
-                str(oauth_error.get("message") or "").strip().lower(),
-                str(oauth_error.get("code") or "").strip().lower(),
-            )
-            if part
-        )
-        if any(
-            marker in combined
-            for marker in (
-                "refresh_token_reused",
-                "team_mother_token_validation_failed",
-                "invalid_request_error",
-                "authorize_continue_rate_limited",
-                "rate limit exceeded",
-                "status=429",
-                "timeout waiting for 6-digit code",
-                "mailbox_unavailable",
-            )
+        if result_error_matches(
+            payload,
+            ErrorCodes.REFRESH_TOKEN_REUSED,
+            ErrorCodes.TEAM_MOTHER_TOKEN_VALIDATION_FAILED,
+            ErrorCodes.INVALID_REQUEST_ERROR,
+            ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
+            ErrorCodes.OTP_TIMEOUT,
+            ErrorCodes.MAILBOX_UNAVAILABLE,
+            step_id="obtain-team-mother-oauth",
         ):
             return float(max(0, _env_float("REGISTER_TEAM_OAUTH_FAILURE_COOLDOWN_SECONDS", 300.0)))
 
     if error_step == "invite-team-members":
-        invite_error = step_errors.get("invite-team-members") or {}
-        combined = " ".join(
-            part
-            for part in (
-                error_text,
-                str(invite_error.get("message") or "").strip().lower(),
-                str(invite_error.get("code") or "").strip().lower(),
-            )
-            if part
-        )
-        if any(
-            marker in combined
-            for marker in (
-                "workspace has reached maximum number of seats",
-                "team_seats_full",
-                "unable to invite user due to an error",
-            )
+        if result_error_matches(
+            payload,
+            ErrorCodes.TEAM_SEATS_FULL,
+            ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR,
+            step_id="invite-team-members",
         ):
             return float(max(0, _env_float("REGISTER_TEAM_INVITE_FAILURE_COOLDOWN_SECONDS", 300.0)))
 
@@ -3751,25 +3679,18 @@ def _cleanup_run_output_dir(*, run_output_dir: Path, worker_label: str, task_ind
 def _extra_failure_cooldown_seconds(*, result: Any) -> float:
     payload = _result_payload(result)
     error_step = str(payload.get("errorStep") or "").strip().lower()
-    error_text = str(payload.get("error") or "").strip().lower()
-    step_errors = payload.get("stepErrors") or {}
 
     if error_step == "create-openai-account":
-        create_error = step_errors.get("create-openai-account") or {}
-        combined = " ".join(
-            part
-            for part in (
-                error_text,
-                str(create_error.get("message") or "").strip().lower(),
-                str(create_error.get("code") or "").strip().lower(),
-            )
-            if part
-        )
-        if any(
+        create_error = result_step_error(payload, "create-openai-account")
+        combined = result_error_message(payload, "create-openai-account").lower()
+        if result_error_matches(
+            payload,
+            ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
+            ErrorCodes.TRANSPORT_ERROR,
+            step_id="create-openai-account",
+        ) or any(
             marker in combined
             for marker in (
-                "rate limit exceeded",
-                "status=429",
                 "status=403",
                 "platform_login status=403",
                 "authorize_continue status=429",
@@ -3785,31 +3706,11 @@ def _extra_failure_cooldown_seconds(*, result: Any) -> float:
             )
 
     if error_step == "acquire-mailbox":
-        mailbox_error = step_errors.get("acquire-mailbox") or {}
-        combined = " ".join(
-            part
-            for part in (
-                error_text,
-                str(mailbox_error.get("message") or "").strip().lower(),
-                str(mailbox_error.get("code") or "").strip().lower(),
-            )
-            if part
-        )
-        if combined:
+        if bool(result_step_error(payload, "acquire-mailbox")):
             return float(max(0, _env_float("REGISTER_MAILBOX_FAILURE_COOLDOWN_SECONDS", 15.0)))
 
     if error_step == "invite-codex-member":
-        invite_error = step_errors.get("invite-codex-member") or {}
-        combined = " ".join(
-            part
-            for part in (
-                error_text,
-                str(invite_error.get("message") or "").strip().lower(),
-                str(invite_error.get("code") or "").strip().lower(),
-            )
-            if part
-        )
-        if "workspace has reached maximum number of seats" in combined or "team_seats_full" in combined:
+        if result_error_matches(payload, ErrorCodes.TEAM_SEATS_FULL, step_id="invite-codex-member"):
             return float(max(0, _env_float("REGISTER_TEAM_CAPACITY_COOLDOWN_SECONDS", 30.0)))
 
     return 0.0

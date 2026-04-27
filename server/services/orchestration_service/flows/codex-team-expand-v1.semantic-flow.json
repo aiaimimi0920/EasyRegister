@@ -11,18 +11,13 @@
       "taskRetry": {
         "maxAttempts": 3,
         "backoffSeconds": 3,
+        "retryProfile": "task-team-expand-default",
         "retryOnSteps": [
           "acquire-proxy-chain",
           "obtain-team-mother-oauth",
           "cleanup-team-all-seats",
           "invite-team-members",
           "obtain-team-member-oauth-batch"
-        ],
-        "retryOnCodes": [
-          "proxy_connect_failed",
-          "authorize_missing_login_session",
-          "flow_timeout_exceeded",
-          "transport_error"
         ]
       }
     },

@@ -17,12 +17,14 @@ if __package__ in (None, ""):
         candidate_text = str(_candidate)
         if candidate_text not in sys.path:
             sys.path.append(candidate_text)
+    from errors import ErrorCodes, build_error_details, resolve_retry_codes
     from others.common import env_flag as _env_bool
     from artifact_pool_flow import dispatch_orchestration_step
     from easyemail_flow import dispatch_easyemail_step
     from easyproxy_flow import dispatch_easyproxy_step
     from easyprotocol_flow import dispatch_easyprotocol_step
 else:
+    from .errors import ErrorCodes, build_error_details, resolve_retry_codes
     from .others.common import env_flag as _env_bool
     from .artifact_pool_flow import dispatch_orchestration_step
     from .easyemail_flow import dispatch_easyemail_step
@@ -198,90 +200,14 @@ def _step_retry_policy(statement: DstStatement) -> dict[str, Any]:
 
 
 def _step_error_details(*, step_type: str, exc: BaseException) -> dict[str, Any]:
-    message = str(exc or "").strip()
-    detail = str(getattr(exc, "detail", "") or "").strip()
-    stage = str(getattr(exc, "stage", "") or "").strip()
-    category = str(getattr(exc, "category", "") or "").strip()
-    lowered = message.lower()
-    code = f"{step_type}_failed"
-    if "free_personal_workspace_missing" in lowered:
-        code = "free_personal_workspace_missing"
-    elif step_type == "invite_codex_member" and (
-        "token_invalidated" in lowered
-        or "authentication token has been invalidated" in lowered
-        or (
-            "status_code': 401" in lowered
-            and "please try signing in again" in lowered
-        )
-        or (
-            '"status_code": 401' in lowered
-            and "please try signing in again" in lowered
-        )
-    ):
-        code = "team_auth_token_invalidated"
-    elif step_type == "invite_codex_member" and (
-        "workspace has reached maximum number of seats" in lowered
-        or "team_seats_full" in lowered
-    ):
-        code = "team_seats_full"
-    elif detail == "user_register" or "user_register" in lowered:
-        code = "user_register_400"
-    elif "authorize_continue" in lowered and ("status=429" in lowered or "rate limit exceeded" in lowered):
-        code = "authorize_continue_rate_limited"
-    elif detail == "authorize_continue" or (
-        "authorize_continue" in lowered and ("just a moment" in lowered or "status=403" in lowered)
-    ):
-        code = "authorize_continue_blocked"
-    elif detail == "password_verify" or (
-        "password_verify" in lowered and ("just a moment" in lowered or "status=403" in lowered)
-    ):
-        code = "password_verify_blocked"
-    elif "existing_account_detected" in lowered or detail == "authorize_continue_existing_account":
-        code = "existing_account_detected"
-    elif "authorize_init_missing_login_session" in lowered or detail == "oauth_authorize":
-        code = "authorize_missing_login_session"
-    elif (
-        "proxy_connect_failed" in lowered
-        or "easy_proxy_checkout_failed" in lowered
-        or "recent_route_reuse" in lowered
-        or "proxy connect aborted" in lowered
-        or "could not connect to server" in lowered
-        or "tls connect error" in lowered
-        or "connection closed abruptly" in lowered
-    ):
-        code = "proxy_connect_failed"
-    elif (
-        "code=mailbox_capacity_unavailable" in lowered
-        or '"code":"mailbox_capacity_unavailable"' in lowered
-        or "mailbox_capacity_unavailable" in lowered
-        or "code=mailbox_upstream_transient" in lowered
-        or '"code":"mailbox_upstream_transient"' in lowered
-        or "mailbox capacity unavailable" in lowered
-        or "mailbox upstream transient" in lowered
-        or "code=moemail_capacity_exhausted" in lowered
-        or '"code":"moemail_capacity_exhausted"' in lowered
-        or "moemail_capacity_exhausted" in lowered
-        or "moemail upstream transient" in lowered
-        or "maximum mailbox" in lowered
-        or "mailbox count limit" in lowered
-        or "最大邮箱数量限制" in message
-    ):
-        code = "mailbox_unavailable"
-    elif "r2_upload_failed" in lowered or "upload_file_to_r2_failed" in lowered:
-        code = "upload_file_to_r2_failed"
-    elif "small_success_pool_empty" in lowered:
-        code = "small_success_pool_empty"
-    elif "flow_timeout_exceeded" in lowered:
-        code = "flow_timeout_exceeded"
-    elif "curl" in lowered or "connect" in lowered or "tls" in lowered:
-        code = "transport_error"
-    return {
-        "code": code,
-        "message": message,
-        "detail": detail,
-        "stage": stage,
-        "category": category,
-    }
+    return build_error_details(
+        step_type=step_type,
+        message=str(exc or "").strip(),
+        detail=str(getattr(exc, "detail", "") or "").strip(),
+        stage=str(getattr(exc, "stage", "") or "").strip(),
+        category=str(getattr(exc, "category", "") or "").strip(),
+        code=str(getattr(exc, "code", "") or "").strip(),
+    )
 
 
 def _should_retry_step(*, statement: DstStatement, error_details: dict[str, Any], attempt_index: int) -> bool:
@@ -292,11 +218,9 @@ def _should_retry_step(*, statement: DstStatement, error_details: dict[str, Any]
         max_attempts = 1
     if attempt_index >= max_attempts:
         return False
-    retry_codes = retry.get("retryOnCodes")
-    if isinstance(retry_codes, list) and retry_codes:
-        return str(error_details.get("code") or "").strip() in {
-            str(item or "").strip() for item in retry_codes
-        }
+    retry_codes = resolve_retry_codes(retry)
+    if retry_codes:
+        return str(error_details.get("code") or "").strip().lower() in retry_codes
     return False
 
 
@@ -317,7 +241,7 @@ def _maybe_prepare_special_step_retry(
 ) -> bool:
     if str(statement.step_type or "").strip() != "invite_codex_member":
         return False
-    if str(error_details.get("code") or "").strip() != "team_seats_full":
+    if str(error_details.get("code") or "").strip() != ErrorCodes.TEAM_SEATS_FULL:
         return False
     task_state = state.get("task") if isinstance(state.get("task"), dict) else {}
     if not isinstance(task_state, dict):
@@ -499,10 +423,9 @@ def _should_retry_task(
         normalized_steps = {str(item or "").strip() for item in retry_steps}
         if str(error_step or "").strip() not in normalized_steps:
             return False
-    retry_codes = retry.get("retryOnCodes")
-    if isinstance(retry_codes, list) and retry_codes:
-        normalized_codes = {str(item or "").strip() for item in retry_codes}
-        return str(error_details.get("code") or "").strip() in normalized_codes
+    retry_codes = resolve_retry_codes(retry)
+    if retry_codes:
+        return str(error_details.get("code") or "").strip().lower() in retry_codes
     return False
 
 

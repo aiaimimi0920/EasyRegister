@@ -1,5 +1,89 @@
 from __future__ import annotations
 
+from typing import Any
+
+
+class ErrorCodes:
+    AUTHORIZE_CONTINUE_BLOCKED = "authorize_continue_blocked"
+    AUTHORIZE_CONTINUE_RATE_LIMITED = "authorize_continue_rate_limited"
+    AUTHORIZE_MISSING_LOGIN_SESSION = "authorize_missing_login_session"
+    EXISTING_ACCOUNT_DETECTED = "existing_account_detected"
+    FLOW_TIMEOUT_EXCEEDED = "flow_timeout_exceeded"
+    FREE_PERSONAL_WORKSPACE_MISSING = "free_personal_workspace_missing"
+    INVALID_REQUEST_ERROR = "invalid_request_error"
+    MAILBOX_UNAVAILABLE = "mailbox_unavailable"
+    OTP_TIMEOUT = "otp_timeout"
+    PASSWORD_VERIFY_BLOCKED = "password_verify_blocked"
+    PROXY_CONNECT_FAILED = "proxy_connect_failed"
+    REFRESH_TOKEN_REUSED = "refresh_token_reused"
+    SMALL_SUCCESS_POOL_EMPTY = "small_success_pool_empty"
+    TEAM_AUTH_TOKEN_INVALIDATED = "team_auth_token_invalidated"
+    TEAM_INVITE_UPSTREAM_ERROR = "team_invite_upstream_error"
+    TEAM_MOTHER_TOKEN_VALIDATION_FAILED = "team_mother_token_validation_failed"
+    TEAM_SEATS_FULL = "team_seats_full"
+    TRANSPORT_ERROR = "transport_error"
+    UPLOAD_FILE_TO_R2_FAILED = "upload_file_to_r2_failed"
+    USER_REGISTER_400 = "user_register_400"
+
+
+CODE_CATEGORY_MAP: dict[str, str] = {
+    ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED: "blocked",
+    ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED: "blocked",
+    ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION: "auth_error",
+    ErrorCodes.EXISTING_ACCOUNT_DETECTED: "flow_error",
+    ErrorCodes.FLOW_TIMEOUT_EXCEEDED: "flow_error",
+    ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING: "flow_error",
+    ErrorCodes.INVALID_REQUEST_ERROR: "auth_error",
+    ErrorCodes.MAILBOX_UNAVAILABLE: "flow_error",
+    ErrorCodes.OTP_TIMEOUT: "otp_timeout",
+    ErrorCodes.PASSWORD_VERIFY_BLOCKED: "blocked",
+    ErrorCodes.PROXY_CONNECT_FAILED: "proxy_error",
+    ErrorCodes.REFRESH_TOKEN_REUSED: "auth_error",
+    ErrorCodes.SMALL_SUCCESS_POOL_EMPTY: "flow_error",
+    ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED: "auth_error",
+    ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR: "flow_error",
+    ErrorCodes.TEAM_MOTHER_TOKEN_VALIDATION_FAILED: "auth_error",
+    ErrorCodes.TEAM_SEATS_FULL: "flow_error",
+    ErrorCodes.TRANSPORT_ERROR: "proxy_error",
+    ErrorCodes.UPLOAD_FILE_TO_R2_FAILED: "flow_error",
+    ErrorCodes.USER_REGISTER_400: "blocked",
+}
+
+
+RETRY_PROFILES: dict[str, tuple[str, ...]] = {
+    "task-openai-default": (
+        ErrorCodes.USER_REGISTER_400,
+        ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
+        ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+        ErrorCodes.PASSWORD_VERIFY_BLOCKED,
+        ErrorCodes.EXISTING_ACCOUNT_DETECTED,
+        ErrorCodes.PROXY_CONNECT_FAILED,
+        ErrorCodes.MAILBOX_UNAVAILABLE,
+        ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
+        ErrorCodes.TRANSPORT_ERROR,
+    ),
+    "task-continue-default": (
+        ErrorCodes.PROXY_CONNECT_FAILED,
+        ErrorCodes.MAILBOX_UNAVAILABLE,
+        ErrorCodes.PASSWORD_VERIFY_BLOCKED,
+        ErrorCodes.TRANSPORT_ERROR,
+        ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
+    ),
+    "task-team-expand-default": (
+        ErrorCodes.PROXY_CONNECT_FAILED,
+        ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+        ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
+        ErrorCodes.TRANSPORT_ERROR,
+    ),
+    "step-team-auth-refresh": (
+        ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED,
+    ),
+    "step-upload-artifact": (
+        ErrorCodes.TRANSPORT_ERROR,
+        ErrorCodes.UPLOAD_FILE_TO_R2_FAILED,
+    ),
+}
+
 
 class ProtocolRuntimeError(RuntimeError):
     def __init__(
@@ -9,11 +93,16 @@ class ProtocolRuntimeError(RuntimeError):
         stage: str = "stage_other",
         detail: str = "runtime_error",
         category: str | None = None,
+        code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = str(stage or "stage_other").strip() or "stage_other"
         self.detail = str(detail or "runtime_error").strip() or "runtime_error"
-        normalized_category = str(category or "").strip().lower()
+        normalized_code = normalize_error_code(code)
+        self.code = normalized_code or None
+        normalized_category = normalize_error_category(
+            category or infer_category_from_code(normalized_code)
+        )
         self.category = normalized_category or None
 
     def to_response_payload(self) -> dict[str, str]:
@@ -22,12 +111,22 @@ class ProtocolRuntimeError(RuntimeError):
             "stage": self.stage,
             "detail": self.detail,
         }
+        if self.code:
+            payload["code"] = self.code
         if self.category:
             payload["category"] = self.category
         return payload
 
 
-def _infer_category_from_message(message: str) -> str:
+def normalize_error_code(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def normalize_error_category(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def infer_category_from_message(message: str) -> str:
     msg = str(message or "").strip().lower()
     if (
         "registration_disallowed" in msg
@@ -49,7 +148,7 @@ def _infer_category_from_message(message: str) -> str:
         or "blocked" in msg
     ):
         return "blocked"
-    if "otp_timeout" in msg or ("otp" in msg and "timeout" in msg):
+    if ErrorCodes.OTP_TIMEOUT in msg or ("otp" in msg and "timeout" in msg):
         return "otp_timeout"
     if (
         "proxy" in msg
@@ -76,29 +175,225 @@ def _infer_category_from_message(message: str) -> str:
     return "flow_error"
 
 
+def infer_category_from_code(code: str) -> str:
+    return CODE_CATEGORY_MAP.get(normalize_error_code(code), "")
+
+
+def resolve_retry_codes(policy: dict[str, Any] | None) -> set[str]:
+    if not isinstance(policy, dict):
+        return set()
+    profile_name = str(policy.get("retryProfile") or "").strip()
+    if profile_name:
+        return {normalize_error_code(item) for item in RETRY_PROFILES.get(profile_name, ()) if normalize_error_code(item)}
+    retry_codes = policy.get("retryOnCodes")
+    if isinstance(retry_codes, list):
+        return {normalize_error_code(item) for item in retry_codes if normalize_error_code(item)}
+    return set()
+
+
+def classify_error_code(
+    *,
+    step_type: str,
+    message: str,
+    detail: str = "",
+    code: str = "",
+) -> str:
+    normalized_code = normalize_error_code(code)
+    if normalized_code:
+        return normalized_code
+
+    normalized_step_type = str(step_type or "").strip().lower()
+    normalized_detail = str(detail or "").strip().lower()
+    lowered = str(message or "").strip().lower()
+    combined = " ".join(part for part in (normalized_detail, lowered) if part)
+
+    if ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING in combined:
+        return ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING
+    if (
+        normalized_step_type == "invite_codex_member"
+        and (
+            "token_invalidated" in lowered
+            or "authentication token has been invalidated" in lowered
+            or ("status_code': 401" in lowered and "please try signing in again" in lowered)
+            or ('"status_code": 401' in lowered and "please try signing in again" in lowered)
+        )
+    ):
+        return ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED
+    if (
+        "workspace has reached maximum number of seats" in lowered
+        or ErrorCodes.TEAM_SEATS_FULL in lowered
+    ):
+        return ErrorCodes.TEAM_SEATS_FULL
+    if normalized_detail == "user_register" or "user_register" in lowered:
+        return ErrorCodes.USER_REGISTER_400
+    if "authorize_continue" in lowered and ("status=429" in lowered or "rate limit exceeded" in lowered):
+        return ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED
+    if normalized_detail == "authorize_continue" or (
+        "authorize_continue" in lowered and ("just a moment" in lowered or "status=403" in lowered)
+    ):
+        return ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED
+    if normalized_detail == "password_verify" or (
+        "password_verify" in lowered and ("just a moment" in lowered or "status=403" in lowered)
+    ):
+        return ErrorCodes.PASSWORD_VERIFY_BLOCKED
+    if ErrorCodes.EXISTING_ACCOUNT_DETECTED in lowered or normalized_detail == "authorize_continue_existing_account":
+        return ErrorCodes.EXISTING_ACCOUNT_DETECTED
+    if "authorize_init_missing_login_session" in lowered or normalized_detail == "oauth_authorize":
+        return ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION
+    if (
+        ErrorCodes.PROXY_CONNECT_FAILED in lowered
+        or "easy_proxy_checkout_failed" in lowered
+        or "recent_route_reuse" in lowered
+        or "proxy connect aborted" in lowered
+        or "could not connect to server" in lowered
+        or "tls connect error" in lowered
+        or "connection closed abruptly" in lowered
+    ):
+        return ErrorCodes.PROXY_CONNECT_FAILED
+    if (
+        "code=mailbox_capacity_unavailable" in lowered
+        or '"code":"mailbox_capacity_unavailable"' in lowered
+        or "mailbox_capacity_unavailable" in lowered
+        or "code=mailbox_upstream_transient" in lowered
+        or '"code":"mailbox_upstream_transient"' in lowered
+        or "mailbox capacity unavailable" in lowered
+        or "mailbox upstream transient" in lowered
+        or "code=moemail_capacity_exhausted" in lowered
+        or '"code":"moemail_capacity_exhausted"' in lowered
+        or "moemail_capacity_exhausted" in lowered
+        or "moemail upstream transient" in lowered
+        or "maximum mailbox" in lowered
+        or "mailbox count limit" in lowered
+        or "最大邮箱数量限制" in str(message or "")
+    ):
+        return ErrorCodes.MAILBOX_UNAVAILABLE
+    if ErrorCodes.REFRESH_TOKEN_REUSED in lowered:
+        return ErrorCodes.REFRESH_TOKEN_REUSED
+    if ErrorCodes.TEAM_MOTHER_TOKEN_VALIDATION_FAILED in lowered:
+        return ErrorCodes.TEAM_MOTHER_TOKEN_VALIDATION_FAILED
+    if ErrorCodes.INVALID_REQUEST_ERROR in lowered:
+        return ErrorCodes.INVALID_REQUEST_ERROR
+    if "unable to invite user due to an error" in lowered:
+        return ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR
+    if ErrorCodes.OTP_TIMEOUT in lowered or "timeout waiting for 6-digit code" in lowered:
+        return ErrorCodes.OTP_TIMEOUT
+    if "r2_upload_failed" in lowered or ErrorCodes.UPLOAD_FILE_TO_R2_FAILED in lowered:
+        return ErrorCodes.UPLOAD_FILE_TO_R2_FAILED
+    if ErrorCodes.SMALL_SUCCESS_POOL_EMPTY in lowered:
+        return ErrorCodes.SMALL_SUCCESS_POOL_EMPTY
+    if ErrorCodes.FLOW_TIMEOUT_EXCEEDED in lowered:
+        return ErrorCodes.FLOW_TIMEOUT_EXCEEDED
+    if "curl" in lowered or "connect" in lowered or "tls" in lowered:
+        return ErrorCodes.TRANSPORT_ERROR
+    return normalize_error_code(f"{normalized_step_type}_failed")
+
+
+def build_error_details(
+    *,
+    step_type: str,
+    message: str,
+    detail: str = "",
+    stage: str = "",
+    category: str = "",
+    code: str = "",
+) -> dict[str, str]:
+    final_code = classify_error_code(
+        step_type=step_type,
+        message=message,
+        detail=detail,
+        code=code,
+    )
+    final_category = normalize_error_category(category) or infer_category_from_code(final_code) or infer_category_from_message(message)
+    return {
+        "code": final_code,
+        "message": str(message or "").strip(),
+        "detail": str(detail or "").strip(),
+        "stage": str(stage or "").strip(),
+        "category": final_category,
+    }
+
+
+def result_error_step(result_payload: dict[str, Any]) -> str:
+    return str(result_payload.get("errorStep") or "").strip()
+
+
+def result_step_error(result_payload: dict[str, Any], step_id: str | None = None) -> dict[str, Any]:
+    if not isinstance(result_payload, dict):
+        return {}
+    target_step = str(step_id or result_error_step(result_payload) or "").strip()
+    if not target_step:
+        return {}
+    step_errors = result_payload.get("stepErrors")
+    if not isinstance(step_errors, dict):
+        return {}
+    candidate = step_errors.get(target_step)
+    return candidate if isinstance(candidate, dict) else {}
+
+
+def result_error_code(result_payload: dict[str, Any], step_id: str | None = None) -> str:
+    top_level_code = normalize_error_code(result_payload.get("errorCode") if isinstance(result_payload, dict) else "")
+    if top_level_code and (step_id is None or str(step_id or "").strip() == result_error_step(result_payload)):
+        return top_level_code
+    return normalize_error_code(result_step_error(result_payload, step_id).get("code"))
+
+
+def result_error_message(result_payload: dict[str, Any], step_id: str | None = None) -> str:
+    if not isinstance(result_payload, dict):
+        return ""
+    target_step = str(step_id or "").strip()
+    message_parts: list[str] = []
+    if not target_step or target_step == result_error_step(result_payload):
+        message_parts.append(str(result_payload.get("error") or "").strip())
+    step_error = result_step_error(result_payload, step_id)
+    message_parts.append(str(step_error.get("message") or "").strip())
+    message_parts.append(str(step_error.get("code") or "").strip())
+    return " ".join(part for part in message_parts if part).strip()
+
+
+def result_error_matches(result_payload: dict[str, Any], *codes: str, step_id: str | None = None) -> bool:
+    normalized_codes = {normalize_error_code(item) for item in codes if normalize_error_code(item)}
+    if not normalized_codes:
+        return False
+    return result_error_code(result_payload, step_id) in normalized_codes
+
+
 def ensure_protocol_runtime_error(
     exc: BaseException,
     *,
     stage: str,
     detail: str,
     category: str | None = None,
+    code: str | None = None,
 ) -> ProtocolRuntimeError:
     if isinstance(exc, ProtocolRuntimeError):
         if not exc.stage:
             exc.stage = str(stage or "stage_other").strip() or "stage_other"
         if not exc.detail:
             exc.detail = str(detail or "runtime_error").strip() or "runtime_error"
+        if not exc.code:
+            exc.code = classify_error_code(
+                step_type="",
+                message=str(exc),
+                detail=exc.detail,
+                code=str(code or ""),
+            ) or None
         if not exc.category:
-            normalized_category = str(category or "").strip().lower()
-            exc.category = normalized_category or _infer_category_from_message(str(exc))
+            normalized_category = normalize_error_category(category) or infer_category_from_code(str(exc.code or "")) or infer_category_from_message(str(exc))
+            exc.category = normalized_category or None
         return exc
 
     message = str(exc or detail or "protocol_runtime_error").strip() or "protocol_runtime_error"
-    normalized_category = str(category or "").strip().lower()
-    final_category = normalized_category or _infer_category_from_message(message)
+    final_code = classify_error_code(
+        step_type="",
+        message=message,
+        detail=detail,
+        code=str(code or ""),
+    )
+    final_category = normalize_error_category(category) or infer_category_from_code(final_code) or infer_category_from_message(message)
     return ProtocolRuntimeError(
         message,
         stage=stage,
         detail=detail,
         category=final_category,
+        code=final_code,
     )

@@ -11,6 +11,7 @@
       "taskRetry": {
         "maxAttempts": 6,
         "backoffSeconds": 3,
+        "retryProfile": "task-continue-default",
         "retryOnSteps": [
           "acquire-mailbox",
           "acquire-proxy-chain",
@@ -18,13 +19,6 @@
           "initialize-chatgpt-login-session",
           "invite-codex-member",
           "obtain-codex-oauth"
-        ],
-        "retryOnCodes": [
-          "proxy_connect_failed",
-          "mailbox_unavailable",
-          "password_verify_blocked",
-          "transport_error",
-          "flow_timeout_exceeded"
         ]
       }
     },
@@ -140,9 +134,7 @@
           "stage": "invite",
           "retry": {
             "maxAttempts": 2,
-            "retryOnCodes": [
-              "team_auth_token_invalidated"
-            ],
+            "retryProfile": "step-team-auth-refresh",
             "refreshSavedStates": [
               "team_mother_oauth_refresh"
             ]
@@ -262,10 +254,7 @@
           "retry": {
             "maxAttempts": 2,
             "backoffSeconds": 2,
-            "retryOnCodes": [
-              "transport_error",
-              "upload_file_to_r2_failed"
-            ]
+            "retryProfile": "step-upload-artifact"
           }
         }
       },
