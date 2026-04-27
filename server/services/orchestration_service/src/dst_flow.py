@@ -18,14 +18,14 @@ if __package__ in (None, ""):
         if candidate_text not in sys.path:
             sys.path.append(candidate_text)
     from errors import ErrorCodes, build_error_details, resolve_retry_codes
-    from others.common import env_flag as _env_bool
+    from others.config import DstTaskEnvConfig
     from artifact_pool_flow import dispatch_orchestration_step
     from easyemail_flow import dispatch_easyemail_step
     from easyproxy_flow import dispatch_easyproxy_step
     from easyprotocol_flow import dispatch_easyprotocol_step
 else:
     from .errors import ErrorCodes, build_error_details, resolve_retry_codes
-    from .others.common import env_flag as _env_bool
+    from .others.config import DstTaskEnvConfig
     from .artifact_pool_flow import dispatch_orchestration_step
     from .easyemail_flow import dispatch_easyemail_step
     from .easyproxy_flow import dispatch_easyproxy_step
@@ -488,7 +488,8 @@ def run_dst_flow_once(
     failed_task_proxy_urls: list[str] = []
     while task_attempt < max_task_attempts:
         task_attempt += 1
-        free_stop_after_validate = _env_bool("REGISTER_FREE_STOP_AFTER_VALIDATE", False)
+        env_config = DstTaskEnvConfig.from_env()
+        free_stop_after_validate = env_config.free_stop_after_validate
         state: dict[str, Any] = {
             "task": {
                 "output_dir": str(output_dir or "").strip(),
@@ -507,17 +508,17 @@ def run_dst_flow_once(
                 "r2_public_base_url": str(r2_public_base_url or "").strip(),
                 "r2_upload_enabled": (effective_r2_upload_enabled and not free_stop_after_validate),
                 "small_success_pool_dir": str(small_success_pool_dir or "").strip(),
-                "team_pre_pool_dir": str(os.environ.get("REGISTER_TEAM_PRE_POOL_DIR") or "").strip(),
-                "team_mother_pool_dir": str(os.environ.get("REGISTER_TEAM_MOTHER_POOL_DIR") or "").strip(),
-                "team_mother_claims_dir": str(os.environ.get("REGISTER_TEAM_MOTHER_CLAIMS_DIR") or "").strip(),
-                "team_member_claims_dir": str(os.environ.get("REGISTER_TEAM_MEMBER_CLAIMS_DIR") or "").strip(),
-                "team_post_pool_dir": str(os.environ.get("REGISTER_TEAM_POST_POOL_DIR") or "").strip(),
-                "team_pool_dir": str(os.environ.get("REGISTER_TEAM_POOL_DIR") or "").strip(),
-                "team_pre_fill_count": str(os.environ.get("REGISTER_TEAM_PRE_FILL_COUNT") or "").strip(),
-                "team_member_count": str(os.environ.get("REGISTER_TEAM_MEMBER_COUNT") or "").strip(),
-                "team_workspace_selector": str(os.environ.get("REGISTER_TEAM_WORKSPACE_SELECTOR") or "").strip(),
-                "free_workspace_selector": str(os.environ.get("REGISTER_FREE_WORKSPACE_SELECTOR") or "").strip() or "personal",
-                "free_oauth_delay_seconds": str(os.environ.get("REGISTER_FREE_OAUTH_DELAY_SECONDS") or "").strip() or "180",
+                "team_pre_pool_dir": env_config.team_pre_pool_dir,
+                "team_mother_pool_dir": env_config.team_mother_pool_dir,
+                "team_mother_claims_dir": env_config.team_mother_claims_dir,
+                "team_member_claims_dir": env_config.team_member_claims_dir,
+                "team_post_pool_dir": env_config.team_post_pool_dir,
+                "team_pool_dir": env_config.team_pool_dir,
+                "team_pre_fill_count": env_config.team_pre_fill_count,
+                "team_member_count": env_config.team_member_count,
+                "team_workspace_selector": env_config.team_workspace_selector,
+                "free_workspace_selector": env_config.free_workspace_selector,
+                "free_oauth_delay_seconds": env_config.free_oauth_delay_seconds,
                 "free_stop_after_validate": free_stop_after_validate,
                 "free_stop_after_validate_cleanup_enabled": not free_stop_after_validate,
                 "platform": str(plan.platform or "").strip(),

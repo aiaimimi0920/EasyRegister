@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 import urllib.error
 import urllib.parse
@@ -11,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from others.config import DashboardSettings
 from others.common import write_json_atomic as _write_json_atomic
 from others.paths import resolve_shared_root as _shared_root_from_output_root
 
@@ -40,13 +40,6 @@ def _read_json(path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-
-def _env_flag(name: str, default: bool = False) -> bool:
-    raw = str(os.environ.get(name) or "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "on"}
-
 
 def _dashboard_listen_default() -> str:
     return "127.0.0.1:9790"
@@ -680,22 +673,21 @@ def start_dashboard_server_if_enabled(
     easy_protocol_token: str,
     easy_protocol_actor: str,
 ) -> DashboardHTTPServer | None:
-    enabled = str(os.environ.get("REGISTER_DASHBOARD_ENABLED") or "").strip().lower()
-    if enabled not in {"1", "true", "yes", "on"}:
+    settings = DashboardSettings.from_env()
+    if not settings.enabled:
         return None
     if not _control_token_is_secure(easy_protocol_token):
         return None
-    listen = str(os.environ.get("REGISTER_DASHBOARD_LISTEN") or "").strip() or _dashboard_listen_default()
-    if _listen_targets_remote_host(listen) and not _env_flag("REGISTER_DASHBOARD_ALLOW_REMOTE", False):
+    listen = settings.listen or _dashboard_listen_default()
+    if _listen_targets_remote_host(listen) and not settings.allow_remote:
         return None
-    recent_window_seconds = int(str(os.environ.get("REGISTER_DASHBOARD_RECENT_WINDOW_SECONDS") or "900").strip() or "900")
     server = DashboardHTTPServer(
         listen=listen,
         shared_root=_shared_root_from_output_root(output_root),
         easy_protocol_base_url=easy_protocol_base_url,
         easy_protocol_token=easy_protocol_token,
         easy_protocol_actor=easy_protocol_actor,
-        recent_window_seconds=recent_window_seconds,
+        recent_window_seconds=settings.recent_window_seconds,
     )
     server.start()
     return server

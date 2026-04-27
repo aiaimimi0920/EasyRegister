@@ -23,11 +23,13 @@ if __package__ in (None, "", "others"):
         if candidate_text not in sys.path:
             sys.path.append(candidate_text)
     from bootstrap import ensure_local_bundle_imports
+    from config import MailboxRuntimeConfig, ProxyRuntimeConfig, env_first_text, env_text
     from local_config import read_easyemail_server_api_key
     from paths import resolve_shared_root as _shared_root_from_output_root
     from errors import ensure_protocol_runtime_error
 else:
     from .bootstrap import ensure_local_bundle_imports
+    from .config import MailboxRuntimeConfig, ProxyRuntimeConfig, env_first_text, env_text
     from .local_config import read_easyemail_server_api_key
     from .paths import resolve_shared_root as _shared_root_from_output_root
     from ..errors import ensure_protocol_runtime_error
@@ -71,6 +73,35 @@ _ACTIVE_FLOW_PROXY_LOCK = threading.Lock()
 _ACTIVE_FLOW_PROXY_URLS: set[str] = set()
 _RECENT_FLOW_PROXY_URLS: dict[str, float] = {}
 _FAILED_FLOW_PROXY_URLS: dict[str, float] = {}
+
+
+def _default_easy_proxy_management_base_url() -> str:
+    return DEFAULT_EASY_PROXY_BASE_URL_DOCKER if _running_in_docker() else DEFAULT_EASY_PROXY_BASE_URL_HOST
+
+
+def _proxy_runtime_config() -> ProxyRuntimeConfig:
+    return ProxyRuntimeConfig.from_env(
+        default_management_base_url=_default_easy_proxy_management_base_url(),
+        default_ttl_minutes=DEFAULT_EASY_PROXY_TTL_MINUTES,
+        default_runtime_host=DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER,
+        default_mode=DEFAULT_EASY_PROXY_MODE,
+        running_in_docker=_running_in_docker(),
+    )
+
+
+def _mailbox_runtime_config() -> MailboxRuntimeConfig:
+    output_root_text = env_text("REGISTER_OUTPUT_ROOT")
+    if output_root_text:
+        default_state_path = _shared_root_from_output_root(Path(output_root_text).expanduser()) / "others" / "register-mailbox-domain-state.json"
+    else:
+        default_state_path = Path.cwd().resolve() / "others" / "register-mailbox-domain-state.json"
+    return MailboxRuntimeConfig.from_env(
+        default_ttl_seconds=DEFAULT_MAILBOX_TTL_SECONDS,
+        default_state_path=default_state_path,
+        default_business_domain_pool=DEFAULT_REGISTER_MOEMAIL_DOMAIN_POOL,
+        default_blacklist_min_attempts=DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS,
+        default_blacklist_failure_rate=DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE,
+    )
 
 
 @dataclass
@@ -134,6 +165,7 @@ class FlowProxyLease:
         self._finalized = True
         latency_ms = max(0, int((time.monotonic() - self.started_monotonic) * 1000))
         if self.checked_out and self.lease_id:
+            proxy_config = _proxy_runtime_config()
             report_usage(
                 self.lease_id,
                 success=self._success,
@@ -144,12 +176,12 @@ class FlowProxyLease:
                 failure_class="" if self._success else self._failure_class,
                 route_confidence="" if self._success else self._route_confidence,
                 base_url=self.management_base_url,
-                api_key=str(os.environ.get("EASY_PROXY_API_KEY") or "").strip(),
+                api_key=proxy_config.api_key,
             )
             release_lease(
                 self.lease_id,
                 base_url=self.management_base_url,
-                api_key=str(os.environ.get("EASY_PROXY_API_KEY") or "").strip(),
+                api_key=proxy_config.api_key,
             )
         if self.unique_key:
             with _ACTIVE_FLOW_PROXY_LOCK:
@@ -212,28 +244,17 @@ def _running_in_docker() -> bool:
 
 
 def ensure_easy_proxy_env_defaults() -> None:
-    management_base = str(
-        os.environ.get("EASY_PROXY_BASE_URL")
-        or os.environ.get("EASY_PROXY_MANAGEMENT_URL")
-        or ""
-    ).strip()
+    proxy_config = _proxy_runtime_config()
+    management_base = env_first_text("EASY_PROXY_BASE_URL", "EASY_PROXY_MANAGEMENT_URL")
     if not management_base:
-        os.environ["EASY_PROXY_BASE_URL"] = (
-            DEFAULT_EASY_PROXY_BASE_URL_DOCKER if _running_in_docker() else DEFAULT_EASY_PROXY_BASE_URL_HOST
-        )
+        os.environ["EASY_PROXY_BASE_URL"] = proxy_config.management_base_url
     ttl_value = str(os.environ.get("EASY_PROXY_TTL_MINUTES") or "").strip()
     if not ttl_value:
-        os.environ["EASY_PROXY_TTL_MINUTES"] = str(DEFAULT_EASY_PROXY_TTL_MINUTES)
+        os.environ["EASY_PROXY_TTL_MINUTES"] = str(proxy_config.ttl_minutes)
 
 
 def resolve_easy_proxy_runtime_host() -> str:
-    runtime_host = str(os.environ.get("EASY_PROXY_RUNTIME_HOST") or "").strip()
-    if runtime_host:
-        return runtime_host
-    # The acquired proxy URL is ultimately consumed by EasyProtocol /
-    # PythonProtocol executors, which normally live on the Easy docker network
-    # even when the orchestration process itself runs on the host.
-    return DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER
+    return _proxy_runtime_config().runtime_host
 
 
 def runtime_reachable_proxy_url(proxy_url: str) -> str:
@@ -310,19 +331,11 @@ def _probe_flow_proxy(
 
 
 def _resolve_easy_proxy_unique_attempts() -> int:
-    raw = str(os.environ.get("REGISTER_PROXY_UNIQUE_ATTEMPTS") or "").strip()
-    try:
-        return max(1, int(raw or DEFAULT_EASY_PROXY_UNIQUE_ATTEMPTS))
-    except Exception:
-        return DEFAULT_EASY_PROXY_UNIQUE_ATTEMPTS
+    return _proxy_runtime_config().unique_attempts
 
 
 def _resolve_easy_proxy_recent_window_seconds() -> int:
-    raw = str(os.environ.get("REGISTER_PROXY_RECENT_WINDOW_SECONDS") or "").strip()
-    try:
-        return max(0, int(raw or "180"))
-    except Exception:
-        return 180
+    return _proxy_runtime_config().recent_window_seconds
 
 
 def _purge_recent_flow_proxy_cache(now_monotonic: float) -> None:
@@ -332,11 +345,7 @@ def _purge_recent_flow_proxy_cache(now_monotonic: float) -> None:
 
 
 def _resolve_easy_proxy_failure_window_seconds() -> int:
-    raw = str(os.environ.get("REGISTER_PROXY_FAILURE_WINDOW_SECONDS") or "").strip()
-    try:
-        return max(0, int(raw or "300"))
-    except Exception:
-        return 300
+    return _proxy_runtime_config().failure_window_seconds
 
 
 def _purge_failed_flow_proxy_cache(now_monotonic: float) -> None:
@@ -359,30 +368,14 @@ def _mark_failed_flow_proxy(unique_key: str) -> None:
 
 
 def _resolve_easy_proxy_ttl_minutes() -> int:
-    raw = str(os.environ.get("REGISTER_PROXY_TTL_MINUTES") or "").strip()
-    try:
-        return max(1, int(raw or os.environ.get("EASY_PROXY_TTL_MINUTES") or DEFAULT_EASY_PROXY_TTL_MINUTES))
-    except Exception:
-        return DEFAULT_EASY_PROXY_TTL_MINUTES
+    return _proxy_runtime_config().ttl_minutes
 
 
 def _resolve_mailbox_ttl_seconds() -> int:
-    raw = str(
-        os.environ.get("REGISTER_MAILBOX_TTL_SECONDS")
-        or ""
-    ).strip()
-    try:
-        return max(1, int(float(raw or DEFAULT_MAILBOX_TTL_SECONDS)))
-    except Exception:
-        return DEFAULT_MAILBOX_TTL_SECONDS
+    return _mailbox_runtime_config().ttl_seconds
 
 def _resolve_easy_proxy_mode() -> str:
-    raw = str(os.environ.get("REGISTER_PROXY_MODE") or "").strip().lower()
-    if raw in {"lease", "compat"}:
-        return "lease"
-    if raw in {"random", "random-node", "random_node"}:
-        return "random-node"
-    return DEFAULT_EASY_PROXY_MODE
+    return _proxy_runtime_config().mode
 
 
 def _default_easy_proxy_service_key(flow_name: str) -> str:
@@ -456,16 +449,17 @@ def acquire_flow_proxy_lease(
     probe_url: str | None = None,
     probe_expected_statuses: set[int] | None = None,
 ) -> FlowProxyLease:
-    enabled = env_flag("REGISTER_ENABLE_EASY_PROXY", True)
-    required = env_flag("REGISTER_REQUIRE_EASY_PROXY", True) if required is None else bool(required)
+    proxy_config = _proxy_runtime_config()
+    enabled = proxy_config.enabled
+    required = proxy_config.required_by_default if required is None else bool(required)
     if not enabled:
         return FlowProxyLease.direct(flow_name=flow_name)
 
     ensure_easy_proxy_env_defaults()
-    management_base = str(os.environ.get("EASY_PROXY_BASE_URL") or "").strip()
-    api_key = str(os.environ.get("EASY_PROXY_API_KEY") or "").strip()
-    ttl_minutes = _resolve_easy_proxy_ttl_minutes()
-    mode = _resolve_easy_proxy_mode()
+    management_base = proxy_config.management_base_url
+    api_key = proxy_config.api_key
+    ttl_minutes = proxy_config.ttl_minutes
+    mode = proxy_config.mode
     service_key = _default_easy_proxy_service_key(flow_name)
     stage = _default_easy_proxy_stage(flow_name)
     lease: FlowProxyLease | None = None
@@ -747,41 +741,25 @@ def _normalize_mailbox_provider(provider: str) -> str:
 
 
 def resolve_mailbox_provider_selections() -> tuple[str, ...]:
-    raw = (
-        os.environ.get("REGISTER_MAILBOX_PROVIDERS")
-        or os.environ.get("MAILBOX_PROVIDER_CANDIDATES")
-        or ""
-    ).strip()
-    if not raw:
+    providers = _mailbox_runtime_config().providers
+    if not providers:
         # Business default: keep the main registration flow on providers that
         # still pass OpenAI email acceptance. etempmail remains available only
         # when explicitly opted in via env.
         return ("m2u", "moemail")
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for part in raw.split(","):
-        normalized_provider = _normalize_mailbox_provider(part)
-        if not normalized_provider or normalized_provider in seen:
-            continue
-        normalized.append(normalized_provider)
-        seen.add(normalized_provider)
-    return tuple(normalized)
+    return tuple(
+        normalized
+        for normalized in (_normalize_mailbox_provider(item) for item in providers)
+        if normalized
+    )
 
 
 def resolve_mailbox_strategy_mode_id() -> str:
-    return str(
-        os.environ.get("REGISTER_MAILBOX_STRATEGY_MODE_ID")
-        or os.environ.get("MAILBOX_PROVIDER_STRATEGY_MODE_ID")
-        or ""
-    ).strip()
+    return _mailbox_runtime_config().strategy_mode_id
 
 
 def resolve_mailbox_routing_profile_id() -> str:
-    return str(
-        os.environ.get("REGISTER_MAILBOX_ROUTING_PROFILE_ID")
-        or os.environ.get("MAILBOX_PROVIDER_ROUTING_PROFILE_ID")
-        or "high-availability"
-    ).strip()
+    return _mailbox_runtime_config().routing_profile_id
 
 
 def _provider_from_mailbox_ref(mailbox_ref: str) -> str:
@@ -806,13 +784,7 @@ def _normalize_requested_email_address(value: str | None) -> str:
     return f"{local_part}@{domain}"
 
 def _resolve_mailbox_domain_state_path() -> Path:
-    explicit = str(os.environ.get("REGISTER_MAILBOX_DOMAIN_STATE_PATH") or "").strip()
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-    output_root_text = str(os.environ.get("REGISTER_OUTPUT_ROOT") or "").strip()
-    if output_root_text:
-        return _shared_root_from_output_root(Path(output_root_text).expanduser()) / "others" / "register-mailbox-domain-state.json"
-    return Path.cwd().resolve() / "tmp" / "register-mailbox-domain-state.json"
+    return _mailbox_runtime_config().domain_state_path
 
 
 def _load_mailbox_domain_state() -> dict[str, Any]:
@@ -827,38 +799,15 @@ def _load_mailbox_domain_state() -> dict[str, Any]:
 
 
 def _resolve_business_mailbox_domain_pool() -> tuple[str, ...]:
-    raw = str(os.environ.get("REGISTER_MAILBOX_DOMAIN_POOL") or "").strip()
-    if not raw:
-        return DEFAULT_REGISTER_MOEMAIL_DOMAIN_POOL
-    normalized = raw.replace(";", ",").replace("|", ",").replace("\r", ",").replace("\n", ",")
-    domains: list[str] = []
-    seen: set[str] = set()
-    for item in normalized.split(","):
-        domain = str(item or "").strip().lower()
-        if not domain or domain in seen:
-            continue
-        seen.add(domain)
-        domains.append(domain)
-    return tuple(domains)
+    return _mailbox_runtime_config().business_domain_pool
 
 
 def _resolve_mailbox_domain_blacklist_min_attempts() -> int:
-    raw = str(os.environ.get("REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS") or "").strip()
-    try:
-        return max(1, int(raw or DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS))
-    except Exception:
-        return DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS
+    return _mailbox_runtime_config().blacklist_min_attempts
 
 
 def _resolve_mailbox_domain_blacklist_failure_rate() -> float:
-    raw = str(os.environ.get("REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE") or "").strip()
-    try:
-        value = float(raw or DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE)
-    except Exception:
-        value = DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE
-    if 0.0 < value <= 1.0:
-        value *= 100.0
-    return max(0.0, min(100.0, value))
+    return _mailbox_runtime_config().blacklist_failure_rate_percent
 
 
 def _mailbox_domain_stats(domain: str, state_payload: dict[str, Any]) -> dict[str, Any]:
@@ -945,9 +894,10 @@ def resolve_mailbox(
     recreate_preallocated_email: bool = False,
 ) -> Mailbox:
     ensure_easy_email_env_defaults()
+    mailbox_config = _mailbox_runtime_config()
     normalized_preallocated_email = _normalize_requested_email_address(preallocated_email)
     if normalized_preallocated_email and recreate_preallocated_email:
-        ttl_seconds = _resolve_mailbox_ttl_seconds()
+        ttl_seconds = mailbox_config.ttl_seconds
         requested_local_part, _, requested_domain = normalized_preallocated_email.partition("@")
         preferred_provider = _provider_from_mailbox_ref(preallocated_mailbox_ref or "")
         try:
@@ -990,7 +940,7 @@ def resolve_mailbox(
             ref=f"moemail:{session_id}",
             session_id=session_id,
         )
-    ttl_seconds = _resolve_mailbox_ttl_seconds()
+    ttl_seconds = mailbox_config.ttl_seconds
     strategy_kwargs = _resolve_mailbox_strategy_kwargs()
     planned_provider = _resolve_planned_mailbox_provider(
         ttl_seconds=ttl_seconds,

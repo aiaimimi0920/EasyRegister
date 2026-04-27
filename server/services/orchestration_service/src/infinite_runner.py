@@ -38,6 +38,14 @@ if __package__ in (None, ""):
         write_json_atomic as _write_json_atomic,
     )
     from others.artifact_transfer import copy_artifact_to_dir as _copy_artifact_to_dir
+    from others.config import (
+        ArtifactRoutingConfig,
+        CleanupRuntimeConfig,
+        DstTaskEnvConfig,
+        MailboxRuntimeConfig,
+        RunnerMainConfig,
+        TeamAuthRuntimeConfig,
+    )
     from others.file_lock import release_lock, try_acquire_lock
     from others.paths import (
         resolve_shared_root as _shared_root_from_output_root,
@@ -86,6 +94,14 @@ else:
         write_json_atomic as _write_json_atomic,
     )
     from .others.artifact_transfer import copy_artifact_to_dir as _copy_artifact_to_dir
+    from .others.config import (
+        ArtifactRoutingConfig,
+        CleanupRuntimeConfig,
+        DstTaskEnvConfig,
+        MailboxRuntimeConfig,
+        RunnerMainConfig,
+        TeamAuthRuntimeConfig,
+    )
     from .others.file_lock import release_lock, try_acquire_lock
     from .others.paths import (
         resolve_shared_root as _shared_root_from_output_root,
@@ -115,25 +131,44 @@ else:
     )
     from .others.storage import load_json_payload
 
-
-def _env_text(name: str, default: str = "") -> str:
-    return str(os.environ.get(name) or default).strip()
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = _env_text(name, str(default))
-    try:
-        return int(raw)
-    except Exception:
-        return default
+def _team_auth_runtime_config(
+    *,
+    output_root: Path | None = None,
+    shared_root: Path | None = None,
+) -> TeamAuthRuntimeConfig:
+    return TeamAuthRuntimeConfig.from_env(output_root=output_root, shared_root=shared_root)
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = _env_text(name, str(default))
-    try:
-        return float(raw)
-    except Exception:
-        return default
+def _artifact_routing_config(*, output_root: Path | None = None) -> ArtifactRoutingConfig:
+    return ArtifactRoutingConfig.from_env(output_root=output_root)
+
+
+def _cleanup_runtime_config() -> CleanupRuntimeConfig:
+    return CleanupRuntimeConfig.from_env()
+
+
+def _mailbox_runtime_config(*, shared_root: Path | None = None) -> MailboxRuntimeConfig:
+    default_state_path = (
+        shared_root / "others" / "register-mailbox-domain-state.json"
+        if shared_root is not None
+        else RunnerMainConfig.from_env().shared_root / "others" / "register-mailbox-domain-state.json"
+    )
+    return MailboxRuntimeConfig.from_env(
+        default_ttl_seconds=90,
+        default_state_path=default_state_path,
+        default_business_domain_pool=(
+            "sall.cc",
+            "cnmlgb.de",
+            "zhooo.org",
+            "cksa.eu.cc",
+            "wqwq.eu.cc",
+            "zhoo.eu.cc",
+            "zhooo.ggff.net",
+            "coolkidsa.ggff.net",
+        ),
+        default_blacklist_min_attempts=20,
+        default_blacklist_failure_rate=90.0,
+    )
 
 
 def _split_path_list(raw: str) -> list[str]:
@@ -201,7 +236,7 @@ def _team_auth_payload_is_mother(payload: Any) -> bool:
 
 
 def _team_auth_pool_candidates(*, candidate_dirs: list[str]) -> list[str]:
-    glob_pattern = _env_text("REGISTER_TEAM_AUTH_GLOB", "*-team.json") or "*-team.json"
+    glob_pattern = _team_auth_runtime_config().auth_glob or "*-team.json"
     explicit: list[str] = []
     inferred: list[str] = []
     seen: set[str] = set()
@@ -237,29 +272,29 @@ def _team_auth_pool_candidates(*, candidate_dirs: list[str]) -> list[str]:
 
 
 def _resolve_team_auth_pool(*, instance_role: str) -> list[str]:
+    config = _team_auth_runtime_config()
     normalized_role = str(instance_role or "").strip().lower()
     if normalized_role == "team":
-        explicit_pool_dir = _env_text("REGISTER_TEAM_MOTHER_POOL_DIR") or "/shared/register-output/team-mother-pool"
-        pool_dir = Path(explicit_pool_dir).expanduser().resolve()
+        pool_dir = config.mother_pool_dir
         if not pool_dir.exists():
             return []
         return _team_auth_pool_candidates(candidate_dirs=[str(pool_dir)])
 
-    explicit_paths = _split_path_list(_env_text("REGISTER_TEAM_AUTH_PATHS"))
+    explicit_paths = list(config.auth_paths)
     if explicit_paths:
         return _team_auth_pool_candidates(candidate_dirs=explicit_paths)
 
-    explicit_path = _env_text("REGISTER_TEAM_AUTH_PATH")
+    explicit_path = config.auth_path
     if explicit_path:
         candidate = Path(explicit_path).expanduser()
         if candidate.exists():
             return _team_auth_pool_candidates(candidate_dirs=[str(candidate.resolve())])
         return []
 
-    candidate_dirs = _split_path_list(_env_text("REGISTER_TEAM_AUTH_DIRS"))
+    candidate_dirs = list(config.auth_dirs)
     if not candidate_dirs:
-        preferred_local_dir = _env_text("REGISTER_TEAM_AUTH_LOCAL_DIR") or _env_text("REGISTER_TEAM_LOCAL_DIR")
-        fallback_default_dir = _env_text("REGISTER_TEAM_AUTH_DEFAULT_DIR") or _env_text("REGISTER_TEAM_AUTH_DIR")
+        preferred_local_dir = config.auth_local_dir or config.local_dir
+        fallback_default_dir = config.auth_default_dir
         deduped_dirs: list[str] = []
         seen_dirs: set[str] = set()
         for raw_dir in (preferred_local_dir, fallback_default_dir):
@@ -447,10 +482,7 @@ def _mailbox_cleanup_lock_path(*, shared_root: Path) -> Path:
 
 
 def _mailbox_domain_stats_path(*, shared_root: Path) -> Path:
-    explicit = _env_text("REGISTER_MAILBOX_DOMAIN_STATE_PATH")
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-    return shared_root / "others" / "register-mailbox-domain-state.json"
+    return _mailbox_runtime_config(shared_root=shared_root).domain_state_path
 
 
 def _load_team_auth_state(*, shared_root: Path, team_auth_path: str) -> dict[str, Any]:
@@ -614,63 +646,59 @@ def _team_auth_email_domain(*, team_auth_path: str) -> str:
 
 
 def _team_auth_sall_cc_weight() -> float:
-    return max(0.0, min(1.0, _env_percent("REGISTER_TEAM_AUTH_SALL_CC_WEIGHT", 5.0) / 100.0))
+    return _team_auth_runtime_config().sall_cc_weight
 
 
 def _team_auth_zero_success_window_seconds() -> float:
-    return max(0.0, _env_float("REGISTER_TEAM_AUTH_ZERO_SUCCESS_WINDOW_SECONDS", 1800.0))
+    return _team_auth_runtime_config().zero_success_window_seconds
 
 
 def _team_auth_zero_success_min_attempts() -> int:
-    return max(0, _env_int("REGISTER_TEAM_AUTH_ZERO_SUCCESS_MIN_ATTEMPTS", 10))
+    return _team_auth_runtime_config().zero_success_min_attempts
 
 
 def _team_auth_team_expand_window_seconds() -> float:
-    return max(0.0, _env_float("REGISTER_TEAM_AUTH_TEAM_EXPAND_WINDOW_SECONDS", 21600.0))
+    return _team_auth_runtime_config().team_expand_window_seconds
 
 
 def _team_auth_team_expand_failure_weight_step() -> float:
-    return max(0.0, min(1.0, _env_float("REGISTER_TEAM_AUTH_TEAM_EXPAND_FAILURE_WEIGHT_STEP", 0.25)))
+    return _team_auth_runtime_config().team_expand_failure_weight_step
 
 
 def _team_auth_team_expand_floor_weight() -> float:
-    return max(0.05, min(1.0, _env_float("REGISTER_TEAM_AUTH_TEAM_EXPAND_FLOOR_WEIGHT", 0.2)))
+    return _team_auth_runtime_config().team_expand_floor_weight
 
 
 def _team_auth_team_expand_success_credit() -> float:
-    return max(0.0, _env_float("REGISTER_TEAM_AUTH_TEAM_EXPAND_SUCCESS_CREDIT", 0.5))
+    return _team_auth_runtime_config().team_expand_success_credit
 
 
 def _team_auth_total_seat_limit() -> int:
-    return max(1, _env_int("REGISTER_TEAM_TOTAL_SEAT_LIMIT", 9))
+    return _team_auth_runtime_config().total_seat_limit
 
 
 def _team_auth_chatgpt_seat_limit() -> int:
-    return max(0, min(_team_auth_total_seat_limit(), _env_int("REGISTER_TEAM_CHATGPT_SEAT_LIMIT", 4)))
+    return _team_auth_runtime_config().chatgpt_seat_limit
 
 
 def _team_auth_codex_seat_limit() -> int:
-    return max(0, min(_team_auth_total_seat_limit(), _env_int("REGISTER_TEAM_CODEX_SEAT_LIMIT", _team_auth_total_seat_limit())))
+    return _team_auth_runtime_config().codex_seat_limit
 
 
 def _team_auth_reservation_ttl_seconds() -> float:
-    return max(30.0, _env_float("REGISTER_TEAM_AUTH_RESERVATION_TTL_SECONDS", 300.0))
+    return _team_auth_runtime_config().reservation_ttl_seconds
 
 
 def _team_auth_state_lock_timeout_seconds() -> float:
-    return max(1.0, _env_float("REGISTER_TEAM_AUTH_STATE_LOCK_TIMEOUT_SECONDS", 5.0))
+    return _team_auth_runtime_config().state_lock_timeout_seconds
 
 
 def _team_auth_team_member_chatgpt_seat_request() -> int:
-    return max(1, _env_int("REGISTER_TEAM_MEMBER_COUNT", 4))
+    return _team_auth_runtime_config().team_member_count
 
 
 def _team_auth_codex_seat_types() -> set[str]:
-    return {
-        str(item or "").strip().lower()
-        for item in str(_env_text("REGISTER_TEAM_CODEX_SEAT_TYPES", "usage_based,codex")).split(",")
-        if str(item or "").strip()
-    }
+    return set(_team_auth_runtime_config().codex_seat_types)
 
 
 def _normalize_team_auth_seat_type(value: Any) -> str:
@@ -2227,7 +2255,7 @@ def _try_acquire_team_cleanup_lock(*, shared_root: Path) -> bool:
     lock_path = _team_cleanup_lock_path(shared_root=shared_root)
     return try_acquire_lock(
         lock_path,
-        stale_after_seconds=max(0.0, _env_float("REGISTER_TEAM_CLEANUP_LOCK_STALE_SECONDS", 600.0)),
+        stale_after_seconds=_cleanup_runtime_config().team_cleanup_lock_stale_seconds,
     )
 
 
@@ -2239,7 +2267,7 @@ def _try_acquire_mailbox_cleanup_lock(*, shared_root: Path) -> bool:
     lock_path = _mailbox_cleanup_lock_path(shared_root=shared_root)
     return try_acquire_lock(
         lock_path,
-        stale_after_seconds=max(0.0, _env_float("REGISTER_MAILBOX_CLEANUP_LOCK_STALE_SECONDS", 600.0)),
+        stale_after_seconds=_cleanup_runtime_config().mailbox_cleanup_lock_stale_seconds,
     )
 
 
@@ -2264,7 +2292,8 @@ def _mailbox_cleanup_recently_ran(*, shared_root: Path, cooldown_seconds: float)
 
 
 def _trigger_mailbox_capacity_recovery(*, shared_root: Path, detail: str) -> dict[str, Any]:
-    cooldown_seconds = _env_float("REGISTER_MAILBOX_CLEANUP_COOLDOWN_SECONDS", 120.0)
+    cleanup_config = _cleanup_runtime_config()
+    cooldown_seconds = cleanup_config.mailbox_cleanup_cooldown_seconds
     if _mailbox_cleanup_recently_ran(shared_root=shared_root, cooldown_seconds=cooldown_seconds):
         payload = _load_mailbox_cleanup_state(shared_root=shared_root)
         return {
@@ -2294,7 +2323,7 @@ def _trigger_mailbox_capacity_recovery(*, shared_root: Path, detail: str) -> dic
                     "provider_type_key": provider_type_key,
                     "force": True,
                     "stale_after_seconds": 0,
-                    "max_delete_count": _env_int("REGISTER_MAILBOX_CLEANUP_MAX_DELETE_COUNT", 30),
+                    "max_delete_count": cleanup_config.mailbox_cleanup_max_delete_count,
                 },
             )
             ok = bool(result.get("ok")) if isinstance(result, dict) else False
@@ -2343,11 +2372,11 @@ def _mailbox_capacity_failure_detail(*, result_payload: dict[str, Any]) -> str:
 
 
 def _mailbox_domain_blacklist_min_attempts() -> int:
-    return max(1, _env_int("REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS", 20))
+    return _mailbox_runtime_config().blacklist_min_attempts
 
 
 def _mailbox_domain_blacklist_failure_rate() -> float:
-    return _env_percent("REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE", 90.0)
+    return _mailbox_runtime_config().blacklist_failure_rate_percent
 
 
 def _mailbox_provider_from_ref(mailbox_ref: str) -> str:
@@ -2480,7 +2509,7 @@ def _mark_mailbox_capacity_failure(*, shared_root: Path, detail: str) -> dict[st
         }
     )
     _write_mailbox_cleanup_state(shared_root=shared_root, payload=payload)
-    threshold = max(1, _env_int("REGISTER_MAILBOX_CLEANUP_FAILURE_THRESHOLD", 3))
+    threshold = _cleanup_runtime_config().mailbox_cleanup_failure_threshold
     if consecutive < threshold:
         return {
             "ok": False,
@@ -2504,7 +2533,7 @@ def _trigger_codex_capacity_cleanup(*, shared_root: Path, team_auth_pool: list[s
     normalized_pool = [candidate for candidate in team_auth_pool if str(candidate or "").strip()]
     if not normalized_pool:
         return {"ok": False, "status": "cleanup_skipped_empty_pool", "results": []}
-    cooldown_seconds = _env_float("REGISTER_TEAM_CLEANUP_COOLDOWN_SECONDS", 180.0)
+    cooldown_seconds = _cleanup_runtime_config().team_cleanup_cooldown_seconds
     if _team_cleanup_recently_ran(shared_root=shared_root, cooldown_seconds=cooldown_seconds):
         payload = _load_team_cleanup_state(shared_root=shared_root)
         return {
@@ -2754,65 +2783,32 @@ def _should_cleanup_successful_run_output(result: Any) -> bool:
 
 
 def _resolve_small_success_pool_dir(*, output_root: Path) -> Path:
-    explicit = _env_text("REGISTER_SMALL_SUCCESS_POOL_DIR")
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-    return _shared_root_from_output_root(output_root) / "small-success-pool"
+    return _artifact_routing_config(output_root=output_root).small_success_pool_dir
 
 
 def _resolve_small_success_wait_pool_dir(*, output_root: Path) -> Path:
-    explicit = _env_text("REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR")
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-    return _shared_root_from_output_root(output_root) / "others" / "small-success-wait-pool"
+    return _artifact_routing_config(output_root=output_root).small_success_wait_pool_dir
 
 
 def _resolve_small_success_continue_pool_dir(*, output_root: Path) -> Path:
-    explicit = _env_text("REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR")
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-    return _shared_root_from_output_root(output_root) / "others" / "small-success-continue-pool"
+    return _artifact_routing_config(output_root=output_root).small_success_continue_pool_dir
 
 
 def _resolve_free_oauth_pool_dir(*, output_root: Path) -> Path:
-    explicit = _env_text("REGISTER_FREE_OAUTH_POOL_DIR")
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-    return _shared_root_from_output_root(output_root) / "free-oauth-pool"
+    return _artifact_routing_config(output_root=output_root).free_oauth_pool_dir
 
 
 def _resolve_free_manual_oauth_pool_dir(*, output_root: Path) -> Path:
-    explicit = _env_text("REGISTER_FREE_MANUAL_OAUTH_POOL_DIR")
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-    return _shared_root_from_output_root(output_root) / "others" / "free-manual-oauth-pool"
+    return _artifact_routing_config(output_root=output_root).free_manual_oauth_pool_dir
 
 
 def _resolve_free_local_dir(*, output_root: Path) -> Path:
-    explicit = _env_text("REGISTER_FREE_LOCAL_DIR")
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-    return _shared_root_from_output_root(output_root) / "others" / "free-local-store"
+    return _artifact_routing_config(output_root=output_root).free_local_dir
 
 
 def _resolve_team_local_dir(*, output_root: Path) -> Path:
-    explicit = _env_text("REGISTER_TEAM_LOCAL_DIR")
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-    return _shared_root_from_output_root(output_root) / "others" / "team-local-store"
+    return _artifact_routing_config(output_root=output_root).team_local_dir
 
-
-def _env_percent(name: str, default: float = 0.0) -> float:
-    raw = str(os.environ.get(name) or "").strip()
-    if not raw:
-        return max(0.0, min(100.0, float(default)))
-    try:
-        value = float(raw)
-    except Exception:
-        return max(0.0, min(100.0, float(default)))
-    if 0.0 < value <= 1.0:
-        value *= 100.0
-    return max(0.0, min(100.0, value))
 
 def _select_local_split(*, percent: float) -> bool:
     if float(percent or 0.0) <= 0.0:
@@ -2823,22 +2819,22 @@ def _select_local_split(*, percent: float) -> bool:
 
 
 def _small_success_wait_seconds() -> float:
-    return max(0.0, _env_float("REGISTER_SMALL_SUCCESS_WAIT_SECONDS", 600.0))
+    return _artifact_routing_config().small_success_wait_seconds
 
 
 def _small_success_continue_prefill_count() -> int:
-    return max(0, _env_int("REGISTER_SMALL_SUCCESS_CONTINUE_PREFILL_COUNT", 1))
+    return _artifact_routing_config().small_success_continue_prefill_count
 
 
 def _small_success_continue_prefill_target_count() -> int:
-    return max(0, _env_int("REGISTER_SMALL_SUCCESS_CONTINUE_PREFILL_TARGET_COUNT", 2))
+    return _artifact_routing_config().small_success_continue_prefill_target_count
 
 
 def _small_success_continue_prefill_min_age_seconds() -> float:
-    return max(0.0, _env_float("REGISTER_SMALL_SUCCESS_CONTINUE_PREFILL_MIN_AGE_SECONDS", 0.0))
+    return _artifact_routing_config().small_success_continue_prefill_min_age_seconds
 
 def _free_stop_after_validate_mode() -> bool:
-    return _env_bool("REGISTER_FREE_STOP_AFTER_VALIDATE", False)
+    return DstTaskEnvConfig.from_env().free_stop_after_validate
 
 def _iter_small_success_artifacts(*, run_output_dir: Path) -> list[Path]:
     small_success_dir = run_output_dir / "small_success"
@@ -3118,17 +3114,18 @@ def _copy_free_oauth_artifacts_to_pool(
     return copied_paths
 
 def _upload_artifact_to_r2(*, source_path: Path, target_folder: str, object_name: str | None = None) -> dict[str, Any]:
+    config = _artifact_routing_config()
     step_input = {
         "source_path": str(source_path),
-        "bucket": _env_text("REGISTER_R2_BUCKET") or _env_text("R2_BUCKET"),
+        "bucket": config.r2_bucket,
         "target_folder": str(target_folder or "").strip(),
         "object_name": str(object_name or "").strip() or source_path.name,
-        "account_id": _env_text("REGISTER_R2_ACCOUNT_ID") or _env_text("R2_ACCOUNT_ID"),
-        "endpoint_url": _env_text("REGISTER_R2_ENDPOINT_URL") or _env_text("R2_ENDPOINT_URL"),
-        "access_key_id": _env_text("REGISTER_R2_ACCESS_KEY_ID") or _env_text("R2_ACCESS_KEY_ID"),
-        "secret_access_key": _env_text("REGISTER_R2_SECRET_ACCESS_KEY") or _env_text("R2_SECRET_ACCESS_KEY"),
-        "region": _env_text("REGISTER_R2_REGION") or _env_text("R2_REGION"),
-        "public_base_url": _env_text("REGISTER_R2_PUBLIC_BASE_URL") or _env_text("R2_PUBLIC_BASE_URL"),
+        "account_id": config.r2_account_id,
+        "endpoint_url": config.r2_endpoint_url,
+        "access_key_id": config.r2_access_key_id,
+        "secret_access_key": config.r2_secret_access_key,
+        "region": config.r2_region,
+        "public_base_url": config.r2_public_base_url,
         "overwrite": True,
     }
     return dispatch_easyprotocol_step(step_type="upload_file_to_r2", step_input=step_input)
@@ -3249,7 +3246,7 @@ def _postprocess_team_success_artifacts(
     if not artifacts:
         return {"ok": True, "status": "idle", "cleanup_run_output": True, "artifacts": []}
 
-    local_percent = _env_percent("REGISTER_TEAM_LOCAL_SPLIT_PERCENT", 0.0)
+    local_percent = _artifact_routing_config(output_root=output_root).team_local_split_percent
     local_dir = _resolve_team_local_dir(output_root=output_root)
     processed: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
@@ -3301,7 +3298,7 @@ def _sync_team_member_artifacts_from_active_claims(
     *,
     output_root: Path,
 ) -> dict[str, Any]:
-    local_percent = _env_percent("REGISTER_TEAM_LOCAL_SPLIT_PERCENT", 0.0)
+    local_percent = _artifact_routing_config(output_root=output_root).team_local_split_percent
     if local_percent < 100.0:
         return {"ok": True, "status": "disabled", "localized": [], "failures": []}
 
@@ -3517,6 +3514,7 @@ def _payload_looks_like_oauth_credential(payload: dict[str, Any]) -> bool:
 def _team_mother_failure_cooldown_seconds(*, result: Any) -> float:
     payload = _result_payload(result)
     error_step = str(payload.get("errorStep") or "").strip().lower()
+    team_auth_config = _team_auth_runtime_config()
 
     if error_step == "obtain-team-mother-oauth":
         if result_error_matches(
@@ -3529,7 +3527,7 @@ def _team_mother_failure_cooldown_seconds(*, result: Any) -> float:
             ErrorCodes.MAILBOX_UNAVAILABLE,
             step_id="obtain-team-mother-oauth",
         ):
-            return float(max(0, _env_float("REGISTER_TEAM_OAUTH_FAILURE_COOLDOWN_SECONDS", 300.0)))
+            return team_auth_config.oauth_failure_cooldown_seconds
 
     if error_step == "invite-team-members":
         if result_error_matches(
@@ -3538,7 +3536,7 @@ def _team_mother_failure_cooldown_seconds(*, result: Any) -> float:
             ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR,
             step_id="invite-team-members",
         ):
-            return float(max(0, _env_float("REGISTER_TEAM_INVITE_FAILURE_COOLDOWN_SECONDS", 300.0)))
+            return team_auth_config.invite_failure_cooldown_seconds
 
     return 0.0
 
@@ -3679,6 +3677,8 @@ def _cleanup_run_output_dir(*, run_output_dir: Path, worker_label: str, task_ind
 def _extra_failure_cooldown_seconds(*, result: Any) -> float:
     payload = _result_payload(result)
     error_step = str(payload.get("errorStep") or "").strip().lower()
+    cleanup_config = _cleanup_runtime_config()
+    team_auth_config = _team_auth_runtime_config()
 
     if error_step == "create-openai-account":
         create_error = result_step_error(payload, "create-openai-account")
@@ -3698,20 +3698,15 @@ def _extra_failure_cooldown_seconds(*, result: Any) -> float:
                 "eof occurred in violation of protocol",
             )
         ):
-            return float(
-                max(
-                    0,
-                    _env_float("REGISTER_CREATE_ACCOUNT_COOLDOWN_SECONDS", 60.0),
-                )
-            )
+            return cleanup_config.create_account_cooldown_seconds
 
     if error_step == "acquire-mailbox":
         if bool(result_step_error(payload, "acquire-mailbox")):
-            return float(max(0, _env_float("REGISTER_MAILBOX_FAILURE_COOLDOWN_SECONDS", 15.0)))
+            return cleanup_config.mailbox_failure_cooldown_seconds
 
     if error_step == "invite-codex-member":
         if result_error_matches(payload, ErrorCodes.TEAM_SEATS_FULL, step_id="invite-codex-member"):
-            return float(max(0, _env_float("REGISTER_TEAM_CAPACITY_COOLDOWN_SECONDS", 30.0)))
+            return team_auth_config.capacity_cooldown_seconds
 
     return 0.0
 
@@ -3831,18 +3826,20 @@ def _worker_loop(
             )
         backlog_result: dict[str, Any] | None = None
         if normalized_role in {"main", "continue"}:
+            artifact_config = _artifact_routing_config(output_root=output_root)
             backlog_result = _drain_oauth_pool_backlog(
                 pool_dir=free_oauth_pool_dir,
                 target_folder="codex",
-                local_percent=_env_percent("REGISTER_FREE_LOCAL_SPLIT_PERCENT", 100.0),
-                local_dir=_resolve_free_local_dir(output_root=output_root),
+                local_percent=artifact_config.free_local_split_percent,
+                local_dir=artifact_config.free_local_dir,
             )
         elif normalized_role == "team":
+            artifact_config = _artifact_routing_config(output_root=output_root)
             backlog_result = _drain_oauth_pool_backlog(
                 pool_dir=_shared_root_from_output_root(output_root) / "team-oauth-pool",
                 target_folder="codex-team",
-                local_percent=_env_percent("REGISTER_TEAM_LOCAL_SPLIT_PERCENT", 0.0),
-                local_dir=_resolve_team_local_dir(output_root=output_root),
+                local_percent=artifact_config.team_local_split_percent,
+                local_dir=artifact_config.team_local_dir,
             )
         if isinstance(backlog_result, dict) and (
             backlog_result.get("uploaded") or backlog_result.get("failures")
@@ -3860,8 +3857,9 @@ def _worker_loop(
             break
         free_local_selected = False
         if normalized_role in {"main", "continue"}:
+            artifact_config = _artifact_routing_config(output_root=output_root)
             free_local_selected = _select_local_split(
-                percent=_env_percent("REGISTER_FREE_LOCAL_SPLIT_PERCENT", 100.0)
+                percent=artifact_config.free_local_split_percent
             )
         team_auth_pool = _resolve_team_auth_pool(instance_role=normalized_role)
         stale_team_auth_cleanup = _prune_stale_team_auth_caches(
@@ -4133,10 +4131,11 @@ def _worker_loop(
 
             capacity_detail = _team_capacity_failure_detail(result_payload=result_payload)
             if effective_team_auth_path and capacity_detail:
+                team_auth_config = _team_auth_runtime_config(output_root=output_root, shared_root=shared_root)
                 _mark_team_auth_capacity_cooldown(
                     shared_root=shared_root,
                     team_auth_path=effective_team_auth_path,
-                    cooldown_seconds=_env_float("REGISTER_TEAM_CAPACITY_COOLDOWN_SECONDS", 180.0),
+                    cooldown_seconds=team_auth_config.capacity_cooldown_seconds,
                     detail=capacity_detail,
                 )
                 if _all_team_auth_capacity_cooled(shared_root=shared_root, team_auth_pool=team_auth_pool):
@@ -4171,6 +4170,7 @@ def _worker_loop(
 
             blacklist_reason = _team_auth_blacklist_reason(result_payload=result_payload)
             if blacklist_reason:
+                team_auth_config = _team_auth_runtime_config(output_root=output_root, shared_root=shared_root)
                 blacklist_identity = (
                     _team_mother_identity_from_result_payload(result_payload)
                     if normalized_role == "team"
@@ -4181,7 +4181,7 @@ def _worker_loop(
                     team_auth_path=effective_team_auth_path,
                     identity=blacklist_identity,
                     reason=blacklist_reason,
-                    blacklist_seconds=_env_float("REGISTER_TEAM_AUTH_TEMP_BLACKLIST_SECONDS", 3600.0),
+                    blacklist_seconds=team_auth_config.temp_blacklist_seconds,
                     worker_label=worker_label,
                     task_index=task_index,
                 )
@@ -4275,9 +4275,7 @@ def _worker_loop(
                     )
                     extra_cooldown_seconds = 0.0
         except Exception as exc:
-            extra_cooldown_seconds = float(
-                max(0, _env_float("REGISTER_CRASH_COOLDOWN_SECONDS", 20.0))
-            )
+            extra_cooldown_seconds = _cleanup_runtime_config().crash_cooldown_seconds
             _json_log(
                 {
                     "event": "register_run_crashed",
@@ -4420,91 +4418,77 @@ def _task_slots_exhausted(*, task_counter: Any, max_runs: int) -> bool:
 
 
 def main() -> int:
-    output_root = Path(_env_text("REGISTER_OUTPUT_ROOT", "/shared/register-output")).resolve()
+    config = RunnerMainConfig.from_env()
+    output_root = config.output_root
     _ensure_directory(output_root)
-    shared_root = _shared_root_from_output_root(output_root)
-
-    delay_seconds = max(0.0, _env_float("REGISTER_LOOP_DELAY_SECONDS", 5.0))
-    worker_count = max(1, _env_int("REGISTER_WORKER_COUNT", 10))
-    worker_stagger_seconds = max(0.0, _env_float("REGISTER_WORKER_STAGGER_SECONDS", 2.0))
-    max_runs = max(0, _env_int("REGISTER_INFINITE_MAX_RUNS", 0))
-    task_max_attempts = _env_int("REGISTER_TASK_MAX_ATTEMPTS", 0)
-    team_auth_path = _env_text("REGISTER_TEAM_AUTH_PATH")
-    flow_path = _env_text("REGISTER_FLOW_PATH")
-    small_success_pool_dir = _resolve_small_success_pool_dir(output_root=output_root)
-    _ensure_directory(small_success_pool_dir)
-    free_oauth_pool_dir = _resolve_free_oauth_pool_dir(output_root=output_root)
-    _ensure_directory(free_oauth_pool_dir)
-    instance_id = _env_text("REGISTER_INSTANCE_ID", "main") or "main"
-    instance_role = _env_text("REGISTER_INSTANCE_ROLE", instance_id) or instance_id
-    easy_protocol_base_url = _env_text("EASY_PROTOCOL_BASE_URL", "http://easy-protocol-service:9788")
-    easy_protocol_control_token = _env_text("EASY_PROTOCOL_CONTROL_TOKEN", "")
-    easy_protocol_control_actor = _env_text("EASY_PROTOCOL_CONTROL_ACTOR", "register-dashboard")
+    shared_root = config.shared_root
+    _ensure_directory(config.small_success_pool_dir)
+    _ensure_directory(config.free_oauth_pool_dir)
 
     ctx = mp.get_context("spawn")
     stop_event = ctx.Event()
     task_counter = ctx.Value("i", 0)
     processes: dict[int, Any] = {}
     dashboard_server = None
-    _cleanup_dashboard_worker_state_files(shared_root=shared_root, instance_id=instance_id)
+    _cleanup_dashboard_worker_state_files(shared_root=shared_root, instance_id=config.instance_id)
     service_state = ServiceRuntimeState(
         shared_root=shared_root,
-        instance_id=instance_id,
-        instance_role=instance_role,
-        flow_path=flow_path,
+        instance_id=config.instance_id,
+        instance_role=config.instance_role,
+        flow_path=config.flow_path,
         output_root=str(output_root),
-        worker_count=worker_count,
-        delay_seconds=delay_seconds,
-        worker_stagger_seconds=worker_stagger_seconds,
-        small_success_pool_dir=str(small_success_pool_dir),
+        worker_count=config.worker_count,
+        delay_seconds=config.delay_seconds,
+        worker_stagger_seconds=config.worker_stagger_seconds,
+        small_success_pool_dir=str(config.small_success_pool_dir),
     )
 
     _install_signal_handlers(stop_event=stop_event)
-    service_state.started(pid=os.getpid(), max_runs=max_runs)
+    service_state.started(pid=os.getpid(), max_runs=config.max_runs)
     dashboard_server = start_dashboard_server_if_enabled(
         output_root=output_root,
-        easy_protocol_base_url=easy_protocol_base_url,
-        easy_protocol_token=easy_protocol_control_token,
-        easy_protocol_actor=easy_protocol_control_actor,
+        easy_protocol_base_url=config.easy_protocol_base_url,
+        easy_protocol_token=config.easy_protocol_control_token,
+        easy_protocol_actor=config.easy_protocol_control_actor,
     )
     _json_log(
         {
             "event": "register_supervisor_started",
             "pid": os.getpid(),
-            "instanceId": instance_id,
-            "instanceRole": instance_role,
-            "workerCount": worker_count,
-            "delaySeconds": delay_seconds,
-            "workerStaggerSeconds": worker_stagger_seconds,
-            "maxRuns": max_runs,
+            "instanceId": config.instance_id,
+            "instanceRole": config.instance_role,
+            "workerCount": config.worker_count,
+            "delaySeconds": config.delay_seconds,
+            "workerStaggerSeconds": config.worker_stagger_seconds,
+            "maxRuns": config.max_runs,
             "outputRoot": str(output_root),
-            "smallSuccessPoolDir": str(small_success_pool_dir),
-            "freeOauthPoolDir": str(free_oauth_pool_dir),
+            "smallSuccessPoolDir": str(config.small_success_pool_dir),
+            "freeOauthPoolDir": str(config.free_oauth_pool_dir),
         }
     )
 
     try:
-        for worker_id in range(1, worker_count + 1):
+        for worker_id in range(1, config.worker_count + 1):
             if stop_event.is_set():
                 break
             processes[worker_id] = _start_worker(
                 ctx=ctx,
                 worker_id=worker_id,
-                instance_id=instance_id,
-                instance_role=instance_role,
+                instance_id=config.instance_id,
+                instance_role=config.instance_role,
                 output_root_text=str(output_root),
-                delay_seconds=delay_seconds,
-                max_runs=max_runs,
-                task_max_attempts=task_max_attempts,
-                team_auth_path=team_auth_path,
-                flow_path=flow_path,
+                delay_seconds=config.delay_seconds,
+                max_runs=config.max_runs,
+                task_max_attempts=config.task_max_attempts,
+                team_auth_path=config.team_auth_path,
+                flow_path=config.flow_path,
                 stop_event=stop_event,
                 task_counter=task_counter,
-                small_success_pool_dir_text=str(small_success_pool_dir),
-                free_oauth_pool_dir_text=str(free_oauth_pool_dir),
+                small_success_pool_dir_text=str(config.small_success_pool_dir),
+                free_oauth_pool_dir_text=str(config.free_oauth_pool_dir),
             )
-            if worker_stagger_seconds > 0 and worker_id < worker_count:
-                time.sleep(worker_stagger_seconds)
+            if config.worker_stagger_seconds > 0 and worker_id < config.worker_count:
+                time.sleep(config.worker_stagger_seconds)
 
         while processes:
             if stop_event.is_set():
@@ -4524,7 +4508,7 @@ def main() -> int:
                 )
                 if stop_event.is_set():
                     continue
-                if _task_slots_exhausted(task_counter=task_counter, max_runs=max_runs):
+                if _task_slots_exhausted(task_counter=task_counter, max_runs=config.max_runs):
                     continue
                 _json_log(
                     {
@@ -4535,21 +4519,21 @@ def main() -> int:
                 processes[worker_id] = _start_worker(
                     ctx=ctx,
                     worker_id=worker_id,
-                    instance_id=instance_id,
-                    instance_role=instance_role,
+                    instance_id=config.instance_id,
+                    instance_role=config.instance_role,
                     output_root_text=str(output_root),
-                    delay_seconds=delay_seconds,
-                    max_runs=max_runs,
-                    task_max_attempts=task_max_attempts,
-                    team_auth_path=team_auth_path,
-                    flow_path=flow_path,
+                    delay_seconds=config.delay_seconds,
+                    max_runs=config.max_runs,
+                    task_max_attempts=config.task_max_attempts,
+                    team_auth_path=config.team_auth_path,
+                    flow_path=config.flow_path,
                     stop_event=stop_event,
                     task_counter=task_counter,
-                    small_success_pool_dir_text=str(small_success_pool_dir),
-                    free_oauth_pool_dir_text=str(free_oauth_pool_dir),
+                    small_success_pool_dir_text=str(config.small_success_pool_dir),
+                    free_oauth_pool_dir_text=str(config.free_oauth_pool_dir),
                 )
-                if worker_stagger_seconds > 0:
-                    time.sleep(worker_stagger_seconds)
+                if config.worker_stagger_seconds > 0:
+                    time.sleep(config.worker_stagger_seconds)
             if processes:
                 time.sleep(1.0)
     finally:
@@ -4569,7 +4553,7 @@ def main() -> int:
             {
                 "event": "register_supervisor_stopped",
                 "pid": os.getpid(),
-                "instanceId": instance_id,
+                "instanceId": config.instance_id,
                 "taskCount": int(task_counter.value or 0),
             }
         )
