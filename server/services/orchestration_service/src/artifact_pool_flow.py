@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import os
 import time
 import uuid
@@ -21,6 +20,7 @@ from others.common import (
     team_mother_cooldown_key as _team_mother_cooldown_key,
     validate_small_success_seed_payload as _validate_small_success_seed_payload,
 )
+from others.artifact_transfer import copy_delete_artifact_to_dir as _move_artifact_file
 from others.paths import (
     resolve_free_manual_oauth_pool_dir,
     resolve_shared_root,
@@ -948,30 +948,6 @@ def _claim_team_member_candidates(*, step_input: dict[str, Any]) -> dict[str, An
         "member_emails": [str(item.get("email") or "").strip() for item in claimed_members],
         "mother_progress": mother_progress,
     }
-
-
-def _move_artifact_file(
-    *,
-    source_path: Path,
-    destination_dir: Path,
-    preferred_name: str | None = None,
-    overwrite_existing: bool = False,
-    payload_override: dict[str, Any] | None = None,
-) -> str:
-    _ensure_directory(destination_dir)
-    destination = destination_dir / (str(preferred_name or "").strip() or source_path.name)
-    if destination.exists() and not overwrite_existing:
-        destination = destination_dir / f"{destination.stem}-{uuid.uuid4().hex[:6]}{destination.suffix}"
-    elif destination.exists():
-        destination.unlink(missing_ok=True)
-    if payload_override is not None:
-        destination.write_text(json.dumps(payload_override, ensure_ascii=False, indent=2), encoding="utf-8")
-        source_path.unlink(missing_ok=True)
-        return str(destination)
-    shutil.copy2(source_path, destination)
-    source_path.unlink(missing_ok=True)
-    return str(destination)
-
 
 def _mother_team_pool_name(source_path: Path, mother_artifact: dict[str, Any] | None = None) -> str:
     payload: dict[str, Any] = {}

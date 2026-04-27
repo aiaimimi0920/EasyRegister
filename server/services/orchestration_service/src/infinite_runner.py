@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import hashlib
 import json
 import multiprocessing as mp
@@ -38,6 +37,10 @@ if __package__ in (None, ""):
         team_mother_cooldown_key as _team_mother_cooldown_key,
         validate_small_success_seed_payload as _validate_small_success_seed_payload,
         write_json_atomic as _write_json_atomic,
+    )
+    from others.artifact_transfer import (
+        copy_artifact_to_dir as _copy_artifact_to_dir,
+        move_artifact_to_dir as _move_artifact_to_dir,
     )
     from others.file_lock import release_lock, try_acquire_lock
     from others.paths import (
@@ -78,6 +81,10 @@ else:
         team_mother_cooldown_key as _team_mother_cooldown_key,
         validate_small_success_seed_payload as _validate_small_success_seed_payload,
         write_json_atomic as _write_json_atomic,
+    )
+    from .others.artifact_transfer import (
+        copy_artifact_to_dir as _copy_artifact_to_dir,
+        move_artifact_to_dir as _move_artifact_to_dir,
     )
     from .others.file_lock import release_lock, try_acquire_lock
     from .others.paths import (
@@ -3148,56 +3155,6 @@ def _copy_free_oauth_artifacts_to_pool(
         }
     )
     return copied_paths
-
-
-def _build_unique_destination(*, destination_dir: Path, preferred_name: str) -> Path:
-    destination = destination_dir / preferred_name
-    if destination.exists():
-        destination = destination_dir / f"{destination.stem}-{uuid.uuid4().hex[:6]}{destination.suffix}"
-    return destination
-
-
-def _copy_artifact_to_dir(
-    *,
-    source_path: Path,
-    destination_dir: Path,
-    preferred_name: str | None = None,
-    overwrite_existing: bool = False,
-) -> str:
-    _ensure_directory(destination_dir)
-    target_name = str(preferred_name or "").strip() or source_path.name
-    if overwrite_existing:
-        destination = destination_dir / target_name
-        destination.unlink(missing_ok=True)
-    else:
-        destination = _build_unique_destination(destination_dir=destination_dir, preferred_name=target_name)
-    shutil.copy2(source_path, destination)
-    return str(destination)
-
-
-def _move_artifact_to_dir(
-    *,
-    source_path: Path,
-    destination_dir: Path,
-    preferred_name: str | None = None,
-    overwrite_existing: bool = False,
-) -> str:
-    _ensure_directory(destination_dir)
-    target_name = str(preferred_name or "").strip() or source_path.name
-    if overwrite_existing:
-        destination = destination_dir / target_name
-        destination.unlink(missing_ok=True)
-    else:
-        destination = _build_unique_destination(destination_dir=destination_dir, preferred_name=target_name)
-    try:
-        source_path.replace(destination)
-    except OSError as exc:
-        if exc.errno != errno.EXDEV and "Invalid cross-device link" not in str(exc):
-            raise
-        shutil.copy2(source_path, destination)
-        source_path.unlink(missing_ok=True)
-    return str(destination)
-
 
 def _upload_artifact_to_r2(*, source_path: Path, target_folder: str, object_name: str | None = None) -> dict[str, Any]:
     step_input = {
