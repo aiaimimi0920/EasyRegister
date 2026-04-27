@@ -57,10 +57,12 @@ if __package__ in (None, ""):
         team_mother_identity as _team_mother_identity_from_result_payload,
     )
     from others.prepared_artifacts import (
+        merge_route_result,
         prepare_artifact_for_folder as _prepare_artifact_for_folder,
         prepare_free_artifact,
         prepare_team_artifact,
         route_prepared_artifact,
+        summarize_route_collections,
     )
     from others.storage import load_json_payload
 else:
@@ -102,10 +104,12 @@ else:
         team_mother_identity as _team_mother_identity_from_result_payload,
     )
     from .others.prepared_artifacts import (
+        merge_route_result,
         prepare_artifact_for_folder as _prepare_artifact_for_folder,
         prepare_free_artifact,
         prepare_team_artifact,
         route_prepared_artifact,
+        summarize_route_collections,
     )
     from .others.storage import load_json_payload
 
@@ -3313,13 +3317,7 @@ def _postprocess_team_success_artifacts(
                 target_folder="codex-team",
                 upload_fn=_upload_artifact_to_r2,
             )
-            processed.append(
-                {
-                    **artifact,
-                    "route": "local",
-                    "stored_path": str(route_result.get("stored_path") or ""),
-                }
-            )
+            processed.append(merge_route_result(artifact, route_result))
             continue
         route_result = route_prepared_artifact(
             prepared_artifact,
@@ -3330,30 +3328,18 @@ def _postprocess_team_success_artifacts(
             upload_fn=_upload_artifact_to_r2,
         )
         if bool(route_result.get("ok")):
-            processed.append(
-                {
-                    **artifact,
-                    "route": "uploaded",
-                    "object_key": str(route_result.get("object_key") or ""),
-                }
-            )
+            processed.append(merge_route_result(artifact, route_result))
             continue
-        failures.append(
-            {
-                **artifact,
-                "route": "upload_failed",
-                "detail": str(route_result.get("detail") or "upload_failed"),
-            }
-        )
+        failures.append(merge_route_result(artifact, route_result))
 
-    return {
-        "ok": not failures,
-        "status": "processed" if processed and not failures else "partial_failure" if processed else "failed",
-        "cleanup_run_output": True,
-        "artifacts": processed,
-        "failures": failures,
-        "local_dir": str(local_dir),
-    }
+    return summarize_route_collections(
+        failures=failures,
+        artifacts=processed,
+        extra={
+            "cleanup_run_output": True,
+            "local_dir": str(local_dir),
+        },
+    )
 
 
 def _sync_team_member_artifacts_from_active_claims(
@@ -3407,12 +3393,17 @@ def _sync_team_member_artifacts_from_active_claims(
                     upload_fn=_upload_artifact_to_r2,
                 )
                 localized.append(
-                    {
-                        "claim_path": str(claim_path),
-                        "source_path": str(success_path),
-                        "stored_path": str(route_result.get("stored_path") or ""),
-                        "email": str(artifact.get("email") or "").strip(),
-                    }
+                    merge_route_result(
+                        {
+                            "claim_path": str(claim_path),
+                            "source_path": str(success_path),
+                            "email": str(artifact.get("email") or "").strip(),
+                        },
+                        route_result,
+                        include_route=False,
+                        include_object_key=False,
+                        include_detail=False,
+                    )
                 )
             except Exception as exc:
                 failures.append(
@@ -3424,21 +3415,11 @@ def _sync_team_member_artifacts_from_active_claims(
                     }
                 )
 
-    return {
-        "ok": not failures,
-        "status": (
-            "processed"
-            if localized and not failures
-            else "partial_failure"
-            if localized
-            else "failed"
-            if failures
-            else "idle"
-        ),
-        "localized": localized,
-        "failures": failures,
-        "local_dir": str(local_dir),
-    }
+    return summarize_route_collections(
+        failures=failures,
+        localized=localized,
+        extra={"local_dir": str(local_dir)},
+    )
 
 
 def _team_live_local_sync_loop(
@@ -3508,10 +3489,13 @@ def _drain_oauth_pool_backlog(
                     upload_fn=_upload_artifact_to_r2,
                 )
                 localized.append(
-                    {
-                        "path": str(source_path),
-                        "stored_path": str(route_result.get("stored_path") or ""),
-                    }
+                    merge_route_result(
+                        {"path": str(source_path)},
+                        route_result,
+                        include_route=False,
+                        include_object_key=False,
+                        include_detail=False,
+                    )
                 )
                 continue
             except Exception as exc:
@@ -3532,33 +3516,29 @@ def _drain_oauth_pool_backlog(
         )
         if bool(route_result.get("ok")):
             uploaded.append(
-                {
-                    "path": str(source_path),
-                    "object_key": str(route_result.get("object_key") or ""),
-                }
+                merge_route_result(
+                    {"path": str(source_path)},
+                    route_result,
+                    include_route=False,
+                    include_stored_path=False,
+                    include_detail=False,
+                )
             )
             continue
         failures.append(
-            {
-                "path": str(source_path),
-                "detail": str(route_result.get("detail") or "upload_failed"),
-            }
+            merge_route_result(
+                {"path": str(source_path)},
+                route_result,
+                include_route=False,
+                include_stored_path=False,
+                include_object_key=False,
+            )
         )
-    return {
-        "ok": not failures,
-        "status": (
-            "processed"
-            if (uploaded or localized) and not failures
-            else "partial_failure"
-            if (uploaded or localized)
-            else "failed"
-            if failures
-            else "idle"
-        ),
-        "uploaded": uploaded,
-        "localized": localized,
-        "failures": failures,
-    }
+    return summarize_route_collections(
+        failures=failures,
+        uploaded=uploaded,
+        localized=localized,
+    )
 
 
 def _load_json_dict(path: Path) -> dict[str, Any]:

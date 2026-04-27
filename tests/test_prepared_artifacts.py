@@ -16,6 +16,7 @@ from others.prepared_artifacts import (  # noqa: E402
     copy_delete_prepared_artifact_to_dir,
     copy_prepared_artifact_to_dir,
     delete_artifact_quiet,
+    merge_route_result,
     move_prepared_artifact_to_dir,
     prepare_artifact_for_folder,
     prepare_free_artifact,
@@ -24,6 +25,7 @@ from others.prepared_artifacts import (  # noqa: E402
     route_prepared_artifact,
     stage_prepared_artifact_for_upload,
     store_local_prepared_artifact,
+    summarize_route_collections,
     write_prepared_artifact,
 )
 
@@ -383,6 +385,76 @@ class PreparedArtifactsTests(unittest.TestCase):
             self.assertEqual("upload_failed", result["route"])
             self.assertEqual("upload_failed", result["detail"])
             self.assertTrue(Path(str(result["staged_path"])).exists())
+
+    def test_merge_route_result_can_skip_route_field(self) -> None:
+        merged = merge_route_result(
+            {"path": "artifact.json"},
+            {
+                "route": "local",
+                "stored_path": "stored.json",
+                "detail": "ignored",
+            },
+            include_route=False,
+            include_object_key=False,
+            include_detail=False,
+        )
+        self.assertEqual(
+            {
+                "path": "artifact.json",
+                "stored_path": "stored.json",
+            },
+            merged,
+        )
+
+    def test_summarize_route_collections_handles_processed_partial_failed_and_idle(self) -> None:
+        self.assertEqual(
+            {
+                "ok": True,
+                "status": "processed",
+                "artifacts": [{"id": 1}],
+                "failures": [],
+            },
+            summarize_route_collections(
+                failures=[],
+                artifacts=[{"id": 1}],
+            ),
+        )
+        self.assertEqual(
+            {
+                "ok": False,
+                "status": "partial_failure",
+                "artifacts": [{"id": 1}],
+                "failures": [{"id": 2}],
+            },
+            summarize_route_collections(
+                failures=[{"id": 2}],
+                artifacts=[{"id": 1}],
+            ),
+        )
+        self.assertEqual(
+            {
+                "ok": False,
+                "status": "failed",
+                "artifacts": [],
+                "failures": [{"id": 2}],
+            },
+            summarize_route_collections(
+                failures=[{"id": 2}],
+                artifacts=[],
+            ),
+        )
+        self.assertEqual(
+            {
+                "ok": True,
+                "status": "idle",
+                "artifacts": [],
+                "failures": [],
+            },
+            summarize_route_collections(
+                failures=[],
+                artifacts=[],
+            ),
+        )
 
 
 if __name__ == "__main__":

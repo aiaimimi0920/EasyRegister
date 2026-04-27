@@ -230,3 +230,63 @@ def route_prepared_artifact(
         "detail": str(upload_result.get("detail") or upload_result.get("status") or "upload_failed"),
         "staged_path": str(staged_path),
     }
+
+
+def merge_route_result(
+    base: dict[str, Any],
+    route_result: dict[str, Any],
+    *,
+    include_route: bool = True,
+    include_stored_path: bool = True,
+    include_object_key: bool = True,
+    include_detail: bool = True,
+    include_staged_path: bool = False,
+) -> dict[str, Any]:
+    merged = dict(base)
+    route = str(route_result.get("route") or "").strip()
+    if include_route and route:
+        merged["route"] = route
+    field_flags = {
+        "stored_path": include_stored_path,
+        "object_key": include_object_key,
+        "detail": include_detail,
+        "staged_path": include_staged_path,
+    }
+    for field_name, enabled in field_flags.items():
+        if not enabled:
+            continue
+        value = str(route_result.get(field_name) or "").strip()
+        if value:
+            merged[field_name] = value
+    return merged
+
+
+def summarize_route_collections(
+    *,
+    failures: list[dict[str, Any]],
+    idle_status: str = "idle",
+    processed_status: str = "processed",
+    partial_status: str = "partial_failure",
+    failed_status: str = "failed",
+    extra: dict[str, Any] | None = None,
+    **collections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    has_success = any(bool(items) for items in collections.values())
+    if has_success and not failures:
+        status = processed_status
+    elif has_success:
+        status = partial_status
+    elif failures:
+        status = failed_status
+    else:
+        status = idle_status
+
+    payload: dict[str, Any] = {
+        "ok": not failures,
+        "status": status,
+        **collections,
+        "failures": failures,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
