@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .artifact_transfer import (
     copy_artifact_to_dir,
@@ -176,3 +176,57 @@ def delete_artifact_quiet(path: Path) -> None:
         Path(path).unlink(missing_ok=True)
     except Exception:
         pass
+
+
+def route_prepared_artifact(
+    prepared: PreparedArtifact,
+    *,
+    local_dir: Path | None,
+    move_local: bool,
+    overwrite_existing: bool,
+    target_folder: str,
+    upload_fn: Callable[..., dict[str, Any]],
+    staging_dir: Path | None = None,
+) -> dict[str, Any]:
+    if local_dir is not None:
+        stored_path = store_local_prepared_artifact(
+            prepared,
+            destination_dir=local_dir,
+            overwrite_existing=overwrite_existing,
+            move=move_local,
+        )
+        return {
+            "ok": True,
+            "route": "local",
+            "stored_path": stored_path,
+        }
+
+    staged_path = stage_prepared_artifact_for_upload(
+        prepared,
+        staging_dir=staging_dir,
+        overwrite_existing=overwrite_existing,
+    )
+    try:
+        upload_result = upload_fn(
+            source_path=staged_path,
+            target_folder=target_folder,
+            object_name=prepared.preferred_name,
+        )
+        upload_ok = bool(upload_result.get("ok"))
+    except Exception as exc:
+        upload_result = {"ok": False, "detail": str(exc)}
+        upload_ok = False
+    if upload_ok:
+        delete_artifact_quiet(staged_path)
+        return {
+            "ok": True,
+            "route": "uploaded",
+            "object_key": str(upload_result.get("object_key") or ""),
+            "staged_path": str(staged_path),
+        }
+    return {
+        "ok": False,
+        "route": "upload_failed",
+        "detail": str(upload_result.get("detail") or upload_result.get("status") or "upload_failed"),
+        "staged_path": str(staged_path),
+    }

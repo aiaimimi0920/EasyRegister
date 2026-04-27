@@ -21,6 +21,7 @@ from others.prepared_artifacts import (  # noqa: E402
     prepare_free_artifact,
     prepare_named_artifact,
     prepare_team_artifact,
+    route_prepared_artifact,
     stage_prepared_artifact_for_upload,
     store_local_prepared_artifact,
     write_prepared_artifact,
@@ -308,6 +309,80 @@ class PreparedArtifactsTests(unittest.TestCase):
             delete_artifact_quiet(target)
 
             self.assertFalse(target.exists())
+
+    def test_route_prepared_artifact_local_mode_returns_stored_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            source = root / "local.json"
+            source.write_text(json.dumps({"email": "local@example.com"}), encoding="utf-8")
+
+            result = route_prepared_artifact(
+                prepare_named_artifact(source_path=source, preferred_name="stored.json"),
+                local_dir=root / "dest",
+                move_local=False,
+                overwrite_existing=True,
+                target_folder="codex",
+                upload_fn=lambda **_: {"ok": True},
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual("local", result["route"])
+            self.assertEqual("stored.json", Path(result["stored_path"]).name)
+            self.assertTrue(source.exists())
+
+    def test_route_prepared_artifact_upload_success_deletes_staged_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            source = root / "upload.json"
+            source.write_text(json.dumps({"email": "upload@example.com"}), encoding="utf-8")
+
+            captured: dict[str, object] = {}
+
+            def _upload_fn(*, source_path: Path, target_folder: str, object_name: str) -> dict[str, object]:
+                captured["source_path"] = source_path
+                captured["target_folder"] = target_folder
+                captured["object_name"] = object_name
+                self.assertTrue(source_path.exists())
+                return {"ok": True, "object_key": f"{target_folder}/{object_name}"}
+
+            result = route_prepared_artifact(
+                prepare_named_artifact(source_path=source, preferred_name="uploaded.json"),
+                local_dir=None,
+                move_local=False,
+                overwrite_existing=True,
+                target_folder="codex",
+                upload_fn=_upload_fn,
+                staging_dir=root / "pool",
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual("uploaded", result["route"])
+            self.assertEqual("codex/uploaded.json", result["object_key"])
+            staged_path = Path(str(result["staged_path"]))
+            self.assertFalse(staged_path.exists())
+            self.assertEqual("codex", captured["target_folder"])
+            self.assertEqual("uploaded.json", captured["object_name"])
+
+    def test_route_prepared_artifact_upload_failure_keeps_staged_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            source = root / "upload-fail.json"
+            source.write_text(json.dumps({"email": "fail@example.com"}), encoding="utf-8")
+
+            result = route_prepared_artifact(
+                prepare_named_artifact(source_path=source, preferred_name="failed.json"),
+                local_dir=None,
+                move_local=False,
+                overwrite_existing=True,
+                target_folder="codex",
+                upload_fn=lambda **_: {"ok": False, "detail": "upload_failed"},
+                staging_dir=root / "pool",
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual("upload_failed", result["route"])
+            self.assertEqual("upload_failed", result["detail"])
+            self.assertTrue(Path(str(result["staged_path"])).exists())
 
 
 if __name__ == "__main__":

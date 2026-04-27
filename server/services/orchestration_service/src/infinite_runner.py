@@ -57,12 +57,10 @@ if __package__ in (None, ""):
         team_mother_identity as _team_mother_identity_from_result_payload,
     )
     from others.prepared_artifacts import (
-        delete_artifact_quiet,
         prepare_artifact_for_folder as _prepare_artifact_for_folder,
         prepare_free_artifact,
         prepare_team_artifact,
-        stage_prepared_artifact_for_upload,
-        store_local_prepared_artifact,
+        route_prepared_artifact,
     )
     from others.storage import load_json_payload
 else:
@@ -104,12 +102,10 @@ else:
         team_mother_identity as _team_mother_identity_from_result_payload,
     )
     from .others.prepared_artifacts import (
-        delete_artifact_quiet,
         prepare_artifact_for_folder as _prepare_artifact_for_folder,
         prepare_free_artifact,
         prepare_team_artifact,
-        stage_prepared_artifact_for_upload,
-        store_local_prepared_artifact,
+        route_prepared_artifact,
     )
     from .others.storage import load_json_payload
 
@@ -3238,16 +3234,19 @@ def _postprocess_free_success_artifact(
 
     if free_local_selected:
         target_dir = _resolve_free_local_dir(output_root=output_root)
-        stored_path = store_local_prepared_artifact(
+        route_result = route_prepared_artifact(
             prepared_artifact,
-            destination_dir=target_dir,
+            local_dir=target_dir,
+            move_local=False,
             overwrite_existing=True,
+            target_folder="codex",
+            upload_fn=_upload_artifact_to_r2,
         )
         return {
             "ok": True,
             "status": "stored_local",
             "cleanup_run_output": True,
-            "stored_path": stored_path,
+            "stored_path": str(route_result.get("stored_path") or ""),
             "target_dir": str(target_dir),
         }
 
@@ -3255,34 +3254,30 @@ def _postprocess_free_success_artifact(
         return {"ok": False, "status": "free_upload_not_confirmed", "cleanup_run_output": False}
 
     pool_dir = _resolve_free_oauth_pool_dir(output_root=output_root)
-    pooled_path = str(
-        stage_prepared_artifact_for_upload(
-            prepared_artifact,
-            staging_dir=pool_dir,
-            overwrite_existing=True,
-        )
-    )
-    upload_result = _upload_artifact_to_r2(
-        source_path=Path(pooled_path),
+    route_result = route_prepared_artifact(
+        prepared_artifact,
+        local_dir=None,
+        move_local=False,
+        overwrite_existing=True,
         target_folder="codex",
-        object_name=prepared_artifact.preferred_name,
+        upload_fn=_upload_artifact_to_r2,
+        staging_dir=pool_dir,
     )
-    if not bool(upload_result.get("ok")):
+    if not bool(route_result.get("ok")):
         return {
             "ok": False,
             "status": "free_upload_failed",
             "cleanup_run_output": False,
-            "detail": str(upload_result.get("detail") or upload_result.get("status") or "upload_failed"),
-            "transient_path": pooled_path,
+            "detail": str(route_result.get("detail") or "upload_failed"),
+            "transient_path": str(route_result.get("staged_path") or ""),
         }
 
-    delete_artifact_quiet(Path(pooled_path))
     return {
         "ok": True,
         "status": "uploaded_deleted",
         "cleanup_run_output": True,
         "pool_dir": str(pool_dir),
-        "transient_path": pooled_path,
+        "transient_path": str(route_result.get("staged_path") or ""),
     }
 
 
@@ -3310,38 +3305,36 @@ def _postprocess_team_success_artifacts(
         overwrite_existing = True
         route_local = _select_local_split(percent=local_percent)
         if route_local:
-            stored_path = store_local_prepared_artifact(
+            route_result = route_prepared_artifact(
                 prepared_artifact,
-                destination_dir=local_dir,
+                local_dir=local_dir,
+                move_local=True,
                 overwrite_existing=overwrite_existing,
-                move=True,
+                target_folder="codex-team",
+                upload_fn=_upload_artifact_to_r2,
             )
             processed.append(
                 {
                     **artifact,
                     "route": "local",
-                    "stored_path": stored_path,
+                    "stored_path": str(route_result.get("stored_path") or ""),
                 }
             )
             continue
-        staged_path = stage_prepared_artifact_for_upload(prepared_artifact)
-        try:
-            upload_result = _upload_artifact_to_r2(
-                source_path=staged_path,
-                target_folder="codex-team",
-                object_name=prepared_artifact.preferred_name,
-            )
-            upload_ok = bool(upload_result.get("ok"))
-        except Exception as exc:
-            upload_result = {"ok": False, "detail": str(exc)}
-            upload_ok = False
-        if upload_ok:
-            delete_artifact_quiet(staged_path)
+        route_result = route_prepared_artifact(
+            prepared_artifact,
+            local_dir=None,
+            move_local=True,
+            overwrite_existing=overwrite_existing,
+            target_folder="codex-team",
+            upload_fn=_upload_artifact_to_r2,
+        )
+        if bool(route_result.get("ok")):
             processed.append(
                 {
                     **artifact,
                     "route": "uploaded",
-                    "object_key": str(upload_result.get("object_key") or ""),
+                    "object_key": str(route_result.get("object_key") or ""),
                 }
             )
             continue
@@ -3349,7 +3342,7 @@ def _postprocess_team_success_artifacts(
             {
                 **artifact,
                 "route": "upload_failed",
-                "detail": str(upload_result.get("detail") or upload_result.get("status") or "upload_failed"),
+                "detail": str(route_result.get("detail") or "upload_failed"),
             }
         )
 
@@ -3405,16 +3398,19 @@ def _sync_team_member_artifacts_from_active_claims(
                 continue
             try:
                 prepared_artifact = prepare_team_artifact(source_path=success_path, is_mother=False)
-                stored_path = store_local_prepared_artifact(
+                route_result = route_prepared_artifact(
                     prepared_artifact,
-                    destination_dir=local_dir,
+                    local_dir=local_dir,
+                    move_local=False,
                     overwrite_existing=True,
+                    target_folder="codex-team",
+                    upload_fn=_upload_artifact_to_r2,
                 )
                 localized.append(
                     {
                         "claim_path": str(claim_path),
                         "source_path": str(success_path),
-                        "stored_path": str(stored_path),
+                        "stored_path": str(route_result.get("stored_path") or ""),
                         "email": str(artifact.get("email") or "").strip(),
                     }
                 )
@@ -3501,19 +3497,20 @@ def _drain_oauth_pool_backlog(
             is_mother=is_mother,
         )
         overwrite_existing = True
-        staged_path = stage_prepared_artifact_for_upload(prepared_artifact)
         if local_dir is not None and _select_local_split(percent=local_percent):
             try:
-                stored_path = store_local_prepared_artifact(
+                route_result = route_prepared_artifact(
                     prepared_artifact,
-                    destination_dir=local_dir,
+                    local_dir=local_dir,
+                    move_local=True,
                     overwrite_existing=overwrite_existing,
-                    move=True,
+                    target_folder=target_folder,
+                    upload_fn=_upload_artifact_to_r2,
                 )
                 localized.append(
                     {
                         "path": str(source_path),
-                        "stored_path": stored_path,
+                        "stored_path": str(route_result.get("stored_path") or ""),
                     }
                 )
                 continue
@@ -3525,29 +3522,26 @@ def _drain_oauth_pool_backlog(
                     }
                 )
                 continue
-        try:
-            upload_result = _upload_artifact_to_r2(
-                source_path=staged_path,
-                target_folder=target_folder,
-                object_name=prepared_artifact.preferred_name,
-            )
-            upload_ok = bool(upload_result.get("ok"))
-        except Exception as exc:
-            upload_result = {"ok": False, "detail": str(exc)}
-            upload_ok = False
-        if upload_ok:
-            delete_artifact_quiet(staged_path)
+        route_result = route_prepared_artifact(
+            prepared_artifact,
+            local_dir=None,
+            move_local=True,
+            overwrite_existing=overwrite_existing,
+            target_folder=target_folder,
+            upload_fn=_upload_artifact_to_r2,
+        )
+        if bool(route_result.get("ok")):
             uploaded.append(
                 {
                     "path": str(source_path),
-                    "object_key": str(upload_result.get("object_key") or ""),
+                    "object_key": str(route_result.get("object_key") or ""),
                 }
             )
             continue
         failures.append(
             {
                 "path": str(source_path),
-                "detail": str(upload_result.get("detail") or upload_result.get("status") or "upload_failed"),
+                "detail": str(route_result.get("detail") or "upload_failed"),
             }
         )
     return {
