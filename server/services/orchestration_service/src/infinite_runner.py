@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import errno
-import base64
 import hashlib
 import json
 import multiprocessing as mp
@@ -25,8 +24,23 @@ if __package__ in (None, ""):
     from dst_flow import run_dst_flow_once
     from easyemail_flow import dispatch_easyemail_step
     from easyprotocol_flow import dispatch_easyprotocol_step
+    from others.common import (
+        decode_jwt_payload as _decode_jwt_payload,
+        ensure_directory as _ensure_directory,
+        extract_auth_claims as _extract_artifact_auth_claims,
+        extract_email as _extract_artifact_email,
+        extract_org_id as _extract_artifact_org_id,
+        free_manual_oauth_preserve_codes as _free_manual_oauth_preserve_codes,
+        free_manual_oauth_preserve_enabled as _free_manual_oauth_preserve_enabled,
+        sanitize_filename_component as _sanitize_filename_component,
+        short_account_id_segment as _short_account_id_segment,
+        standardize_export_credential_payload as _standardize_export_credential_payload,
+        team_mother_cooldown_key as _team_mother_cooldown_key,
+        validate_small_success_seed_payload as _validate_small_success_seed_payload,
+    )
     from others.file_lock import release_lock, try_acquire_lock
     from others.paths import (
+        resolve_shared_root as _shared_root_from_output_root,
         resolve_team_mother_claims_dir,
         resolve_team_mother_cooldowns_dir,
         resolve_team_mother_pool_dir,
@@ -37,8 +51,23 @@ else:
     from .dst_flow import run_dst_flow_once
     from .easyemail_flow import dispatch_easyemail_step
     from .easyprotocol_flow import dispatch_easyprotocol_step
+    from .others.common import (
+        decode_jwt_payload as _decode_jwt_payload,
+        ensure_directory as _ensure_directory,
+        extract_auth_claims as _extract_artifact_auth_claims,
+        extract_email as _extract_artifact_email,
+        extract_org_id as _extract_artifact_org_id,
+        free_manual_oauth_preserve_codes as _free_manual_oauth_preserve_codes,
+        free_manual_oauth_preserve_enabled as _free_manual_oauth_preserve_enabled,
+        sanitize_filename_component as _sanitize_filename_component,
+        short_account_id_segment as _short_account_id_segment,
+        standardize_export_credential_payload as _standardize_export_credential_payload,
+        team_mother_cooldown_key as _team_mother_cooldown_key,
+        validate_small_success_seed_payload as _validate_small_success_seed_payload,
+    )
     from .others.file_lock import release_lock, try_acquire_lock
     from .others.paths import (
+        resolve_shared_root as _shared_root_from_output_root,
         resolve_team_mother_claims_dir,
         resolve_team_mother_cooldowns_dir,
         resolve_team_mother_pool_dir,
@@ -82,25 +111,6 @@ def _sort_file_paths_newest_first(paths: list[Path]) -> list[Path]:
         return (-modified_at, path.name.lower())
 
     return sorted(paths, key=_sort_key)
-
-
-def _ensure_directory(path: Path) -> None:
-    target = Path(path)
-    for _ in range(5):
-        try:
-            os.makedirs(target, exist_ok=True)
-            if target.is_dir():
-                return
-        except FileExistsError:
-            if target.is_dir():
-                return
-            raise
-        except FileNotFoundError:
-            time.sleep(0.02)
-            continue
-        time.sleep(0.02)
-    os.makedirs(target, exist_ok=True)
-
 
 def _team_auth_path_is_explicit_mother(path: Path) -> bool:
     return str(path.name or "").strip().lower().startswith("codex-team-mother-")
@@ -2717,18 +2727,6 @@ def _build_run_output_dir(*, worker_output_root: Path, task_index: int) -> Path:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return worker_output_root / f"run-{timestamp}-task{task_index:06d}"
 
-
-def _shared_root_from_output_root(output_root: Path) -> Path:
-    resolved = output_root.resolve()
-    if resolved.name.lower().endswith("-runs"):
-        if resolved.parent.name.lower() == "others":
-            return resolved.parent.parent
-        return resolved.parent
-    if resolved.name.lower() == "others":
-        return resolved.parent
-    return resolved
-
-
 def _cleanup_dashboard_worker_state_files(*, shared_root: Path, instance_id: str) -> None:
     workers_dir = shared_root / "others" / "dashboard-state" / str(instance_id or "default").strip() / "workers"
     if not workers_dir.is_dir():
@@ -2848,94 +2846,8 @@ def _small_success_continue_prefill_target_count() -> int:
 def _small_success_continue_prefill_min_age_seconds() -> float:
     return max(0.0, _env_float("REGISTER_SMALL_SUCCESS_CONTINUE_PREFILL_MIN_AGE_SECONDS", 0.0))
 
-
-def _free_manual_oauth_preserve_enabled() -> bool:
-    return _env_text("REGISTER_FREE_MANUAL_OAUTH_PRESERVE_ENABLED", "").lower() in {"1", "true", "yes", "on"}
-
-
 def _free_stop_after_validate_mode() -> bool:
     return _env_bool("REGISTER_FREE_STOP_AFTER_VALIDATE", False)
-
-
-def _free_manual_oauth_preserve_codes() -> set[str]:
-    raw = _env_text(
-        "REGISTER_FREE_MANUAL_OAUTH_PRESERVE_ERROR_CODES",
-        "free_personal_workspace_missing,obtain_codex_oauth_failed",
-    )
-    if not raw:
-        return set()
-    return {item.strip() for item in raw.split(",") if item.strip()}
-
-
-def _validate_small_success_seed_payload(payload: dict[str, Any]) -> tuple[bool, str]:
-    if not isinstance(payload, dict):
-        return False, "payload_not_object"
-    platform_org = payload.get("platformOrganization")
-    if not isinstance(platform_org, dict):
-        return False, "missing_platform_organization"
-    if str(platform_org.get("status") or "").strip().lower() != "completed":
-        return False, "platform_organization_not_completed"
-
-    chatgpt_login = payload.get("chatgptLogin")
-    if not isinstance(chatgpt_login, dict):
-        return False, "missing_chatgpt_login"
-    if str(chatgpt_login.get("status") or "").strip().lower() != "completed":
-        return False, "chatgpt_login_not_completed"
-
-    personal_workspace_id = str(
-        chatgpt_login.get("personalWorkspaceId")
-        or chatgpt_login.get("workspaceId")
-        or ""
-    ).strip()
-    if not personal_workspace_id:
-        return False, "missing_personal_workspace_id"
-
-    login_details = payload.get("chatgptLoginDetails")
-    if isinstance(login_details, dict):
-        client_bootstrap = login_details.get("clientBootstrap")
-        if isinstance(client_bootstrap, dict):
-            auth_status = str(client_bootstrap.get("authStatus") or "").strip().lower()
-            structure = str(client_bootstrap.get("structure") or "").strip().lower()
-            if auth_status and auth_status != "logged_in":
-                return False, "chatgpt_login_not_logged_in"
-            if structure and structure != "personal":
-                return False, "chatgpt_login_not_personal"
-
-    mailbox_ref = str(payload.get("mailboxRef") or "").strip()
-    if not mailbox_ref:
-        return False, "missing_mailbox_ref"
-
-    mailbox_session_id = str(payload.get("mailboxSessionId") or "").strip()
-    if not mailbox_session_id:
-        return False, "missing_mailbox_session_id"
-
-    created_at_text = str(payload.get("createdAt") or "").strip()
-    if not created_at_text:
-        return False, "missing_created_at"
-    try:
-        parsed_created_at = datetime.fromisoformat(created_at_text.replace("Z", "+00:00"))
-        if parsed_created_at.tzinfo is None:
-            parsed_created_at = parsed_created_at.replace(tzinfo=timezone.utc)
-        parsed_created_at = parsed_created_at.astimezone(timezone.utc)
-    except Exception:
-        return False, "invalid_created_at"
-
-    max_age_raw = str(
-        os.environ.get("REGISTER_SMALL_SUCCESS_SEED_MAX_AGE_SECONDS")
-        or os.environ.get("REGISTER_TEAM_MEMBER_SEED_MAX_AGE_SECONDS")
-        or "900"
-    ).strip()
-    try:
-        max_age_seconds = max(0, int(float(max_age_raw)))
-    except Exception:
-        max_age_seconds = 900
-    if max_age_seconds > 0:
-        age_seconds = max(0.0, (datetime.now(timezone.utc) - parsed_created_at).total_seconds())
-        if age_seconds > max_age_seconds:
-            return False, f"small_success_seed_too_old:{int(age_seconds)}"
-
-    return True, ""
-
 
 def _iter_small_success_artifacts(*, run_output_dir: Path) -> list[Path]:
     small_success_dir = run_output_dir / "small_success"
@@ -3320,223 +3232,6 @@ def _load_artifact_json_quiet(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
-
-
-def _extract_artifact_account_id(payload: Any) -> str:
-    if not isinstance(payload, dict):
-        return ""
-    direct = str(
-        payload.get("accountId")
-        or payload.get("account_id")
-        or payload.get("chatgpt_account_id")
-        or ""
-    ).strip()
-    if direct:
-        return direct
-    auth_payload = payload.get("auth")
-    if isinstance(auth_payload, dict):
-        nested = auth_payload.get("https://api.openai.com/auth")
-        if isinstance(nested, dict):
-            nested_direct = str(nested.get("chatgpt_account_id") or nested.get("account_id") or "").strip()
-            if nested_direct:
-                return nested_direct
-    nested = payload.get("https://api.openai.com/auth")
-    if isinstance(nested, dict):
-        nested_direct = str(nested.get("chatgpt_account_id") or nested.get("account_id") or "").strip()
-        if nested_direct:
-            return nested_direct
-    return ""
-
-
-def _extract_artifact_org_id(payload: Any) -> str:
-    account_id = _extract_artifact_account_id(payload)
-    if account_id:
-        return account_id
-    for container in (
-        payload.get("auth") if isinstance(payload, dict) else None,
-        payload,
-    ):
-        if not isinstance(container, dict):
-            continue
-        nested = container.get("https://api.openai.com/auth")
-        organizations = []
-        if isinstance(nested, dict) and isinstance(nested.get("organizations"), list):
-            organizations = nested.get("organizations") or []
-        elif isinstance(container.get("organizations"), list):
-            organizations = container.get("organizations") or []
-        for organization in organizations:
-            if not isinstance(organization, dict):
-                continue
-            org_id = str(organization.get("id") or "").strip()
-            if org_id:
-                return org_id
-    return ""
-
-
-def _extract_artifact_email(payload: Any) -> str:
-    if not isinstance(payload, dict):
-        return ""
-    return str(payload.get("email") or "").strip()
-
-
-def _sanitize_filename_component(value: str, *, fallback: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return fallback
-    for bad in ('<', '>', ':', '"', '/', '\\', '|', '?', '*'):
-        text = text.replace(bad, "_")
-    text = text.strip().strip(".")
-    return text or fallback
-
-
-def _short_account_id_segment(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    for separator in ("-", "_"):
-        if separator in text:
-            head = text.split(separator, 1)[0].strip()
-            if head:
-                return head
-    return text[:8].strip()
-
-
-def _decode_jwt_payload(token: str) -> dict[str, Any]:
-    raw = str(token or "").strip()
-    if not raw:
-        return {}
-    parts = raw.split(".")
-    if len(parts) < 2:
-        return {}
-    payload = parts[1].strip()
-    if not payload:
-        return {}
-    padding = "=" * (-len(payload) % 4)
-    try:
-        decoded = base64.urlsafe_b64decode((payload + padding).encode("utf-8"))
-        claims = json.loads(decoded.decode("utf-8"))
-    except Exception:
-        return {}
-    return dict(claims) if isinstance(claims, dict) else {}
-
-
-def _extract_artifact_auth_claims(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        return {}
-    auth_sources: list[dict[str, Any]] = []
-    auth_payload = payload.get("auth")
-    if isinstance(auth_payload, dict):
-        auth_sources.append(auth_payload)
-    auth_sources.append(payload)
-    for source in auth_sources:
-        nested = source.get("https://api.openai.com/auth")
-        if isinstance(nested, dict):
-            return dict(nested)
-    for source in auth_sources:
-        for token_key in ("id_token", "access_token"):
-            token = source.get(token_key)
-            if not isinstance(token, str) or not token.strip():
-                continue
-            claims = _decode_jwt_payload(token)
-            nested = claims.get("https://api.openai.com/auth")
-            if isinstance(nested, dict):
-                return dict(nested)
-    return {}
-
-
-def _extract_artifact_profile_claims(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        return {}
-    auth_sources: list[dict[str, Any]] = []
-    auth_payload = payload.get("auth")
-    if isinstance(auth_payload, dict):
-        auth_sources.append(auth_payload)
-    auth_sources.append(payload)
-    for source in auth_sources:
-        nested = source.get("https://api.openai.com/profile")
-        if isinstance(nested, dict):
-            return dict(nested)
-    for source in auth_sources:
-        for token_key in ("id_token", "access_token"):
-            token = source.get(token_key)
-            if not isinstance(token, str) or not token.strip():
-                continue
-            claims = _decode_jwt_payload(token)
-            nested = claims.get("https://api.openai.com/profile")
-            if isinstance(nested, dict):
-                return dict(nested)
-    return {}
-
-
-def _extract_artifact_string_field(payload: dict[str, Any], *keys: str) -> str:
-    sources: list[dict[str, Any]] = []
-    auth_payload = payload.get("auth")
-    if isinstance(auth_payload, dict):
-        sources.append(auth_payload)
-    sources.append(payload)
-    for key in keys:
-        for source in sources:
-            value = source.get(key)
-            if value is None:
-                continue
-            text = str(value).strip()
-            if text:
-                return text
-    return ""
-
-
-def _extract_artifact_bool_field(payload: dict[str, Any], key: str, default: bool = False) -> bool:
-    sources: list[dict[str, Any]] = []
-    auth_payload = payload.get("auth")
-    if isinstance(auth_payload, dict):
-        sources.append(auth_payload)
-    sources.append(payload)
-    for source in sources:
-        if key not in source:
-            continue
-        value = source.get(key)
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return bool(value)
-        text = str(value or "").strip().lower()
-        if text in {"1", "true", "yes", "on"}:
-            return True
-        if text in {"0", "false", "no", "off", ""}:
-            return False
-    return default
-
-
-def _standardize_export_credential_payload(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        return {}
-
-    auth_claims = _extract_artifact_auth_claims(payload)
-    profile_claims = _extract_artifact_profile_claims(payload)
-    account_id = _extract_artifact_account_id(payload)
-    email = _extract_artifact_string_field(payload, "email")
-    if not email and profile_claims:
-        email = str(profile_claims.get("email") or "").strip()
-
-    standardized: dict[str, Any] = {
-        "type": _extract_artifact_string_field(payload, "type") or "codex",
-        "email": email,
-        "account_id": account_id,
-        "access_token": _extract_artifact_string_field(payload, "access_token"),
-        "refresh_token": _extract_artifact_string_field(payload, "refresh_token"),
-        "id_token": _extract_artifact_string_field(payload, "id_token"),
-        "expired": _extract_artifact_string_field(payload, "expired"),
-        "disabled": _extract_artifact_bool_field(payload, "disabled", False),
-        "last_refresh": _extract_artifact_string_field(payload, "last_refresh"),
-    }
-
-    if auth_claims:
-        standardized["https://api.openai.com/auth"] = auth_claims
-    if profile_claims:
-        standardized["https://api.openai.com/profile"] = profile_claims
-
-    return standardized
-
 
 def _canonical_free_artifact_name_from_payload(payload: dict[str, Any]) -> str:
     org_id = _sanitize_filename_component(
@@ -4067,15 +3762,6 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     finally:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
-
-
-def _team_mother_cooldown_key(*, original_name: str, email: str, account_id: str) -> str:
-    normalized_email = _sanitize_filename_component(str(email or "").strip().lower(), fallback="unknown-email")
-    normalized_account = _sanitize_filename_component(_short_account_id_segment(account_id), fallback="unknown-account")
-    if normalized_email != "unknown-email" or normalized_account != "unknown-account":
-        return f"{normalized_account}-{normalized_email}"
-    return _sanitize_filename_component(str(original_name or "").strip().lower(), fallback="unknown-mother")
-
 
 def _team_mother_identity_from_result_payload(result_payload: dict[str, Any]) -> dict[str, str]:
     outputs = result_payload.get("outputs") if isinstance(result_payload, dict) else {}

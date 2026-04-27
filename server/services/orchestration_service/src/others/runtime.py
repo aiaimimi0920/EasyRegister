@@ -24,10 +24,12 @@ if __package__ in (None, "", "others"):
             sys.path.append(candidate_text)
     from bootstrap import ensure_local_bundle_imports
     from local_config import read_easyemail_server_api_key
+    from paths import resolve_shared_root as _shared_root_from_output_root
     from errors import ensure_protocol_runtime_error
 else:
     from .bootstrap import ensure_local_bundle_imports
     from .local_config import read_easyemail_server_api_key
+    from .paths import resolve_shared_root as _shared_root_from_output_root
     from ..errors import ensure_protocol_runtime_error
 
 ensure_local_bundle_imports()
@@ -802,18 +804,6 @@ def _normalize_requested_email_address(value: str | None) -> str:
     if not local_part or not domain:
         return ""
     return f"{local_part}@{domain}"
-
-
-def _shared_root_from_output_root(output_root: Path) -> Path:
-    resolved = output_root.resolve()
-    if resolved.name.lower().endswith("-runs"):
-        if resolved.parent.name.lower() == "others":
-            return resolved.parent.parent
-        return resolved.parent
-    if resolved.name.lower() == "others":
-        return resolved.parent
-    return resolved
-
 
 def _resolve_mailbox_domain_state_path() -> Path:
     explicit = str(os.environ.get("REGISTER_MAILBOX_DOMAIN_STATE_PATH") or "").strip()

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 import uuid
 import urllib.error
 import urllib.parse
@@ -12,6 +11,9 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+from others.common import ensure_directory as _ensure_directory
+from others.paths import resolve_shared_root as _shared_root_from_output_root
 
 
 def _utcnow() -> datetime:
@@ -34,25 +36,6 @@ def _json_default(value: Any) -> Any:
         return value.isoformat()
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
-
-def _ensure_directory(path: Path) -> None:
-    target = Path(path)
-    for _ in range(5):
-        try:
-            os.makedirs(target, exist_ok=True)
-            if target.is_dir():
-                return
-        except FileExistsError:
-            if target.is_dir():
-                return
-            raise
-        except FileNotFoundError:
-            time.sleep(0.02)
-            continue
-        time.sleep(0.02)
-    os.makedirs(target, exist_ok=True)
-
-
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     _ensure_directory(path.parent)
     tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
@@ -65,19 +48,6 @@ def _read_json(path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-
-
-def _shared_root_from_output_root(output_root: Path) -> Path:
-    resolved = output_root.resolve()
-    name = resolved.name.lower()
-    if name.endswith("-runs"):
-        if resolved.parent.name.lower() == "others":
-            return resolved.parent.parent
-        return resolved.parent
-    if name == "others":
-        return resolved.parent
-    return resolved
-
 
 def _env_flag(name: str, default: bool = False) -> bool:
     raw = str(os.environ.get(name) or "").strip().lower()
