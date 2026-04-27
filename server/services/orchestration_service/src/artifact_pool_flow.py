@@ -20,7 +20,10 @@ from others.common import (
     team_mother_cooldown_key as _team_mother_cooldown_key,
     validate_small_success_seed_payload as _validate_small_success_seed_payload,
 )
-from others.artifact_transfer import copy_delete_artifact_to_dir as _move_artifact_file
+from others.prepared_artifacts import (
+    copy_delete_prepared_artifact_to_dir,
+    prepare_named_artifact,
+)
 from others.paths import (
     resolve_free_manual_oauth_pool_dir,
     resolve_shared_root,
@@ -1268,13 +1271,14 @@ def _collect_team_pool_artifacts(*, step_input: dict[str, Any]) -> dict[str, Any
         if mother_path_text:
             mother_path = Path(mother_path_text).resolve()
             if mother_path.exists():
-                standardized_payload = _standardize_export_credential_payload(load_json_payload(mother_path))
-                team_pool_path = _move_artifact_file(
+                prepared_artifact = prepare_named_artifact(
                     source_path=mother_path,
-                    destination_dir=team_pool_dir,
                     preferred_name=_mother_team_pool_name(mother_path, mother_artifact),
+                )
+                team_pool_path = copy_delete_prepared_artifact_to_dir(
+                    prepared_artifact,
+                    destination_dir=team_pool_dir,
                     overwrite_existing=True,
-                    payload_override=standardized_payload,
                 )
                 collected.append(
                     {
@@ -1315,13 +1319,14 @@ def _collect_team_pool_artifacts(*, step_input: dict[str, Any]) -> dict[str, Any
                 if _path_is_inside_directory(path=member_path, directory=team_pool_dir):
                     team_pool_path = str(member_path)
                 else:
-                    standardized_payload = _standardize_export_credential_payload(load_json_payload(member_path))
-                    team_pool_path = _move_artifact_file(
+                    prepared_artifact = prepare_named_artifact(
                         source_path=member_path,
-                        destination_dir=team_pool_dir,
                         preferred_name=_member_team_pool_name(member_path, artifact),
+                    )
+                    team_pool_path = copy_delete_prepared_artifact_to_dir(
+                        prepared_artifact,
+                        destination_dir=team_pool_dir,
                         overwrite_existing=True,
-                        payload_override=standardized_payload,
                     )
             collected.append(
                 {

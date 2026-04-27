@@ -24,8 +24,6 @@ if __package__ in (None, ""):
     from easyemail_flow import dispatch_easyemail_step
     from easyprotocol_flow import dispatch_easyprotocol_step
     from others.common import (
-        canonical_free_artifact_name as _canonical_free_artifact_name_from_payload,
-        canonical_team_artifact_name as _canonical_team_artifact_name_from_payload,
         decode_jwt_payload as _decode_jwt_payload,
         ensure_directory as _ensure_directory,
         env_flag as _env_bool,
@@ -38,10 +36,7 @@ if __package__ in (None, ""):
         validate_small_success_seed_payload as _validate_small_success_seed_payload,
         write_json_atomic as _write_json_atomic,
     )
-    from others.artifact_transfer import (
-        copy_artifact_to_dir as _copy_artifact_to_dir,
-        move_artifact_to_dir as _move_artifact_to_dir,
-    )
+    from others.artifact_transfer import copy_artifact_to_dir as _copy_artifact_to_dir
     from others.file_lock import release_lock, try_acquire_lock
     from others.paths import (
         resolve_shared_root as _shared_root_from_output_root,
@@ -61,6 +56,14 @@ if __package__ in (None, ""):
         team_auth_path as _team_auth_path_from_result_payload,
         team_mother_identity as _team_mother_identity_from_result_payload,
     )
+    from others.prepared_artifacts import (
+        copy_prepared_artifact_to_dir,
+        move_prepared_artifact_to_dir,
+        prepare_artifact_for_folder as _prepare_artifact_for_folder,
+        prepare_free_artifact,
+        prepare_team_artifact,
+        write_prepared_artifact,
+    )
     from others.storage import load_json_payload
 else:
     from .dashboard_server import ServiceRuntimeState, WorkerRuntimeState, start_dashboard_server_if_enabled
@@ -68,8 +71,6 @@ else:
     from .easyemail_flow import dispatch_easyemail_step
     from .easyprotocol_flow import dispatch_easyprotocol_step
     from .others.common import (
-        canonical_free_artifact_name as _canonical_free_artifact_name_from_payload,
-        canonical_team_artifact_name as _canonical_team_artifact_name_from_payload,
         decode_jwt_payload as _decode_jwt_payload,
         ensure_directory as _ensure_directory,
         env_flag as _env_bool,
@@ -82,10 +83,7 @@ else:
         validate_small_success_seed_payload as _validate_small_success_seed_payload,
         write_json_atomic as _write_json_atomic,
     )
-    from .others.artifact_transfer import (
-        copy_artifact_to_dir as _copy_artifact_to_dir,
-        move_artifact_to_dir as _move_artifact_to_dir,
-    )
+    from .others.artifact_transfer import copy_artifact_to_dir as _copy_artifact_to_dir
     from .others.file_lock import release_lock, try_acquire_lock
     from .others.paths import (
         resolve_shared_root as _shared_root_from_output_root,
@@ -104,6 +102,14 @@ else:
         restored_path_for_source as _resolve_restored_path_for_source,
         team_auth_path as _team_auth_path_from_result_payload,
         team_mother_identity as _team_mother_identity_from_result_payload,
+    )
+    from .others.prepared_artifacts import (
+        copy_prepared_artifact_to_dir,
+        move_prepared_artifact_to_dir,
+        prepare_artifact_for_folder as _prepare_artifact_for_folder,
+        prepare_free_artifact,
+        prepare_team_artifact,
+        write_prepared_artifact,
     )
     from .others.storage import load_json_payload
 
@@ -3172,13 +3178,6 @@ def _upload_artifact_to_r2(*, source_path: Path, target_folder: str, object_name
     }
     return dispatch_easyprotocol_step(step_type="upload_file_to_r2", step_input=step_input)
 
-
-def _load_artifact_json_quiet(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
 def _free_success_artifact_path(*, result: Any) -> Path | None:
     source_paths = _iter_free_oauth_artifacts(result=result)
     if not source_paths:
@@ -3235,22 +3234,14 @@ def _postprocess_free_success_artifact(
     artifact_path = _free_success_artifact_path(result=result)
     if artifact_path is None or not artifact_path.is_file():
         return {"ok": False, "status": "missing_free_artifact", "cleanup_run_output": False}
-    artifact_payload = _standardize_export_credential_payload(_load_artifact_json_quiet(artifact_path))
-    preferred_name = _canonical_free_artifact_name_from_payload(artifact_payload)
+    prepared_artifact = prepare_free_artifact(source_path=artifact_path)
 
     if free_local_selected:
         target_dir = _resolve_free_local_dir(output_root=output_root)
-        stored_path = _copy_artifact_to_dir(
-            source_path=artifact_path,
+        stored_path = copy_prepared_artifact_to_dir(
+            prepared_artifact,
             destination_dir=target_dir,
-            preferred_name=preferred_name,
             overwrite_existing=True,
-        )
-        _write_json_atomic(
-            Path(stored_path),
-            artifact_payload,
-            include_pid=True,
-            cleanup_temp=True,
         )
         return {
             "ok": True,
@@ -3264,22 +3255,15 @@ def _postprocess_free_success_artifact(
         return {"ok": False, "status": "free_upload_not_confirmed", "cleanup_run_output": False}
 
     pool_dir = _resolve_free_oauth_pool_dir(output_root=output_root)
-    pooled_path = _copy_artifact_to_dir(
-        source_path=artifact_path,
+    pooled_path = copy_prepared_artifact_to_dir(
+        prepared_artifact,
         destination_dir=pool_dir,
-        preferred_name=preferred_name,
         overwrite_existing=True,
-    )
-    _write_json_atomic(
-        Path(pooled_path),
-        artifact_payload,
-        include_pid=True,
-        cleanup_temp=True,
     )
     upload_result = _upload_artifact_to_r2(
         source_path=Path(pooled_path),
         target_folder="codex",
-        object_name=preferred_name,
+        object_name=prepared_artifact.preferred_name,
     )
     if not bool(upload_result.get("ok")):
         return {
@@ -3322,23 +3306,15 @@ def _postprocess_team_success_artifacts(
         if not source_path.is_file():
             failures.append({"path": str(source_path), "status": "missing"})
             continue
-        artifact_payload = _standardize_export_credential_payload(_load_artifact_json_quiet(source_path))
         is_mother = str(artifact.get("kind") or "").strip().lower() == "mother"
-        preferred_name = _canonical_team_artifact_name_from_payload(artifact_payload, is_mother=is_mother)
+        prepared_artifact = prepare_team_artifact(source_path=source_path, is_mother=is_mother)
         overwrite_existing = True
         route_local = _select_local_split(percent=local_percent)
         if route_local:
-            stored_path = _move_artifact_to_dir(
-                source_path=source_path,
+            stored_path = move_prepared_artifact_to_dir(
+                prepared_artifact,
                 destination_dir=local_dir,
-                preferred_name=preferred_name,
                 overwrite_existing=overwrite_existing,
-            )
-            _write_json_atomic(
-                Path(stored_path),
-                artifact_payload,
-                include_pid=True,
-                cleanup_temp=True,
             )
             processed.append(
                 {
@@ -3348,17 +3324,12 @@ def _postprocess_team_success_artifacts(
                 }
             )
             continue
-        _write_json_atomic(
-            source_path,
-            artifact_payload,
-            include_pid=True,
-            cleanup_temp=True,
-        )
+        write_prepared_artifact(prepared_artifact)
         try:
             upload_result = _upload_artifact_to_r2(
                 source_path=source_path,
                 target_folder="codex-team",
-                object_name=preferred_name,
+                object_name=prepared_artifact.preferred_name,
             )
             upload_ok = bool(upload_result.get("ok"))
         except Exception as exc:
@@ -3433,19 +3404,11 @@ def _sync_team_member_artifacts_from_active_claims(
             if not success_path.is_file():
                 continue
             try:
-                artifact_payload = _standardize_export_credential_payload(_load_artifact_json_quiet(success_path))
-                preferred_name = _canonical_team_artifact_name_from_payload(artifact_payload, is_mother=False)
-                stored_path = _copy_artifact_to_dir(
-                    source_path=success_path,
+                prepared_artifact = prepare_team_artifact(source_path=success_path, is_mother=False)
+                stored_path = copy_prepared_artifact_to_dir(
+                    prepared_artifact,
                     destination_dir=local_dir,
-                    preferred_name=preferred_name,
                     overwrite_existing=True,
-                )
-                _write_json_atomic(
-                    Path(stored_path),
-                    artifact_payload,
-                    include_pid=True,
-                    cleanup_temp=True,
                 )
                 localized.append(
                     {
@@ -3530,34 +3493,21 @@ def _drain_oauth_pool_backlog(
     for source_path in sorted(pool_dir.glob("*.json"), key=lambda item: item.name.lower()):
         if not source_path.is_file():
             continue
-        artifact_payload = _standardize_export_credential_payload(_load_artifact_json_quiet(source_path))
         is_team = str(target_folder or "").strip().lower() == "codex-team"
         is_mother = source_path.name.lower().startswith("mother-") or source_path.name.lower().startswith("codex-team-mother-")
-        preferred_name = (
-            _canonical_team_artifact_name_from_payload(artifact_payload, is_mother=is_mother)
-            if is_team
-            else _canonical_free_artifact_name_from_payload(artifact_payload)
+        prepared_artifact = _prepare_artifact_for_folder(
+            source_path=source_path,
+            target_folder=target_folder,
+            is_mother=is_mother,
         )
         overwrite_existing = True
-        _write_json_atomic(
-            source_path,
-            artifact_payload,
-            include_pid=True,
-            cleanup_temp=True,
-        )
+        write_prepared_artifact(prepared_artifact)
         if local_dir is not None and _select_local_split(percent=local_percent):
             try:
-                stored_path = _move_artifact_to_dir(
-                    source_path=source_path,
+                stored_path = move_prepared_artifact_to_dir(
+                    prepared_artifact,
                     destination_dir=local_dir,
-                    preferred_name=preferred_name,
                     overwrite_existing=overwrite_existing,
-                )
-                _write_json_atomic(
-                    Path(stored_path),
-                    artifact_payload,
-                    include_pid=True,
-                    cleanup_temp=True,
                 )
                 localized.append(
                     {
@@ -3578,7 +3528,7 @@ def _drain_oauth_pool_backlog(
             upload_result = _upload_artifact_to_r2(
                 source_path=source_path,
                 target_folder=target_folder,
-                object_name=preferred_name,
+                object_name=prepared_artifact.preferred_name,
             )
             upload_ok = bool(upload_result.get("ok"))
         except Exception as exc:
