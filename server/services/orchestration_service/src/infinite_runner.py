@@ -30,6 +30,7 @@ if __package__ in (None, ""):
         decode_jwt_payload as _decode_jwt_payload,
         ensure_directory as _ensure_directory,
         env_flag as _env_bool,
+        extract_account_id as _extract_artifact_account_id,
         extract_auth_claims as _extract_artifact_auth_claims,
         free_manual_oauth_preserve_codes as _free_manual_oauth_preserve_codes,
         free_manual_oauth_preserve_enabled as _free_manual_oauth_preserve_enabled,
@@ -45,6 +46,18 @@ if __package__ in (None, ""):
         resolve_team_mother_cooldowns_dir,
         resolve_team_mother_pool_dir,
     )
+    from others.result_artifacts import (
+        FREE_SMALL_SUCCESS_SOURCE_CANDIDATES,
+        credential_backwrite_actions as _collect_credential_backwrite_actions,
+        first_existing_output_path as _first_existing_output_path,
+        normalized_team_pool_artifacts as _team_success_artifacts,
+        output_dict as _output_dict,
+        output_text as _output_text,
+        result_payload as _result_payload,
+        restored_path_for_source as _resolve_restored_path_for_source,
+        team_auth_path as _team_auth_path_from_result_payload,
+        team_mother_identity as _team_mother_identity_from_result_payload,
+    )
     from others.storage import load_json_payload
 else:
     from .dashboard_server import ServiceRuntimeState, WorkerRuntimeState, start_dashboard_server_if_enabled
@@ -57,6 +70,7 @@ else:
         decode_jwt_payload as _decode_jwt_payload,
         ensure_directory as _ensure_directory,
         env_flag as _env_bool,
+        extract_account_id as _extract_artifact_account_id,
         extract_auth_claims as _extract_artifact_auth_claims,
         free_manual_oauth_preserve_codes as _free_manual_oauth_preserve_codes,
         free_manual_oauth_preserve_enabled as _free_manual_oauth_preserve_enabled,
@@ -71,6 +85,18 @@ else:
         resolve_team_mother_claims_dir,
         resolve_team_mother_cooldowns_dir,
         resolve_team_mother_pool_dir,
+    )
+    from .others.result_artifacts import (
+        FREE_SMALL_SUCCESS_SOURCE_CANDIDATES,
+        credential_backwrite_actions as _collect_credential_backwrite_actions,
+        first_existing_output_path as _first_existing_output_path,
+        normalized_team_pool_artifacts as _team_success_artifacts,
+        output_dict as _output_dict,
+        output_text as _output_text,
+        result_payload as _result_payload,
+        restored_path_for_source as _resolve_restored_path_for_source,
+        team_auth_path as _team_auth_path_from_result_payload,
+        team_mother_identity as _team_mother_identity_from_result_payload,
     )
     from .others.storage import load_json_payload
 
@@ -3065,54 +3091,21 @@ def _backfill_small_success_continue_pool(
 
 
 def _iter_free_oauth_artifacts(*, result: Any) -> list[Path]:
-    payload = _result_payload(result)
-    outputs = payload.get("outputs") if isinstance(payload, dict) else {}
-    if not isinstance(outputs, dict):
-        return []
-    oauth_output = outputs.get("obtain-codex-oauth")
-    if not isinstance(oauth_output, dict):
-        return []
-    success_path_text = str(oauth_output.get("successPath") or "").strip()
-    if not success_path_text:
-        return []
-    success_path = Path(success_path_text).resolve()
-    if not success_path.is_file():
+    success_path = _first_existing_output_path(
+        result,
+        (("obtain-codex-oauth", "successPath"),),
+    )
+    if success_path is None:
         return []
     return [success_path]
 
 
 def _free_oauth_account_id(*, result_payload: dict[str, Any]) -> str:
-    outputs = result_payload.get("outputs") if isinstance(result_payload, dict) else {}
-    oauth_output = outputs.get("obtain-codex-oauth") if isinstance(outputs, dict) else {}
-    if not isinstance(oauth_output, dict):
-        return ""
-    direct = str(
-        oauth_output.get("accountId")
-        or oauth_output.get("account_id")
-        or oauth_output.get("chatgpt_account_id")
-        or ""
-    ).strip()
-    if direct:
-        return direct
-    auth_payload = oauth_output.get("auth")
-    if isinstance(auth_payload, dict):
-        nested = str(
-            auth_payload.get("account_id")
-            or auth_payload.get("chatgpt_account_id")
-            or ((auth_payload.get("https://api.openai.com/auth") or {}).get("chatgpt_account_id"))
-            or ""
-        ).strip()
-        if nested:
-            return nested
-    return ""
+    return _extract_artifact_account_id(_output_dict(result_payload, "obtain-codex-oauth"))
 
 
 def _free_invite_team_account_id(*, result_payload: dict[str, Any]) -> str:
-    outputs = result_payload.get("outputs") if isinstance(result_payload, dict) else {}
-    invite_output = outputs.get("invite-codex-member") if isinstance(outputs, dict) else {}
-    if not isinstance(invite_output, dict):
-        return ""
-    return str(invite_output.get("team_account_id") or "").strip()
+    return _output_text(result_payload, "invite-codex-member", "team_account_id")
 
 
 def _free_personal_oauth_confirmed(*, result_payload: dict[str, Any]) -> bool:
@@ -3236,59 +3229,8 @@ def _free_success_artifact_path(*, result: Any) -> Path | None:
     return source_paths[0]
 
 
-def _team_success_artifacts(*, result: Any) -> list[dict[str, Any]]:
-    payload = _result_payload(result)
-    outputs = payload.get("outputs") if isinstance(payload, dict) else {}
-    if not isinstance(outputs, dict):
-        return []
-    collected = outputs.get("collect-team-pool-artifacts")
-    if not isinstance(collected, dict):
-        return []
-    artifacts = collected.get("artifacts")
-    if not isinstance(artifacts, list):
-        return []
-    normalized: list[dict[str, Any]] = []
-    for artifact in artifacts:
-        if not isinstance(artifact, dict):
-            continue
-        path_text = str(artifact.get("team_pool_path") or "").strip()
-        if not path_text:
-            continue
-        normalized.append(
-            {
-                "kind": str(artifact.get("kind") or "").strip(),
-                "email": str(artifact.get("email") or "").strip(),
-                "preferred_name": str(artifact.get("preferred_name") or "").strip(),
-                "path": str(Path(path_text).resolve()),
-            }
-        )
-    return normalized
-
-
 def _team_has_collectable_artifacts(*, result: Any) -> bool:
     return len(_team_success_artifacts(result=result)) > 0
-
-
-def _free_small_success_seed_path(*, result_payload: dict[str, Any]) -> Path | None:
-    outputs = result_payload.get("outputs") if isinstance(result_payload, dict) else {}
-    if not isinstance(outputs, dict):
-        return None
-    for output_key, field_name in (
-        ("create-openai-account", "storage_path"),
-        ("create_openai_account", "storage_path"),
-        ("acquire-small-success-artifact", "source_path"),
-        ("acquire-small-success-artifact", "claimed_path"),
-    ):
-        payload = outputs.get(output_key)
-        if not isinstance(payload, dict):
-            continue
-        candidate = str(payload.get(field_name) or "").strip()
-        if not candidate:
-            continue
-        path = Path(candidate).resolve()
-        if path.is_file():
-            return path
-    return None
 
 
 def _postprocess_free_success_artifact(
@@ -3301,7 +3243,10 @@ def _postprocess_free_success_artifact(
 ) -> dict[str, Any]:
     result_payload = _result_payload(result)
     if not _free_personal_oauth_confirmed(result_payload=result_payload):
-        seed_path = _free_small_success_seed_path(result_payload=result_payload)
+        seed_path = _first_existing_output_path(
+            result_payload,
+            FREE_SMALL_SUCCESS_SOURCE_CANDIDATES,
+        )
         if seed_path is None or not seed_path.is_file():
             return {
                 "ok": False,
@@ -3732,73 +3677,6 @@ def _payload_looks_like_oauth_credential(payload: dict[str, Any]) -> bool:
         return True
     return False
 
-
-def _resolve_restored_path_for_source(*, result_payload: dict[str, Any], source_path: Path) -> Path | None:
-    outputs = result_payload.get("outputs") if isinstance(result_payload, dict) else {}
-    if not isinstance(outputs, dict):
-        return None
-
-    finalize_small = outputs.get("finalize-small-success-artifact")
-    if isinstance(finalize_small, dict):
-        claimed_path = str(finalize_small.get("claimed_path") or "").strip()
-        restored_path = str(finalize_small.get("restored_path") or "").strip()
-        if claimed_path and restored_path and str(source_path).lower() == str(Path(claimed_path).resolve()).lower():
-            candidate = Path(restored_path).resolve()
-            if candidate.exists():
-                return candidate
-
-    finalize_team = outputs.get("finalize-team-batch")
-    if isinstance(finalize_team, dict):
-        restored = finalize_team.get("restored")
-        if isinstance(restored, list):
-            for item in restored:
-                if not isinstance(item, dict):
-                    continue
-                claimed_path = str(item.get("claimed_path") or "").strip()
-                restored_path = str(item.get("restored_path") or "").strip()
-                if not claimed_path or not restored_path:
-                    continue
-                if str(source_path).lower() == str(Path(claimed_path).resolve()).lower():
-                    candidate = Path(restored_path).resolve()
-                    if candidate.exists():
-                        return candidate
-    return None
-
-def _team_mother_identity_from_result_payload(result_payload: dict[str, Any]) -> dict[str, str]:
-    outputs = result_payload.get("outputs") if isinstance(result_payload, dict) else {}
-    mother_artifact = outputs.get("acquire-team-mother-artifact") if isinstance(outputs, dict) else {}
-    if not isinstance(mother_artifact, dict):
-        return {
-            "original_name": "",
-            "email": "",
-            "account_id": "",
-        }
-    return {
-        "original_name": str(mother_artifact.get("original_name") or "").strip(),
-        "email": str(mother_artifact.get("email") or "").strip(),
-        "account_id": str(mother_artifact.get("account_id") or "").strip(),
-    }
-
-
-def _team_auth_path_from_result_payload(
-    *,
-    result_payload: dict[str, Any],
-    fallback_path: str,
-) -> str:
-    outputs = result_payload.get("outputs") if isinstance(result_payload, dict) else {}
-    if not isinstance(outputs, dict):
-        return str(fallback_path or "").strip()
-    for candidate in (
-        ((outputs.get("obtain-team-mother-oauth") or {}).get("successPath") if isinstance(outputs.get("obtain-team-mother-oauth"), dict) else ""),
-        ((outputs.get("acquire-team-mother-artifact") or {}).get("source_path") if isinstance(outputs.get("acquire-team-mother-artifact"), dict) else ""),
-        ((outputs.get("acquire-team-mother-artifact") or {}).get("claimed_path") if isinstance(outputs.get("acquire-team-mother-artifact"), dict) else ""),
-    ):
-        normalized = str(candidate or "").strip()
-        if normalized:
-            return normalized
-    return str(fallback_path or "").strip()
-
-
 def _team_mother_failure_cooldown_seconds(*, result: Any) -> float:
     payload = _result_payload(result)
     error_step = str(payload.get("errorStep") or "").strip().lower()
@@ -3919,81 +3797,6 @@ def _merge_refreshed_credential(*, original_payload: dict[str, Any], refreshed_p
         }
     return _standardize_export_credential_payload(merged)
 
-
-def _collect_credential_backwrite_actions(*, result_payload: dict[str, Any]) -> list[dict[str, Any]]:
-    outputs = result_payload.get("outputs") if isinstance(result_payload, dict) else {}
-    if not isinstance(outputs, dict):
-        return []
-
-    actions: list[dict[str, Any]] = []
-
-    mother_source = str(((outputs.get("acquire-team-mother-artifact") or {}).get("source_path")) or "").strip()
-    mother_success = str(((outputs.get("obtain-team-mother-oauth") or {}).get("successPath")) or "").strip()
-    if mother_source and mother_success:
-        actions.append(
-            {
-                "kind": "team_mother",
-                "source_path": mother_source,
-                "refreshed_path": mother_success,
-                "force": True,
-            }
-        )
-
-    codex_success = str(((outputs.get("obtain-codex-oauth") or {}).get("successPath")) or "").strip()
-    if codex_success:
-        for source_key, field_name in (
-            ("acquire-small-success-artifact", "source_path"),
-            ("acquire-small-success-artifact", "claimed_path"),
-            ("acquire_small_success_artifact", "source_path"),
-            ("small_success_artifact", "source_path"),
-            ("create-openai-account", "storage_path"),
-            ("create_openai_account", "storage_path"),
-        ):
-            candidate = outputs.get(source_key)
-            if not isinstance(candidate, dict):
-                continue
-            source_path = str(candidate.get(field_name) or "").strip()
-            if not source_path:
-                continue
-            actions.append(
-                {
-                    "kind": "generic_oauth_refresh",
-                    "source_path": source_path,
-                    "refreshed_path": codex_success,
-                    "force": False,
-                }
-            )
-
-    members = ((outputs.get("acquire-team-member-candidates") or {}).get("members")) or []
-    oauth_batch = ((outputs.get("obtain-team-member-oauth-batch") or {}).get("artifacts")) or []
-    if isinstance(members, list) and isinstance(oauth_batch, list):
-        for index, item in enumerate(oauth_batch):
-            if not isinstance(item, dict) or index >= len(members) or not isinstance(members[index], dict):
-                continue
-            refreshed_path = str(item.get("successPath") or "").strip()
-            source_path = str(members[index].get("source_path") or members[index].get("claimed_path") or "").strip()
-            if not refreshed_path or not source_path:
-                continue
-            actions.append(
-                {
-                    "kind": "team_member_oauth_refresh",
-                    "source_path": source_path,
-                    "refreshed_path": refreshed_path,
-                    "force": False,
-                }
-            )
-
-    deduped: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for item in actions:
-        key = (str(item.get("source_path") or "").strip().lower(), str(item.get("refreshed_path") or "").strip().lower())
-        if not key[0] or not key[1] or key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped
-
-
 def _sync_refreshed_credentials_back_to_sources(*, result_payload: dict[str, Any], worker_label: str, task_index: int) -> list[dict[str, Any]]:
     actions = _collect_credential_backwrite_actions(result_payload=result_payload)
     if not actions:
@@ -4062,17 +3865,6 @@ def _cleanup_run_output_dir(*, run_output_dir: Path, worker_label: str, task_ind
             "outputDir": str(run_output_dir),
         }
     )
-
-
-def _result_payload(result: Any) -> dict[str, Any]:
-    try:
-        payload = result.to_dict()
-        if isinstance(payload, dict):
-            return payload
-    except Exception:
-        pass
-    return {}
-
 
 def _extra_failure_cooldown_seconds(*, result: Any) -> float:
     payload = _result_payload(result)
@@ -4432,13 +4224,12 @@ def _worker_loop(
             effective_team_auth_path = selected_team_auth_path
             if normalized_role == "team":
                 effective_team_auth_path = _team_auth_path_from_result_payload(
-                    result_payload=result_payload,
-                    fallback_path=selected_team_auth_path,
+                    result_payload,
+                    selected_team_auth_path,
                 )
-            invite_capacity_cleanup_output = (
-                (result_payload.get("outputs") or {}).get("invite-codex-member-capacity-cleanup")
-                if isinstance(result_payload, dict)
-                else None
+            invite_capacity_cleanup_output = _output_dict(
+                result_payload,
+                "invite-codex-member-capacity-cleanup",
             )
             if effective_team_auth_path and isinstance(invite_capacity_cleanup_output, dict):
                 _team_auth_sync_codex_seats_from_cleanup_result(
@@ -4514,17 +4305,19 @@ def _worker_loop(
                     elif normalized_role == "team" and str(success_steps.get("invite-team-members") or "").strip().lower() == "ok":
                         _clear_team_auth_temporary_blacklist(
                             shared_root=shared_root,
-                            team_auth_path=str((result_payload.get("outputs") or {}).get("obtain-team-mother-oauth", {}).get("successPath") or selected_team_auth_path),
+                            team_auth_path=_team_auth_path_from_result_payload(
+                                result_payload,
+                                selected_team_auth_path,
+                            ),
                             identity=_team_mother_identity_from_result_payload(result_payload),
                             worker_label=worker_label,
                             task_index=task_index,
                         )
             stop_after_validate_mode = _free_stop_after_validate_mode() and normalized_role in {"main", "continue"}
             if stop_after_validate_mode:
-                outputs = result_payload.get("outputs") if isinstance(result_payload, dict) else {}
-                create_output = outputs.get("create-openai-account") if isinstance(outputs, dict) else {}
-                validate_output = outputs.get("validate-free-personal-oauth") if isinstance(outputs, dict) else {}
-                obtain_output = outputs.get("obtain-codex-oauth") if isinstance(outputs, dict) else {}
+                create_output = _output_dict(result_payload, "create-openai-account")
+                validate_output = _output_dict(result_payload, "validate-free-personal-oauth")
+                obtain_output = _output_dict(result_payload, "obtain-codex-oauth")
                 _json_log(
                     {
                         "event": "register_free_stop_after_validate_handoff",
