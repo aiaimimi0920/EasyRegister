@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,13 @@ from typing import Any
 DEFAULT_FREE_MANUAL_OAUTH_PRESERVE_ERROR_CODES = (
     "free_personal_workspace_missing,obtain_codex_oauth_failed"
 )
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    raw = str(os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
 
 
 def ensure_directory(path: Path) -> None:
@@ -33,12 +41,10 @@ def ensure_directory(path: Path) -> None:
 
 
 def free_manual_oauth_preserve_enabled(step_input: dict[str, Any] | None = None) -> bool:
-    raw = str(
-        (step_input or {}).get("free_manual_oauth_preserve_enabled")
-        or os.environ.get("REGISTER_FREE_MANUAL_OAUTH_PRESERVE_ENABLED")
-        or ""
-    ).strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    raw = str((step_input or {}).get("free_manual_oauth_preserve_enabled") or "").strip()
+    if raw:
+        return bool(env_flag_value(raw, default=False))
+    return env_flag("REGISTER_FREE_MANUAL_OAUTH_PRESERVE_ENABLED", False)
 
 
 def free_manual_oauth_preserve_codes(step_input: dict[str, Any] | None = None) -> set[str]:
@@ -242,11 +248,22 @@ def extract_bool_field(payload: dict[str, Any], key: str, default: bool = False)
             return value
         if isinstance(value, (int, float)):
             return bool(value)
-        text = str(value or "").strip().lower()
-        if text in {"1", "true", "yes", "on"}:
-            return True
-        if text in {"0", "false", "no", "off", ""}:
-            return False
+        parsed = env_flag_value(value, default=None)
+        if parsed is not None:
+            return parsed
+    return default
+
+
+def env_flag_value(value: Any, default: bool | None = False) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
     return default
 
 
@@ -321,6 +338,25 @@ def extract_org_id(payload: Any) -> str:
     return ""
 
 
+def canonical_free_artifact_name(payload: dict[str, Any]) -> str:
+    org_id = sanitize_filename_component(
+        short_account_id_segment(extract_org_id(payload)),
+        fallback="unknown-org",
+    )
+    email = sanitize_filename_component(extract_email(payload), fallback="unknown-email")
+    return f"codex-free-{org_id}-{email}.json"
+
+
+def canonical_team_artifact_name(payload: dict[str, Any], *, is_mother: bool) -> str:
+    org_id = sanitize_filename_component(
+        short_account_id_segment(extract_org_id(payload)),
+        fallback="unknown-org",
+    )
+    email = sanitize_filename_component(extract_email(payload), fallback="unknown-email")
+    prefix = "codex-team-mother" if is_mother else "codex-team"
+    return f"{prefix}-{org_id}-{email}.json"
+
+
 def standardize_export_credential_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
@@ -367,3 +403,35 @@ def team_mother_cooldown_key(*, original_name: str, email: str, account_id: str)
         str(original_name or "").strip().lower(),
         fallback="unknown-mother",
     )
+
+
+def write_json_atomic(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    json_default: Any | None = None,
+    sort_keys: bool = False,
+    include_pid: bool = False,
+    cleanup_temp: bool = False,
+) -> None:
+    ensure_directory(path.parent)
+    temp_name = f"{path.name}."
+    if include_pid:
+        temp_name += f"{os.getpid()}."
+    temp_name += f"{uuid.uuid4().hex}.tmp"
+    tmp_path = path.parent / temp_name
+    try:
+        tmp_path.write_text(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                indent=2,
+                default=json_default,
+                sort_keys=sort_keys,
+            ),
+            encoding="utf-8",
+        )
+        os.replace(tmp_path, path)
+    finally:
+        if cleanup_temp and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)

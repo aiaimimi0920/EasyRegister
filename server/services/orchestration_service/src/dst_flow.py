@@ -17,11 +17,13 @@ if __package__ in (None, ""):
         candidate_text = str(_candidate)
         if candidate_text not in sys.path:
             sys.path.append(candidate_text)
+    from others.common import env_flag as _env_bool
     from artifact_pool_flow import dispatch_orchestration_step
     from easyemail_flow import dispatch_easyemail_step
     from easyproxy_flow import dispatch_easyproxy_step
     from easyprotocol_flow import dispatch_easyprotocol_step
 else:
+    from .others.common import env_flag as _env_bool
     from .artifact_pool_flow import dispatch_orchestration_step
     from .easyemail_flow import dispatch_easyemail_step
     from .easyproxy_flow import dispatch_easyproxy_step
@@ -359,14 +361,6 @@ def _maybe_prepare_special_step_retry(
     if released_count > 0:
         return True
     return False
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = str(os.environ.get(name) or "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "on"}
-
 
 def _statement_enabled(*, statement: DstStatement, state: dict[str, Any]) -> bool:
     enabled_when = statement.metadata.get("enabledWhen")

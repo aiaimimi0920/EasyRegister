@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -12,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from others.common import ensure_directory as _ensure_directory
+from others.common import write_json_atomic as _write_json_atomic
 from others.paths import resolve_shared_root as _shared_root_from_output_root
 
 
@@ -35,13 +34,6 @@ def _json_default(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    _ensure_directory(path.parent)
-    tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
-    os.replace(tmp_path, path)
-
 
 def _read_json(path: Path) -> dict[str, Any]:
     try:
@@ -115,7 +107,7 @@ class WorkerRuntimeState:
         self._state.setdefault("recentUploads", [])
 
     def _save(self) -> None:
-        _write_json_atomic(self._path, self._state)
+        _write_json_atomic(self._path, self._state, json_default=_json_default)
 
     def started(self, *, pid: int, output_root: str, team_auth_pinned: bool) -> None:
         self._state.update(
@@ -254,7 +246,7 @@ class ServiceRuntimeState:
         )
 
     def _save(self) -> None:
-        _write_json_atomic(self._path, self._state)
+        _write_json_atomic(self._path, self._state, json_default=_json_default)
 
     def started(self, *, pid: int, max_runs: int) -> None:
         self._state.update(

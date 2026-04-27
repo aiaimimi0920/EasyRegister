@@ -10,14 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from others.common import (
+    canonical_team_artifact_name,
     ensure_directory as _ensure_directory,
     extract_account_id as _extract_free_oauth_account_id,
     extract_auth_claims as _extract_free_oauth_auth_claims,
     extract_org_id as _extract_credential_org_id,
     free_manual_oauth_preserve_codes as _free_manual_oauth_preserve_codes,
     free_manual_oauth_preserve_enabled as _free_manual_oauth_preserve_enabled,
-    sanitize_filename_component as _sanitize_filename_component,
-    short_account_id_segment as _short_account_id_segment,
     standardize_export_credential_payload as _standardize_export_credential_payload,
     team_mother_cooldown_key as _team_mother_cooldown_key,
     validate_small_success_seed_payload as _validate_small_success_seed_payload,
@@ -989,9 +988,7 @@ def _mother_team_pool_name(source_path: Path, mother_artifact: dict[str, Any] | 
     ).strip()
     org_id = _extract_credential_org_id(payload)
     if email and org_id:
-        normalized_email = _sanitize_filename_component(email, fallback="unknown-email")
-        normalized_org_id = _sanitize_filename_component(_short_account_id_segment(org_id), fallback="unknown-org")
-        return f"codex-team-mother-{normalized_org_id}-{normalized_email}.json"
+        return canonical_team_artifact_name(payload, is_mother=True)
 
     current_name = str(source_path.name or "").strip() or "mother-team.json"
     while True:
@@ -1026,9 +1023,7 @@ def _member_team_pool_name(source_path: Path, member_artifact: dict[str, Any] | 
     ).strip()
     org_id = _extract_credential_org_id(payload)
     if email and org_id:
-        normalized_email = _sanitize_filename_component(email, fallback="unknown-email")
-        normalized_org_id = _sanitize_filename_component(_short_account_id_segment(org_id), fallback="unknown-org")
-        return f"codex-team-{normalized_org_id}-{normalized_email}.json"
+        return canonical_team_artifact_name(payload, is_mother=False)
     return str(source_path.name or "").strip() or "codex-team-unknown-org-unknown-email.json"
 
 

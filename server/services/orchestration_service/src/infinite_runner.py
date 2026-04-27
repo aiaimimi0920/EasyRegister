@@ -25,18 +25,18 @@ if __package__ in (None, ""):
     from easyemail_flow import dispatch_easyemail_step
     from easyprotocol_flow import dispatch_easyprotocol_step
     from others.common import (
+        canonical_free_artifact_name as _canonical_free_artifact_name_from_payload,
+        canonical_team_artifact_name as _canonical_team_artifact_name_from_payload,
         decode_jwt_payload as _decode_jwt_payload,
         ensure_directory as _ensure_directory,
+        env_flag as _env_bool,
         extract_auth_claims as _extract_artifact_auth_claims,
-        extract_email as _extract_artifact_email,
-        extract_org_id as _extract_artifact_org_id,
         free_manual_oauth_preserve_codes as _free_manual_oauth_preserve_codes,
         free_manual_oauth_preserve_enabled as _free_manual_oauth_preserve_enabled,
-        sanitize_filename_component as _sanitize_filename_component,
-        short_account_id_segment as _short_account_id_segment,
         standardize_export_credential_payload as _standardize_export_credential_payload,
         team_mother_cooldown_key as _team_mother_cooldown_key,
         validate_small_success_seed_payload as _validate_small_success_seed_payload,
+        write_json_atomic as _write_json_atomic,
     )
     from others.file_lock import release_lock, try_acquire_lock
     from others.paths import (
@@ -52,18 +52,18 @@ else:
     from .easyemail_flow import dispatch_easyemail_step
     from .easyprotocol_flow import dispatch_easyprotocol_step
     from .others.common import (
+        canonical_free_artifact_name as _canonical_free_artifact_name_from_payload,
+        canonical_team_artifact_name as _canonical_team_artifact_name_from_payload,
         decode_jwt_payload as _decode_jwt_payload,
         ensure_directory as _ensure_directory,
+        env_flag as _env_bool,
         extract_auth_claims as _extract_artifact_auth_claims,
-        extract_email as _extract_artifact_email,
-        extract_org_id as _extract_artifact_org_id,
         free_manual_oauth_preserve_codes as _free_manual_oauth_preserve_codes,
         free_manual_oauth_preserve_enabled as _free_manual_oauth_preserve_enabled,
-        sanitize_filename_component as _sanitize_filename_component,
-        short_account_id_segment as _short_account_id_segment,
         standardize_export_credential_payload as _standardize_export_credential_payload,
         team_mother_cooldown_key as _team_mother_cooldown_key,
         validate_small_success_seed_payload as _validate_small_success_seed_payload,
+        write_json_atomic as _write_json_atomic,
     )
     from .others.file_lock import release_lock, try_acquire_lock
     from .others.paths import (
@@ -1651,7 +1651,12 @@ def _write_team_mother_availability_state(*, state_path: Path, payload: dict[str
     if not has_active_window and not has_recent_history and not has_seat_allocations:
         state_path.unlink(missing_ok=True)
         return
-    _write_json_atomic(state_path, normalized_payload)
+    _write_json_atomic(
+        state_path,
+        normalized_payload,
+        include_pid=True,
+        cleanup_temp=True,
+    )
 
 
 def _prune_team_mother_availability_state(
@@ -2815,14 +2820,6 @@ def _env_percent(name: str, default: float = 0.0) -> float:
         value *= 100.0
     return max(0.0, min(100.0, value))
 
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = str(os.environ.get(name) or "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "on"}
-
-
 def _select_local_split(*, percent: float) -> bool:
     if float(percent or 0.0) <= 0.0:
         return False
@@ -3232,26 +3229,6 @@ def _load_artifact_json_quiet(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
-
-def _canonical_free_artifact_name_from_payload(payload: dict[str, Any]) -> str:
-    org_id = _sanitize_filename_component(
-        _short_account_id_segment(_extract_artifact_org_id(payload)),
-        fallback="unknown-org",
-    )
-    email = _sanitize_filename_component(_extract_artifact_email(payload), fallback="unknown-email")
-    return f"codex-free-{org_id}-{email}.json"
-
-
-def _canonical_team_artifact_name_from_payload(payload: dict[str, Any], *, is_mother: bool) -> str:
-    org_id = _sanitize_filename_component(
-        _short_account_id_segment(_extract_artifact_org_id(payload)),
-        fallback="unknown-org",
-    )
-    email = _sanitize_filename_component(_extract_artifact_email(payload), fallback="unknown-email")
-    prefix = "codex-team-mother" if is_mother else "codex-team"
-    return f"{prefix}-{org_id}-{email}.json"
-
-
 def _free_success_artifact_path(*, result: Any) -> Path | None:
     source_paths = _iter_free_oauth_artifacts(result=result)
     if not source_paths:
@@ -3367,7 +3344,12 @@ def _postprocess_free_success_artifact(
             preferred_name=preferred_name,
             overwrite_existing=True,
         )
-        _write_json_atomic(Path(stored_path), artifact_payload)
+        _write_json_atomic(
+            Path(stored_path),
+            artifact_payload,
+            include_pid=True,
+            cleanup_temp=True,
+        )
         return {
             "ok": True,
             "status": "stored_local",
@@ -3386,7 +3368,12 @@ def _postprocess_free_success_artifact(
         preferred_name=preferred_name,
         overwrite_existing=True,
     )
-    _write_json_atomic(Path(pooled_path), artifact_payload)
+    _write_json_atomic(
+        Path(pooled_path),
+        artifact_payload,
+        include_pid=True,
+        cleanup_temp=True,
+    )
     upload_result = _upload_artifact_to_r2(
         source_path=Path(pooled_path),
         target_folder="codex",
@@ -3445,7 +3432,12 @@ def _postprocess_team_success_artifacts(
                 preferred_name=preferred_name,
                 overwrite_existing=overwrite_existing,
             )
-            _write_json_atomic(Path(stored_path), artifact_payload)
+            _write_json_atomic(
+                Path(stored_path),
+                artifact_payload,
+                include_pid=True,
+                cleanup_temp=True,
+            )
             processed.append(
                 {
                     **artifact,
@@ -3454,7 +3446,12 @@ def _postprocess_team_success_artifacts(
                 }
             )
             continue
-        _write_json_atomic(source_path, artifact_payload)
+        _write_json_atomic(
+            source_path,
+            artifact_payload,
+            include_pid=True,
+            cleanup_temp=True,
+        )
         try:
             upload_result = _upload_artifact_to_r2(
                 source_path=source_path,
@@ -3542,7 +3539,12 @@ def _sync_team_member_artifacts_from_active_claims(
                     preferred_name=preferred_name,
                     overwrite_existing=True,
                 )
-                _write_json_atomic(Path(stored_path), artifact_payload)
+                _write_json_atomic(
+                    Path(stored_path),
+                    artifact_payload,
+                    include_pid=True,
+                    cleanup_temp=True,
+                )
                 localized.append(
                     {
                         "claim_path": str(claim_path),
@@ -3635,7 +3637,12 @@ def _drain_oauth_pool_backlog(
             else _canonical_free_artifact_name_from_payload(artifact_payload)
         )
         overwrite_existing = True
-        _write_json_atomic(source_path, artifact_payload)
+        _write_json_atomic(
+            source_path,
+            artifact_payload,
+            include_pid=True,
+            cleanup_temp=True,
+        )
         if local_dir is not None and _select_local_split(percent=local_percent):
             try:
                 stored_path = _move_artifact_to_dir(
@@ -3644,7 +3651,12 @@ def _drain_oauth_pool_backlog(
                     preferred_name=preferred_name,
                     overwrite_existing=overwrite_existing,
                 )
-                _write_json_atomic(Path(stored_path), artifact_payload)
+                _write_json_atomic(
+                    Path(stored_path),
+                    artifact_payload,
+                    include_pid=True,
+                    cleanup_temp=True,
+                )
                 localized.append(
                     {
                         "path": str(source_path),
@@ -3751,17 +3763,6 @@ def _resolve_restored_path_for_source(*, result_payload: dict[str, Any], source_
                     if candidate.exists():
                         return candidate
     return None
-
-
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    _ensure_directory(path.parent)
-    tmp_path = path.parent / f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-    try:
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp_path, path)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
 
 def _team_mother_identity_from_result_payload(result_payload: dict[str, Any]) -> dict[str, str]:
     outputs = result_payload.get("outputs") if isinstance(result_payload, dict) else {}
@@ -3887,7 +3888,12 @@ def _mark_team_mother_failure_cooldown(
         "cooldown_until": cooldown_until.isoformat(),
         "cooldown_until_ts": cooldown_until.timestamp(),
     }
-    _write_json_atomic(state_path, payload)
+    _write_json_atomic(
+        state_path,
+        payload,
+        include_pid=True,
+        cleanup_temp=True,
+    )
     _json_log(
         {
             "event": "register_team_mother_cooldown_marked",
@@ -4017,7 +4023,12 @@ def _sync_refreshed_credentials_back_to_sources(*, result_payload: dict[str, Any
             original_payload=original_payload,
             refreshed_payload=refreshed_payload,
         )
-        _write_json_atomic(live_source_path, merged_payload)
+        _write_json_atomic(
+            live_source_path,
+            merged_payload,
+            include_pid=True,
+            cleanup_temp=True,
+        )
         synced.append(
             {
                 "kind": str(action.get("kind") or "").strip(),
