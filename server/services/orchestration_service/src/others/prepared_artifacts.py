@@ -132,3 +132,47 @@ def copy_delete_prepared_artifact_to_dir(
         overwrite_existing=overwrite_existing,
         payload_override=prepared.payload,
     )
+
+
+def store_local_prepared_artifact(
+    prepared: PreparedArtifact,
+    *,
+    destination_dir: Path,
+    overwrite_existing: bool = False,
+    move: bool = False,
+) -> str:
+    if move:
+        return move_prepared_artifact_to_dir(
+            prepared,
+            destination_dir=destination_dir,
+            overwrite_existing=overwrite_existing,
+        )
+    return copy_prepared_artifact_to_dir(
+        prepared,
+        destination_dir=destination_dir,
+        overwrite_existing=overwrite_existing,
+    )
+
+
+def stage_prepared_artifact_for_upload(
+    prepared: PreparedArtifact,
+    *,
+    staging_dir: Path | None = None,
+    overwrite_existing: bool = False,
+) -> Path:
+    if staging_dir is None:
+        write_prepared_artifact(prepared)
+        return prepared.source_path
+    staged_path = copy_prepared_artifact_to_dir(
+        prepared,
+        destination_dir=staging_dir,
+        overwrite_existing=overwrite_existing,
+    )
+    return Path(staged_path)
+
+
+def delete_artifact_quiet(path: Path) -> None:
+    try:
+        Path(path).unlink(missing_ok=True)
+    except Exception:
+        pass

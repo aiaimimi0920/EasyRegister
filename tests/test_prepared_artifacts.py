@@ -15,11 +15,14 @@ if str(SRC_ROOT) not in sys.path:
 from others.prepared_artifacts import (  # noqa: E402
     copy_delete_prepared_artifact_to_dir,
     copy_prepared_artifact_to_dir,
+    delete_artifact_quiet,
     move_prepared_artifact_to_dir,
     prepare_artifact_for_folder,
     prepare_free_artifact,
     prepare_named_artifact,
     prepare_team_artifact,
+    stage_prepared_artifact_for_upload,
+    store_local_prepared_artifact,
     write_prepared_artifact,
 )
 
@@ -247,6 +250,64 @@ class PreparedArtifactsTests(unittest.TestCase):
             self.assertFalse(source.exists())
             stored_payload = json.loads(Path(stored_path).read_text(encoding="utf-8"))
             self.assertEqual(prepared.payload, stored_payload)
+
+    def test_store_local_prepared_artifact_supports_copy_and_move_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            copy_source = root / "copy.json"
+            move_source = root / "move.json"
+            copy_source.write_text(json.dumps({"email": "copy@example.com"}), encoding="utf-8")
+            move_source.write_text(json.dumps({"email": "move@example.com"}), encoding="utf-8")
+
+            copied = store_local_prepared_artifact(
+                prepare_named_artifact(source_path=copy_source, preferred_name="copy-stored.json"),
+                destination_dir=root / "dest",
+                overwrite_existing=True,
+                move=False,
+            )
+            moved = store_local_prepared_artifact(
+                prepare_named_artifact(source_path=move_source, preferred_name="move-stored.json"),
+                destination_dir=root / "dest",
+                overwrite_existing=True,
+                move=True,
+            )
+
+            self.assertTrue(copy_source.exists())
+            self.assertFalse(move_source.exists())
+            self.assertEqual("copy-stored.json", Path(copied).name)
+            self.assertEqual("move-stored.json", Path(moved).name)
+
+    def test_stage_prepared_artifact_for_upload_supports_copy_and_in_place_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            staged_source = root / "stage.json"
+            direct_source = root / "direct.json"
+            staged_source.write_text(json.dumps({"email": "stage@example.com"}), encoding="utf-8")
+            direct_source.write_text(json.dumps({"email": "direct@example.com"}), encoding="utf-8")
+
+            staged = stage_prepared_artifact_for_upload(
+                prepare_named_artifact(source_path=staged_source, preferred_name="staged.json"),
+                staging_dir=root / "pool",
+                overwrite_existing=True,
+            )
+            direct = stage_prepared_artifact_for_upload(
+                prepare_named_artifact(source_path=direct_source, preferred_name="direct.json"),
+            )
+
+            self.assertEqual("staged.json", staged.name)
+            self.assertTrue(staged.is_file())
+            self.assertEqual(direct_source.resolve(), direct)
+            self.assertTrue(direct.is_file())
+
+    def test_delete_artifact_quiet_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "artifact.json"
+            target.write_text("payload", encoding="utf-8")
+
+            delete_artifact_quiet(target)
+            delete_artifact_quiet(target)
+
+            self.assertFalse(target.exists())
 
 
 if __name__ == "__main__":
