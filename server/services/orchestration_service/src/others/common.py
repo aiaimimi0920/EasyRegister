@@ -40,6 +40,10 @@ def ensure_directory(path: Path) -> None:
     os.makedirs(target, exist_ok=True)
 
 
+def json_log(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+
 def free_manual_oauth_preserve_enabled(step_input: dict[str, Any] | None = None) -> bool:
     raw = str((step_input or {}).get("free_manual_oauth_preserve_enabled") or "").strip()
     if raw:
