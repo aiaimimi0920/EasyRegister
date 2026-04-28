@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from errors import ErrorCodes  # noqa: E402
-from others import runner_artifacts, runner_failures, runner_mailbox  # noqa: E402
+from others import runner_artifacts, runner_failures, runner_mailbox, runner_team_cleanup  # noqa: E402
 
 
 class RunnerArtifactsTests(unittest.TestCase):
@@ -159,6 +159,48 @@ class RunnerMailboxTests(unittest.TestCase):
                 )
             self.assertEqual("recovery_threshold_not_reached", result["status"])
             self.assertEqual(1, result["consecutiveFailures"])
+
+
+class RunnerTeamCleanupTests(unittest.TestCase):
+    def test_team_capacity_failure_detail_uses_structured_code(self) -> None:
+        payload = {
+            "errorStep": "invite-codex-member",
+            "stepErrors": {
+                "invite-codex-member": {
+                    "code": ErrorCodes.TEAM_SEATS_FULL,
+                    "message": "workspace full",
+                }
+            },
+        }
+        detail = runner_team_cleanup.team_capacity_failure_detail(result_payload_value=payload)
+        self.assertIn("workspace full", detail)
+
+    def test_capacity_cooldown_state_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            team_auth_path = str(shared_root / "mother.json")
+            runner_team_cleanup.mark_team_auth_capacity_cooldown(
+                shared_root=shared_root,
+                team_auth_path=team_auth_path,
+                cooldown_seconds=60.0,
+                detail="capacity full",
+            )
+            self.assertTrue(
+                runner_team_cleanup.team_auth_is_capacity_cooled(
+                    shared_root=shared_root,
+                    team_auth_path=team_auth_path,
+                )
+            )
+            runner_team_cleanup.clear_team_auth_capacity_cooldown(
+                shared_root=shared_root,
+                team_auth_path=team_auth_path,
+            )
+            self.assertFalse(
+                runner_team_cleanup.team_auth_is_capacity_cooled(
+                    shared_root=shared_root,
+                    team_auth_path=team_auth_path,
+                )
+            )
 
 
 if __name__ == "__main__":
