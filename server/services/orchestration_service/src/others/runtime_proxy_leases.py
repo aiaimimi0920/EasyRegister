@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterator
 
+from others.common import json_log
 from others.runtime_proxy_support import (
     DEFAULT_ORCHESTRATION_HOST_ID,
     _ACTIVE_FLOW_PROXY_LOCK,
@@ -254,10 +255,14 @@ def acquire_flow_proxy_lease(
                     acquisition_mode="random-node",
                     checked_out=False,
                 )
-                print(
-                    "[register-orchestration] easy proxy random-node selected "
-                    f"flow={flow_name} node={node_tag or 'unknown'} port={node_port or 'unknown'} "
-                    f"proxy={mask_proxy_url(proxy_url)}"
+                json_log(
+                    {
+                        "event": "register_easy_proxy_random_node_selected",
+                        "flowName": flow_name,
+                        "nodeTag": node_tag or "unknown",
+                        "nodePort": node_port or "unknown",
+                        "proxy": mask_proxy_url(proxy_url),
+                    }
                 )
                 return selected
             except Exception as exc:
@@ -269,10 +274,15 @@ def acquire_flow_proxy_lease(
                 _, failure_class, _ = _classify_easy_proxy_error(exc, probe_url=probe_url)
                 if failure_class == "route_failure" and candidate_unique_key:
                     _mark_failed_flow_proxy(candidate_unique_key)
-                print(
-                    "[register-orchestration] easy proxy random-node failed "
-                    f"flow={flow_name} attempt={attempt + 1} "
-                    f"node={node_tag or 'unknown'} port={node_port or 'unknown'} err={exc}"
+                json_log(
+                    {
+                        "event": "register_easy_proxy_random_node_failed",
+                        "flowName": flow_name,
+                        "attempt": attempt + 1,
+                        "nodeTag": node_tag or "unknown",
+                        "nodePort": node_port or "unknown",
+                        "error": str(exc),
+                    }
                 )
                 time.sleep(0.1 * (attempt + 1))
         return None
@@ -323,18 +333,27 @@ def acquire_flow_proxy_lease(
                     acquisition_mode="lease",
                     checked_out=True,
                 )
-                print(
-                    "[register-orchestration] easy proxy checkout "
-                    f"flow={flow_name} lease={selected.lease_id or 'unknown'} proxy={mask_proxy_url(proxy_url)}"
+                json_log(
+                    {
+                        "event": "register_easy_proxy_checkout_selected",
+                        "flowName": flow_name,
+                        "leaseId": selected.lease_id or "unknown",
+                        "proxy": mask_proxy_url(proxy_url),
+                    }
                 )
                 return selected
             except Exception as exc:
                 last_error = exc
                 candidate_lease_id = str((candidate or {}).get("id") or "").strip()
                 candidate_proxy_url = runtime_reachable_proxy_url(str((candidate or {}).get("proxyUrl") or "").strip())
-                print(
-                    "[register-orchestration] easy proxy checkout failed "
-                    f"flow={flow_name} attempt={attempt + 1} proxy={mask_proxy_url(candidate_proxy_url)} err={exc}"
+                json_log(
+                    {
+                        "event": "register_easy_proxy_checkout_failed",
+                        "flowName": flow_name,
+                        "attempt": attempt + 1,
+                        "proxy": mask_proxy_url(candidate_proxy_url),
+                        "error": str(exc),
+                    }
                 )
                 if candidate_lease_id:
                     error_code, failure_class, route_confidence = _classify_easy_proxy_error(exc, probe_url=probe_url)

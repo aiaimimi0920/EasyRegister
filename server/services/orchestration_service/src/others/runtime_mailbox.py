@@ -8,6 +8,7 @@ from typing import Any
 
 from errors import ensure_protocol_runtime_error
 from others.bootstrap import ensure_local_bundle_imports
+from others.common import json_log
 from others.config import MailboxRuntimeConfig, env_text
 from others.local_config import read_easyemail_server_api_key
 from others.paths import resolve_shared_root as _shared_root_from_output_root
@@ -206,7 +207,12 @@ def _resolve_planned_mailbox_provider(*, ttl_seconds: int, strategy_kwargs: dict
             **strategy_kwargs,
         )
     except Exception as exc:
-        print(f"[register-orchestration] mailbox plan skipped err={exc}")
+        json_log(
+            {
+                "event": "register_mailbox_plan_skipped",
+                "error": str(exc),
+            }
+        )
         return ""
     if not isinstance(plan, dict):
         return ""
@@ -285,12 +291,15 @@ def resolve_mailbox(
         if planned_provider == "moemail":
             selected_domain, domain_selection = _select_business_mailbox_domain()
             if selected_domain:
-                print(
-                    "[register-orchestration] mailbox business domain selected "
-                    f"provider=moemail domain={selected_domain} "
-                    f"reason={domain_selection.get('reason')} "
-                    f"eligible={domain_selection.get('eligible_count')} "
-                    f"blacklisted={len(domain_selection.get('blacklisted') or [])}"
+                json_log(
+                    {
+                        "event": "register_mailbox_business_domain_selected",
+                        "provider": "moemail",
+                        "domain": selected_domain,
+                        "reason": str(domain_selection.get("reason") or ""),
+                        "eligibleCount": int(domain_selection.get("eligible_count") or 0),
+                        "blacklistedCount": len(domain_selection.get("blacklisted") or []),
+                    }
                 )
                 return create_mailbox(
                     provider="moemail",
