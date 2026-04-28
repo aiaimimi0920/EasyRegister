@@ -155,6 +155,8 @@ class DstTaskEnvConfig:
     team_workspace_selector: str
     free_workspace_selector: str
     free_oauth_delay_seconds: str
+    mailbox_ttl_seconds: str
+    mailbox_recreate_preallocated: bool
     free_stop_after_validate: bool
 
     @classmethod
@@ -171,6 +173,8 @@ class DstTaskEnvConfig:
             team_workspace_selector=env_text("REGISTER_TEAM_WORKSPACE_SELECTOR"),
             free_workspace_selector=env_text("REGISTER_FREE_WORKSPACE_SELECTOR", "personal") or "personal",
             free_oauth_delay_seconds=env_text("REGISTER_FREE_OAUTH_DELAY_SECONDS", "180") or "180",
+            mailbox_ttl_seconds=env_text("REGISTER_MAILBOX_TTL_SECONDS"),
+            mailbox_recreate_preallocated=env_bool("REGISTER_MAILBOX_RECREATE_PREALLOCATED", False),
             free_stop_after_validate=env_bool("REGISTER_FREE_STOP_AFTER_VALIDATE", False),
         )
 
@@ -337,6 +341,7 @@ class TeamAuthRuntimeConfig:
     reservation_ttl_seconds: float
     state_lock_timeout_seconds: float
     team_member_count: int
+    stale_claim_seconds: int
     codex_seat_types: tuple[str, ...]
     oauth_failure_cooldown_seconds: float
     invite_failure_cooldown_seconds: float
@@ -370,6 +375,7 @@ class TeamAuthRuntimeConfig:
             reservation_ttl_seconds=max(30.0, env_float("REGISTER_TEAM_AUTH_RESERVATION_TTL_SECONDS", 300.0)),
             state_lock_timeout_seconds=max(1.0, env_float("REGISTER_TEAM_AUTH_STATE_LOCK_TIMEOUT_SECONDS", 5.0)),
             team_member_count=max(1, env_int("REGISTER_TEAM_MEMBER_COUNT", 4)),
+            stale_claim_seconds=max(0, env_int("REGISTER_TEAM_STALE_CLAIM_SECONDS", 60)),
             codex_seat_types=tuple(item.lower() for item in split_csv(env_text("REGISTER_TEAM_CODEX_SEAT_TYPES", "usage_based,codex"))),
             oauth_failure_cooldown_seconds=max(0.0, env_float("REGISTER_TEAM_OAUTH_FAILURE_COOLDOWN_SECONDS", 300.0)),
             invite_failure_cooldown_seconds=max(0.0, env_float("REGISTER_TEAM_INVITE_FAILURE_COOLDOWN_SECONDS", 300.0)),

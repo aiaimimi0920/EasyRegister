@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +12,7 @@ from others.common import (
     team_mother_cooldown_key,
     validate_small_success_seed_payload,
 )
+from others.config import ArtifactRoutingConfig, TeamAuthRuntimeConfig
 from others.paths import (
     resolve_free_manual_oauth_pool_dir,
     resolve_shared_root,
@@ -42,6 +42,18 @@ def derive_output_root_from_run_dir(output_dir: str | None) -> Path:
     return resolve_shared_root(str(Path.cwd()))
 
 
+def _artifact_routing_config_for_step_input(step_input: dict[str, Any]) -> ArtifactRoutingConfig:
+    return ArtifactRoutingConfig.from_env(
+        output_root=derive_output_root_from_run_dir(step_input.get("output_dir"))
+    )
+
+
+def _team_auth_runtime_config_for_step_input(step_input: dict[str, Any] | None = None) -> TeamAuthRuntimeConfig:
+    output_root = derive_output_root_from_run_dir((step_input or {}).get("output_dir"))
+    shared_root = resolve_shared_root(str(output_root))
+    return TeamAuthRuntimeConfig.from_env(output_root=output_root, shared_root=Path(shared_root))
+
+
 def resolve_small_success_pool(step_input: dict[str, Any]) -> Path:
     explicit = str(step_input.get("pool_dir") or "").strip()
     if explicit:
@@ -60,30 +72,21 @@ def resolve_small_success_wait_pool(step_input: dict[str, Any]) -> Path:
     explicit = str(step_input.get("wait_pool_dir") or step_input.get("small_success_wait_pool_dir") or "").strip()
     if explicit:
         return Path(explicit).resolve()
-    env_explicit = str(os.environ.get("REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR") or "").strip()
-    if env_explicit:
-        return Path(env_explicit).resolve()
-    return resolve_small_success_wait_pool_dir(str(derive_output_root_from_run_dir(step_input.get("output_dir"))))
+    return _artifact_routing_config_for_step_input(step_input).small_success_wait_pool_dir
 
 
 def resolve_small_success_continue_pool(step_input: dict[str, Any]) -> Path:
     explicit = str(step_input.get("continue_pool_dir") or step_input.get("small_success_continue_pool_dir") or "").strip()
     if explicit:
         return Path(explicit).resolve()
-    env_explicit = str(os.environ.get("REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR") or "").strip()
-    if env_explicit:
-        return Path(env_explicit).resolve()
-    return resolve_small_success_continue_pool_dir(str(derive_output_root_from_run_dir(step_input.get("output_dir"))))
+    return _artifact_routing_config_for_step_input(step_input).small_success_continue_pool_dir
 
 
 def resolve_free_manual_oauth_pool(step_input: dict[str, Any]) -> Path:
     explicit = str(step_input.get("free_manual_oauth_pool_dir") or "").strip()
     if explicit:
         return Path(explicit).resolve()
-    env_explicit = str(os.environ.get("REGISTER_FREE_MANUAL_OAUTH_POOL_DIR") or "").strip()
-    if env_explicit:
-        return Path(env_explicit).resolve()
-    return resolve_free_manual_oauth_pool_dir(str(derive_output_root_from_run_dir(step_input.get("output_dir"))))
+    return _artifact_routing_config_for_step_input(step_input).free_manual_oauth_pool_dir
 
 
 def resolve_team_pre_pool(step_input: dict[str, Any]) -> Path:
@@ -205,7 +208,7 @@ def safe_count(value: Any, default: int) -> int:
 
 
 def team_stale_claim_seconds() -> int:
-    return safe_count(os.environ.get("REGISTER_TEAM_STALE_CLAIM_SECONDS") or 60, 60)
+    return _team_auth_runtime_config_for_step_input().stale_claim_seconds
 
 
 def sort_paths_newest_first(paths: list[Path]) -> list[Path]:
@@ -533,7 +536,9 @@ def team_expand_target_count(step_input: dict[str, Any] | None = None, default: 
     if isinstance(step_input, dict):
         candidate = str(step_input.get("member_count") or "").strip()
     if not candidate:
-        candidate = str(os.environ.get("REGISTER_TEAM_MEMBER_COUNT") or default).strip()
+        candidate = str(
+            _team_auth_runtime_config_for_step_input(step_input).team_member_count or default
+        ).strip()
     try:
         return max(1, int(candidate or default))
     except Exception:

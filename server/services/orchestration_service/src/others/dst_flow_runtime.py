@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -231,7 +230,7 @@ def run_dst_flow_once(
 ) -> DstExecutionResult:
     plan = load_dst_flow(flow_path)
     env_config = DstTaskEnvConfig.from_env()
-    free_stop_after_validate = str(os.environ.get("REGISTER_FREE_STOP_AFTER_VALIDATE") or "").strip().lower() in {"1", "true", "yes", "on"}
+    free_stop_after_validate = bool(env_config.free_stop_after_validate)
     failed_task_proxy_urls = list(failed_task_proxy_urls or [])
     last_result = DstExecutionResult(ok=False, task_attempts=1)
     save_as_index = {
@@ -258,8 +257,8 @@ def run_dst_flow_once(
                 "r2_public_base_url": str(r2_public_base_url or "").strip(),
                 "r2_upload_enabled": bool(r2_upload_enabled) if r2_upload_enabled is not None else False,
                 "small_success_pool_dir": str(small_success_pool_dir or "").strip(),
-                "mailbox_ttl_seconds": getattr(env_config, "mailbox_ttl_seconds", ""),
-                "mailbox_recreate_preallocated": bool(getattr(env_config, "mailbox_recreate_preallocated", False)),
+                "mailbox_ttl_seconds": env_config.mailbox_ttl_seconds,
+                "mailbox_recreate_preallocated": bool(env_config.mailbox_recreate_preallocated),
                 "team_pre_fill_count": env_config.team_pre_fill_count,
                 "team_member_count": env_config.team_member_count,
                 "team_workspace_selector": env_config.team_workspace_selector,

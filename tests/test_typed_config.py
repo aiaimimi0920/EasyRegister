@@ -55,6 +55,8 @@ class TypedConfigTests(unittest.TestCase):
                 "REGISTER_TEAM_WORKSPACE_SELECTOR": "codex",
                 "REGISTER_FREE_WORKSPACE_SELECTOR": "personal",
                 "REGISTER_FREE_OAUTH_DELAY_SECONDS": "90",
+                "REGISTER_MAILBOX_TTL_SECONDS": "120",
+                "REGISTER_MAILBOX_RECREATE_PREALLOCATED": "true",
                 "REGISTER_FREE_STOP_AFTER_VALIDATE": "true",
             },
             clear=True,
@@ -64,6 +66,8 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual("3", config.team_member_count)
         self.assertEqual("codex", config.team_workspace_selector)
         self.assertEqual("90", config.free_oauth_delay_seconds)
+        self.assertEqual("120", config.mailbox_ttl_seconds)
+        self.assertTrue(config.mailbox_recreate_preallocated)
         self.assertTrue(config.free_stop_after_validate)
 
     def test_runner_main_config_resolves_paths_and_defaults(self) -> None:
@@ -157,6 +161,7 @@ class TypedConfigTests(unittest.TestCase):
                     "REGISTER_TEAM_CHATGPT_SEAT_LIMIT": "9",
                     "REGISTER_TEAM_CODEX_SEAT_LIMIT": "6",
                     "REGISTER_TEAM_CODEX_SEAT_TYPES": "codex,usage_based",
+                    "REGISTER_TEAM_STALE_CLAIM_SECONDS": "77",
                     "REGISTER_TEAM_AUTH_TEMP_BLACKLIST_SECONDS": "7200",
                 },
                 clear=True,
@@ -169,6 +174,7 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual(8, config.chatgpt_seat_limit)
         self.assertEqual(6, config.codex_seat_limit)
         self.assertEqual(("codex", "usage_based"), config.codex_seat_types)
+        self.assertEqual(77, config.stale_claim_seconds)
         self.assertEqual(7200.0, config.temp_blacklist_seconds)
         self.assertEqual(resolve_shared_root(str(output_root)) / "team-mother-pool", config.mother_pool_dir)
 

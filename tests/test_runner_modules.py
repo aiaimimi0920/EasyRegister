@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from errors import ErrorCodes  # noqa: E402
-from others import runner_artifacts, runner_failures, runner_mailbox, runner_team_auth, runner_team_cleanup  # noqa: E402
+from others import runner_artifacts, runner_failures, runner_mailbox, runner_team_auth, runner_team_cleanup, runner_worker_maintenance  # noqa: E402
 
 
 class RunnerArtifactsTests(unittest.TestCase):
@@ -276,6 +276,46 @@ class RunnerTeamAuthTests(unittest.TestCase):
                 reservation=reservation,
             )
             self.assertIsNotNone(released)
+
+
+class RunnerWorkerMaintenanceTests(unittest.TestCase):
+    def test_resolve_worker_team_auth_falls_back_when_pinned_path_is_reserved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            pinned_path = tmp_path / "pinned.json"
+            pinned_path.write_text("{}", encoding="utf-8")
+            with mock.patch.object(
+                runner_worker_maintenance,
+                "_resolve_team_auth_pool",
+                return_value=[str(pinned_path), "fallback.json"],
+            ), mock.patch.object(
+                runner_worker_maintenance,
+                "_prune_stale_team_auth_caches",
+                return_value={},
+            ), mock.patch.object(
+                runner_worker_maintenance,
+                "_team_auth_is_reserved_for_team_expand",
+                return_value=(True, {"reason": "team-expand"}),
+            ), mock.patch.object(
+                runner_worker_maintenance,
+                "_select_team_auth_path",
+                return_value=("fallback.json", {"reservationIds": ["r1"]}),
+            ) as select_team_auth_path:
+                selection = runner_worker_maintenance.resolve_worker_team_auth(
+                    normalized_role="main",
+                    shared_root=tmp_path / "shared",
+                    output_root=tmp_path / "output",
+                    worker_label="worker-01",
+                    task_index=1,
+                    pinned_team_auth_path=str(pinned_path),
+                )
+        self.assertEqual([str(pinned_path), "fallback.json"], selection.team_auth_pool)
+        self.assertEqual("fallback.json", selection.selected_team_auth_path)
+        self.assertEqual({"reservationIds": ["r1"]}, selection.seat_reservation)
+        self.assertEqual(
+            [str(pinned_path), "fallback.json"],
+            select_team_auth_path.call_args.kwargs["team_auth_pool"],
+        )
 
 
 if __name__ == "__main__":
