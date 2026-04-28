@@ -10,169 +10,85 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, ""):
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    if str(_CURRENT_DIR) not in sys.path:
-        sys.path.append(str(_CURRENT_DIR))
-    from dashboard_server import ServiceRuntimeState, WorkerRuntimeState, start_dashboard_server_if_enabled
-    from dst_flow import run_dst_flow_once
-    from errors import ErrorCodes
-    from others.common import (
-        ensure_directory as _ensure_directory,
-        json_log as _json_log,
-    )
-    from others.config import (
-        CleanupRuntimeConfig,
-        RunnerMainConfig,
-    )
-    from others.paths import resolve_shared_root as _shared_root_from_output_root
-    from others.preflight import validate_runtime_preflight as _validate_runtime_preflight
-    from others.runner_artifacts import (
-        artifact_routing_config as _artifact_routing_config,
-        backfill_small_success_continue_pool as _backfill_small_success_continue_pool,
-        cleanup_run_output_dir as _cleanup_run_output_dir,
-        copy_small_success_artifacts_to_pool as _copy_small_success_artifacts_to_pool,
-        drain_oauth_pool_backlog as _drain_oauth_pool_backlog,
-        drain_small_success_wait_pool as _drain_small_success_wait_pool,
-        free_stop_after_validate_mode as _free_stop_after_validate_mode,
-        postprocess_free_success_artifact as _postprocess_free_success_artifact,
-        postprocess_team_success_artifacts as _postprocess_team_success_artifacts,
-        resolve_free_oauth_pool_dir as _resolve_free_oauth_pool_dir,
-        resolve_small_success_continue_pool_dir as _resolve_small_success_continue_pool_dir,
-        resolve_small_success_pool_dir as _resolve_small_success_pool_dir,
-        resolve_small_success_wait_pool_dir as _resolve_small_success_wait_pool_dir,
-        select_local_split as _select_local_split,
-        small_success_continue_prefill_count as _small_success_continue_prefill_count,
-        small_success_continue_prefill_min_age_seconds as _small_success_continue_prefill_min_age_seconds,
-        small_success_continue_prefill_target_count as _small_success_continue_prefill_target_count,
-        small_success_failure_target_pool_dir as _small_success_failure_target_pool_dir,
-        small_success_wait_seconds as _small_success_wait_seconds,
-        sync_refreshed_credentials_back_to_sources as _sync_refreshed_credentials_back_to_sources,
-        team_has_collectable_artifacts as _team_has_collectable_artifacts,
-        team_live_local_sync_loop as _team_live_local_sync_loop,
-    )
-    from others.runner_mailbox import (
-        mailbox_capacity_failure_detail as _mailbox_capacity_failure_detail,
-        record_business_mailbox_domain_outcome as _record_business_mailbox_domain_outcome,
-        clear_mailbox_capacity_failures as _clear_mailbox_capacity_failures,
-        mark_mailbox_capacity_failure as _mark_mailbox_capacity_failure,
-    )
-    from others.runner_team_auth import (
-        clear_team_auth_temporary_blacklist as _clear_team_auth_temporary_blacklist,
-        mark_team_auth_temporary_blacklist as _mark_team_auth_temporary_blacklist,
-        prune_stale_team_auth_caches as _prune_stale_team_auth_caches,
-        record_team_auth_recent_invite_result as _record_team_auth_recent_invite_result,
-        record_team_auth_recent_team_expand_result as _record_team_auth_recent_team_expand_result,
-        reconcile_team_auth_seat_state_from_result as _team_auth_reconcile_seat_state_from_result,
-        release_team_auth_seat_reservations as _team_auth_release_seat_reservations,
-        resolve_team_auth_pool as _resolve_team_auth_pool,
-        select_team_auth_path as _select_team_auth_path,
-        team_auth_is_reserved_for_team_expand as _team_auth_is_reserved_for_team_expand,
-        team_auth_is_temp_blacklisted as _team_auth_is_temp_blacklisted,
-        team_auth_runtime_config as _team_auth_runtime_config,
-        team_mother_identity_from_team_auth_path as _team_mother_identity_from_team_auth_path,
-        sync_team_auth_codex_seats_from_cleanup_result as _team_auth_sync_codex_seats_from_cleanup_result,
-    )
-    from others.runner_team_cleanup import (
-        all_team_auth_capacity_cooled as _all_team_auth_capacity_cooled,
-        clear_team_auth_capacity_cooldown as _clear_team_auth_capacity_cooldown,
-        load_team_cleanup_state as _load_team_cleanup_state,
-        mark_team_auth_capacity_cooldown as _mark_team_auth_capacity_cooldown,
-        team_capacity_failure_detail as _team_capacity_failure_detail,
-        trigger_codex_capacity_cleanup as _trigger_codex_capacity_cleanup,
-    )
-    from others.runner_failures import (
-        extra_failure_cooldown_seconds as _extra_failure_cooldown_seconds,
-        mark_team_mother_failure_cooldown as _mark_team_mother_failure_cooldown,
-        team_auth_blacklist_reason as _team_auth_blacklist_reason,
-        team_mother_failure_cooldown_seconds as _team_mother_failure_cooldown_seconds,
-    )
-    from others.result_artifacts import (
-        output_dict as _output_dict,
-        result_payload as _result_payload,
-        team_auth_path as _team_auth_path_from_result_payload,
-        team_mother_identity as _team_mother_identity_from_result_payload,
-    )
-else:
-    from .dashboard_server import ServiceRuntimeState, WorkerRuntimeState, start_dashboard_server_if_enabled
-    from .dst_flow import run_dst_flow_once
-    from .errors import ErrorCodes
-    from .others.common import (
-        ensure_directory as _ensure_directory,
-        json_log as _json_log,
-    )
-    from .others.config import (
-        CleanupRuntimeConfig,
-        RunnerMainConfig,
-    )
-    from .others.paths import resolve_shared_root as _shared_root_from_output_root
-    from .others.preflight import validate_runtime_preflight as _validate_runtime_preflight
-    from .others.runner_artifacts import (
-        artifact_routing_config as _artifact_routing_config,
-        backfill_small_success_continue_pool as _backfill_small_success_continue_pool,
-        cleanup_run_output_dir as _cleanup_run_output_dir,
-        copy_small_success_artifacts_to_pool as _copy_small_success_artifacts_to_pool,
-        drain_oauth_pool_backlog as _drain_oauth_pool_backlog,
-        drain_small_success_wait_pool as _drain_small_success_wait_pool,
-        free_stop_after_validate_mode as _free_stop_after_validate_mode,
-        postprocess_free_success_artifact as _postprocess_free_success_artifact,
-        postprocess_team_success_artifacts as _postprocess_team_success_artifacts,
-        resolve_free_oauth_pool_dir as _resolve_free_oauth_pool_dir,
-        resolve_small_success_continue_pool_dir as _resolve_small_success_continue_pool_dir,
-        resolve_small_success_pool_dir as _resolve_small_success_pool_dir,
-        resolve_small_success_wait_pool_dir as _resolve_small_success_wait_pool_dir,
-        select_local_split as _select_local_split,
-        small_success_continue_prefill_count as _small_success_continue_prefill_count,
-        small_success_continue_prefill_min_age_seconds as _small_success_continue_prefill_min_age_seconds,
-        small_success_continue_prefill_target_count as _small_success_continue_prefill_target_count,
-        small_success_failure_target_pool_dir as _small_success_failure_target_pool_dir,
-        small_success_wait_seconds as _small_success_wait_seconds,
-        sync_refreshed_credentials_back_to_sources as _sync_refreshed_credentials_back_to_sources,
-        team_has_collectable_artifacts as _team_has_collectable_artifacts,
-        team_live_local_sync_loop as _team_live_local_sync_loop,
-    )
-    from .others.runner_mailbox import (
-        mailbox_capacity_failure_detail as _mailbox_capacity_failure_detail,
-        record_business_mailbox_domain_outcome as _record_business_mailbox_domain_outcome,
-        clear_mailbox_capacity_failures as _clear_mailbox_capacity_failures,
-        mark_mailbox_capacity_failure as _mark_mailbox_capacity_failure,
-    )
-    from .others.runner_team_auth import (
-        clear_team_auth_temporary_blacklist as _clear_team_auth_temporary_blacklist,
-        mark_team_auth_temporary_blacklist as _mark_team_auth_temporary_blacklist,
-        prune_stale_team_auth_caches as _prune_stale_team_auth_caches,
-        record_team_auth_recent_invite_result as _record_team_auth_recent_invite_result,
-        record_team_auth_recent_team_expand_result as _record_team_auth_recent_team_expand_result,
-        reconcile_team_auth_seat_state_from_result as _team_auth_reconcile_seat_state_from_result,
-        release_team_auth_seat_reservations as _team_auth_release_seat_reservations,
-        resolve_team_auth_pool as _resolve_team_auth_pool,
-        select_team_auth_path as _select_team_auth_path,
-        team_auth_is_reserved_for_team_expand as _team_auth_is_reserved_for_team_expand,
-        team_auth_is_temp_blacklisted as _team_auth_is_temp_blacklisted,
-        team_auth_runtime_config as _team_auth_runtime_config,
-        team_mother_identity_from_team_auth_path as _team_mother_identity_from_team_auth_path,
-        sync_team_auth_codex_seats_from_cleanup_result as _team_auth_sync_codex_seats_from_cleanup_result,
-    )
-    from .others.runner_team_cleanup import (
-        all_team_auth_capacity_cooled as _all_team_auth_capacity_cooled,
-        clear_team_auth_capacity_cooldown as _clear_team_auth_capacity_cooldown,
-        load_team_cleanup_state as _load_team_cleanup_state,
-        mark_team_auth_capacity_cooldown as _mark_team_auth_capacity_cooldown,
-        team_capacity_failure_detail as _team_capacity_failure_detail,
-        trigger_codex_capacity_cleanup as _trigger_codex_capacity_cleanup,
-    )
-    from .others.runner_failures import (
-        extra_failure_cooldown_seconds as _extra_failure_cooldown_seconds,
-        mark_team_mother_failure_cooldown as _mark_team_mother_failure_cooldown,
-        team_auth_blacklist_reason as _team_auth_blacklist_reason,
-        team_mother_failure_cooldown_seconds as _team_mother_failure_cooldown_seconds,
-    )
-    from .others.result_artifacts import (
-        output_dict as _output_dict,
-        result_payload as _result_payload,
-        team_auth_path as _team_auth_path_from_result_payload,
-        team_mother_identity as _team_mother_identity_from_result_payload,
-    )
+from dashboard_server import ServiceRuntimeState, WorkerRuntimeState, start_dashboard_server_if_enabled
+from dst_flow import run_dst_flow_once
+from errors import ErrorCodes
+from others.common import (
+    ensure_directory as _ensure_directory,
+    json_log as _json_log,
+)
+from others.config import (
+    CleanupRuntimeConfig,
+    RunnerMainConfig,
+)
+from others.paths import resolve_shared_root as _shared_root_from_output_root
+from others.preflight import validate_runtime_preflight as _validate_runtime_preflight
+from others.runner_artifacts import (
+    artifact_routing_config as _artifact_routing_config,
+    backfill_small_success_continue_pool as _backfill_small_success_continue_pool,
+    cleanup_run_output_dir as _cleanup_run_output_dir,
+    copy_small_success_artifacts_to_pool as _copy_small_success_artifacts_to_pool,
+    drain_oauth_pool_backlog as _drain_oauth_pool_backlog,
+    drain_small_success_wait_pool as _drain_small_success_wait_pool,
+    free_stop_after_validate_mode as _free_stop_after_validate_mode,
+    postprocess_free_success_artifact as _postprocess_free_success_artifact,
+    postprocess_team_success_artifacts as _postprocess_team_success_artifacts,
+    resolve_free_oauth_pool_dir as _resolve_free_oauth_pool_dir,
+    resolve_small_success_continue_pool_dir as _resolve_small_success_continue_pool_dir,
+    resolve_small_success_pool_dir as _resolve_small_success_pool_dir,
+    resolve_small_success_wait_pool_dir as _resolve_small_success_wait_pool_dir,
+    select_local_split as _select_local_split,
+    small_success_continue_prefill_count as _small_success_continue_prefill_count,
+    small_success_continue_prefill_min_age_seconds as _small_success_continue_prefill_min_age_seconds,
+    small_success_continue_prefill_target_count as _small_success_continue_prefill_target_count,
+    small_success_failure_target_pool_dir as _small_success_failure_target_pool_dir,
+    small_success_wait_seconds as _small_success_wait_seconds,
+    sync_refreshed_credentials_back_to_sources as _sync_refreshed_credentials_back_to_sources,
+    team_has_collectable_artifacts as _team_has_collectable_artifacts,
+    team_live_local_sync_loop as _team_live_local_sync_loop,
+)
+from others.runner_mailbox import (
+    mailbox_capacity_failure_detail as _mailbox_capacity_failure_detail,
+    record_business_mailbox_domain_outcome as _record_business_mailbox_domain_outcome,
+    clear_mailbox_capacity_failures as _clear_mailbox_capacity_failures,
+    mark_mailbox_capacity_failure as _mark_mailbox_capacity_failure,
+)
+from others.runner_team_auth import (
+    clear_team_auth_temporary_blacklist as _clear_team_auth_temporary_blacklist,
+    mark_team_auth_temporary_blacklist as _mark_team_auth_temporary_blacklist,
+    prune_stale_team_auth_caches as _prune_stale_team_auth_caches,
+    record_team_auth_recent_invite_result as _record_team_auth_recent_invite_result,
+    record_team_auth_recent_team_expand_result as _record_team_auth_recent_team_expand_result,
+    reconcile_team_auth_seat_state_from_result as _team_auth_reconcile_seat_state_from_result,
+    release_team_auth_seat_reservations as _team_auth_release_seat_reservations,
+    resolve_team_auth_pool as _resolve_team_auth_pool,
+    select_team_auth_path as _select_team_auth_path,
+    team_auth_is_reserved_for_team_expand as _team_auth_is_reserved_for_team_expand,
+    team_auth_is_temp_blacklisted as _team_auth_is_temp_blacklisted,
+    team_auth_runtime_config as _team_auth_runtime_config,
+    team_mother_identity_from_team_auth_path as _team_mother_identity_from_team_auth_path,
+    sync_team_auth_codex_seats_from_cleanup_result as _team_auth_sync_codex_seats_from_cleanup_result,
+)
+from others.runner_team_cleanup import (
+    all_team_auth_capacity_cooled as _all_team_auth_capacity_cooled,
+    clear_team_auth_capacity_cooldown as _clear_team_auth_capacity_cooldown,
+    load_team_cleanup_state as _load_team_cleanup_state,
+    mark_team_auth_capacity_cooldown as _mark_team_auth_capacity_cooldown,
+    team_capacity_failure_detail as _team_capacity_failure_detail,
+    trigger_codex_capacity_cleanup as _trigger_codex_capacity_cleanup,
+)
+from others.runner_failures import (
+    extra_failure_cooldown_seconds as _extra_failure_cooldown_seconds,
+    mark_team_mother_failure_cooldown as _mark_team_mother_failure_cooldown,
+    team_auth_blacklist_reason as _team_auth_blacklist_reason,
+    team_mother_failure_cooldown_seconds as _team_mother_failure_cooldown_seconds,
+)
+from others.result_artifacts import (
+    output_dict as _output_dict,
+    result_payload as _result_payload,
+    team_auth_path as _team_auth_path_from_result_payload,
+    team_mother_identity as _team_mother_identity_from_result_payload,
+)
 
 def _cleanup_runtime_config() -> CleanupRuntimeConfig:
     return CleanupRuntimeConfig.from_env()

@@ -4,26 +4,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from others.common import ensure_directory, json_log, team_mother_cooldown_key, write_json_atomic
-    from others.config import CleanupRuntimeConfig, TeamAuthRuntimeConfig
-    from errors import ErrorCodes, result_error_matches, result_error_message, result_step_error
-    from others.paths import resolve_team_mother_cooldowns_dir
-    from others.result_artifacts import result_payload, team_mother_identity
-else:
-    from .common import ensure_directory, json_log, team_mother_cooldown_key, write_json_atomic
-    from .config import CleanupRuntimeConfig, TeamAuthRuntimeConfig
-    from ..errors import ErrorCodes, result_error_matches, result_error_message, result_step_error
-    from .paths import resolve_team_mother_cooldowns_dir
-    from .result_artifacts import result_payload, team_mother_identity
+from errors import ErrorCodes, result_error_matches, result_error_message, result_step_error
+from others.common import ensure_directory, json_log, team_mother_cooldown_key, write_json_atomic
+from others.config import CleanupRuntimeConfig, TeamAuthRuntimeConfig
+from others.paths import resolve_team_mother_cooldowns_dir
+from others.result_artifacts import result_payload, team_mother_identity
 
 
 def _cleanup_runtime_config() -> CleanupRuntimeConfig:

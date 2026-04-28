@@ -3,56 +3,26 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from others.artifact_pool_common import (
-        load_team_expand_progress_from_artifact,
-        path_is_inside_directory,
-        resolve_team_mother_pool,
-        resolve_team_pool,
-        resolve_team_pre_pool,
-        restore_to_pool,
-        team_expand_target_count,
-    )
-    from others.common import (
-        canonical_team_artifact_name,
-        ensure_directory,
-        extract_org_id,
-        standardize_export_credential_payload,
-    )
-    from others.prepared_artifacts import (
-        copy_delete_prepared_artifact_to_dir,
-        prepare_named_artifact,
-    )
-    from others.storage import load_json_payload
-else:
-    from .artifact_pool_common import (
-        load_team_expand_progress_from_artifact,
-        path_is_inside_directory,
-        resolve_team_mother_pool,
-        resolve_team_pool,
-        resolve_team_pre_pool,
-        restore_to_pool,
-        team_expand_target_count,
-    )
-    from .common import (
-        canonical_team_artifact_name,
-        ensure_directory,
-        extract_org_id,
-        standardize_export_credential_payload,
-    )
-    from .prepared_artifacts import (
-        copy_delete_prepared_artifact_to_dir,
-        prepare_named_artifact,
-    )
-    from .storage import load_json_payload
+from others.artifact_pool_common import (
+    load_team_expand_progress_from_artifact,
+    path_is_inside_directory,
+    resolve_team_mother_pool,
+    resolve_team_pool,
+    resolve_team_pre_pool,
+    restore_to_pool,
+    team_expand_target_count,
+)
+from others.common import (
+    canonical_team_artifact_name,
+    ensure_directory,
+    extract_org_id,
+    standardize_export_credential_payload,
+)
+from others.prepared_artifacts import (
+    copy_delete_prepared_artifact_to_dir,
+    prepare_named_artifact,
+)
+from others.storage import load_json_payload
 
 
 def mother_team_pool_name(source_path: Path, mother_artifact: dict[str, Any] | None = None) -> str:

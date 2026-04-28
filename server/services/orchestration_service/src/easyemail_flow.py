@@ -3,31 +3,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
-from pathlib import Path
 from typing import Any
 
-if __package__ in (None, ""):
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _SRC_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _SRC_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from others.bootstrap import ensure_local_bundle_imports
-    from others.local_config import read_easyemail_server_api_key
+from pathlib import Path
 
-    ensure_local_bundle_imports()
-    from others.runtime import resolve_mailbox
-    from others.storage import load_json_payload
-else:
-    from .others.bootstrap import ensure_local_bundle_imports
-    from .others.local_config import read_easyemail_server_api_key
+from others.bootstrap import ensure_local_bundle_imports
+from others.local_config import read_easyemail_server_api_key
 
-    ensure_local_bundle_imports()
-    from .others.runtime import resolve_mailbox
-    from .others.storage import load_json_payload
+ensure_local_bundle_imports()
+
+from others.runtime import resolve_mailbox
+from others.storage import load_json_payload
 
 from shared_mailbox.easy_email_client import recover_mailbox_capacity, release_mailbox
 

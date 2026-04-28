@@ -4,32 +4,17 @@ import argparse
 import json
 import os
 import re
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-if __package__ in (None, ""):
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _SRC_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _SRC_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from errors import ErrorCodes, build_error_details, resolve_retry_codes
-    from others.config import DstTaskEnvConfig
-    from artifact_pool_flow import dispatch_orchestration_step
-    from easyemail_flow import dispatch_easyemail_step
-    from easyproxy_flow import dispatch_easyproxy_step
-    from easyprotocol_flow import dispatch_easyprotocol_step
-else:
-    from .errors import ErrorCodes, build_error_details, resolve_retry_codes
-    from .others.config import DstTaskEnvConfig
-    from .artifact_pool_flow import dispatch_orchestration_step
-    from .easyemail_flow import dispatch_easyemail_step
-    from .easyproxy_flow import dispatch_easyproxy_step
-    from .easyprotocol_flow import dispatch_easyprotocol_step
+from artifact_pool_flow import dispatch_orchestration_step
+from easyemail_flow import dispatch_easyemail_step
+from easyprotocol_flow import dispatch_easyprotocol_step
+from easyproxy_flow import dispatch_easyproxy_step
+from errors import ErrorCodes, build_error_details, resolve_retry_codes
+from others.config import DstTaskEnvConfig
 
 
 PLACEHOLDER_RE = re.compile(r"^\{\{\s*([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*)\s*\}\}$")

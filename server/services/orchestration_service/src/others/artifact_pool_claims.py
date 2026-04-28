@@ -6,88 +6,42 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from others.artifact_pool_common import (
-        choose_random_files,
-        extract_free_oauth_organizations,
-        extract_free_oauth_plan_type,
-        has_free_personal_oauth_claims,
-        load_small_success_seed_validation,
-        load_team_expand_progress_from_artifact,
-        recover_stale_team_claims,
-        reset_claimed_team_expand_cycle_payload,
-        resolve_free_manual_oauth_pool,
-        resolve_small_success_claims,
-        resolve_small_success_pool,
-        resolve_small_success_wait_pool,
-        resolve_team_member_claims,
-        resolve_team_mother_claims,
-        resolve_team_mother_cooldowns,
-        resolve_team_mother_pool,
-        resolve_team_pre_pool,
-        restore_to_pool,
-        safe_count,
-        sort_paths_newest_first,
-        team_expand_progress_from_payload,
-        team_expand_progress_is_in_progress,
-        team_expand_target_count,
-        team_mother_has_inflight_primary_usage,
-        team_mother_is_cooling,
-        team_stale_claim_seconds,
-    )
-    from others.common import (
-        ensure_directory,
-        extract_account_id,
-        free_manual_oauth_preserve_codes,
-        free_manual_oauth_preserve_enabled,
-    )
-    from errors import ErrorCodes
-    from others.storage import load_json_payload
-else:
-    from .artifact_pool_common import (
-        choose_random_files,
-        extract_free_oauth_organizations,
-        extract_free_oauth_plan_type,
-        has_free_personal_oauth_claims,
-        load_small_success_seed_validation,
-        load_team_expand_progress_from_artifact,
-        recover_stale_team_claims,
-        reset_claimed_team_expand_cycle_payload,
-        resolve_free_manual_oauth_pool,
-        resolve_small_success_claims,
-        resolve_small_success_pool,
-        resolve_small_success_wait_pool,
-        resolve_team_member_claims,
-        resolve_team_mother_claims,
-        resolve_team_mother_cooldowns,
-        resolve_team_mother_pool,
-        resolve_team_pre_pool,
-        restore_to_pool,
-        safe_count,
-        sort_paths_newest_first,
-        team_expand_progress_from_payload,
-        team_expand_progress_is_in_progress,
-        team_expand_target_count,
-        team_mother_has_inflight_primary_usage,
-        team_mother_is_cooling,
-        team_stale_claim_seconds,
-    )
-    from .common import (
-        ensure_directory,
-        extract_account_id,
-        free_manual_oauth_preserve_codes,
-        free_manual_oauth_preserve_enabled,
-    )
-    from ..errors import ErrorCodes
-    from .storage import load_json_payload
+from errors import ErrorCodes
+from others.artifact_pool_common import (
+    choose_random_files,
+    extract_free_oauth_organizations,
+    extract_free_oauth_plan_type,
+    has_free_personal_oauth_claims,
+    load_small_success_seed_validation,
+    load_team_expand_progress_from_artifact,
+    recover_stale_team_claims,
+    reset_claimed_team_expand_cycle_payload,
+    resolve_free_manual_oauth_pool,
+    resolve_small_success_claims,
+    resolve_small_success_pool,
+    resolve_small_success_wait_pool,
+    resolve_team_member_claims,
+    resolve_team_mother_claims,
+    resolve_team_mother_cooldowns,
+    resolve_team_mother_pool,
+    resolve_team_pre_pool,
+    restore_to_pool,
+    safe_count,
+    sort_paths_newest_first,
+    team_expand_progress_from_payload,
+    team_expand_progress_is_in_progress,
+    team_expand_target_count,
+    team_mother_has_inflight_primary_usage,
+    team_mother_is_cooling,
+    team_stale_claim_seconds,
+)
+from others.common import (
+    ensure_directory,
+    extract_account_id,
+    free_manual_oauth_preserve_codes,
+    free_manual_oauth_preserve_enabled,
+)
+from others.storage import load_json_payload
 
 
 def sleep_seconds(*, step_input: dict[str, Any]) -> dict[str, Any]:

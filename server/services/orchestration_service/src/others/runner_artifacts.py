@@ -8,84 +8,40 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from easyprotocol_flow import dispatch_easyprotocol_step
-    from errors import ErrorCodes
-    from others.artifact_transfer import copy_artifact_to_dir
-    from others.common import (
-        ensure_directory,
-        extract_account_id,
-        free_manual_oauth_preserve_codes,
-        free_manual_oauth_preserve_enabled,
-        json_log,
-        standardize_export_credential_payload,
-        validate_small_success_seed_payload,
-        write_json_atomic,
-    )
-    from others.config import ArtifactRoutingConfig, DstTaskEnvConfig
-    from others.paths import resolve_shared_root as shared_root_from_output_root
-    from others.prepared_artifacts import (
-        merge_route_result,
-        prepare_artifact_for_folder,
-        prepare_free_artifact,
-        prepare_team_artifact,
-        route_prepared_artifact,
-        summarize_route_collections,
-    )
-    from others.result_artifacts import (
-        FREE_SMALL_SUCCESS_SOURCE_CANDIDATES,
-        credential_backwrite_actions,
-        first_existing_output_path,
-        normalized_team_pool_artifacts,
-        output_dict,
-        output_text,
-        result_payload,
-        restored_path_for_source,
-    )
-    from others.storage import load_json_payload
-else:
-    from ..easyprotocol_flow import dispatch_easyprotocol_step
-    from ..errors import ErrorCodes
-    from .artifact_transfer import copy_artifact_to_dir
-    from .common import (
-        ensure_directory,
-        extract_account_id,
-        free_manual_oauth_preserve_codes,
-        free_manual_oauth_preserve_enabled,
-        json_log,
-        standardize_export_credential_payload,
-        validate_small_success_seed_payload,
-        write_json_atomic,
-    )
-    from .config import ArtifactRoutingConfig, DstTaskEnvConfig
-    from .paths import resolve_shared_root as shared_root_from_output_root
-    from .prepared_artifacts import (
-        merge_route_result,
-        prepare_artifact_for_folder,
-        prepare_free_artifact,
-        prepare_team_artifact,
-        route_prepared_artifact,
-        summarize_route_collections,
-    )
-    from .result_artifacts import (
-        FREE_SMALL_SUCCESS_SOURCE_CANDIDATES,
-        credential_backwrite_actions,
-        first_existing_output_path,
-        normalized_team_pool_artifacts,
-        output_dict,
-        output_text,
-        result_payload,
-        restored_path_for_source,
-    )
-    from .storage import load_json_payload
+from easyprotocol_flow import dispatch_easyprotocol_step
+from errors import ErrorCodes
+from others.artifact_transfer import copy_artifact_to_dir
+from others.common import (
+    ensure_directory,
+    extract_account_id,
+    free_manual_oauth_preserve_codes,
+    free_manual_oauth_preserve_enabled,
+    json_log,
+    standardize_export_credential_payload,
+    validate_small_success_seed_payload,
+    write_json_atomic,
+)
+from others.config import ArtifactRoutingConfig, DstTaskEnvConfig
+from others.paths import resolve_shared_root as shared_root_from_output_root
+from others.prepared_artifacts import (
+    merge_route_result,
+    prepare_artifact_for_folder,
+    prepare_free_artifact,
+    prepare_team_artifact,
+    route_prepared_artifact,
+    summarize_route_collections,
+)
+from others.result_artifacts import (
+    FREE_SMALL_SUCCESS_SOURCE_CANDIDATES,
+    credential_backwrite_actions,
+    first_existing_output_path,
+    normalized_team_pool_artifacts,
+    output_dict,
+    output_text,
+    result_payload,
+    restored_path_for_source,
+)
+from others.storage import load_json_payload
 
 
 def artifact_routing_config(*, output_root: Path | None = None) -> ArtifactRoutingConfig:

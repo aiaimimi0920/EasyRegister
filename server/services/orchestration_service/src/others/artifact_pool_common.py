@@ -8,58 +8,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from others.common import (
-        extract_auth_claims,
-        team_mother_cooldown_key,
-        validate_small_success_seed_payload,
-    )
-    from others.paths import (
-        resolve_free_manual_oauth_pool_dir,
-        resolve_shared_root,
-        resolve_small_success_claims_dir,
-        resolve_small_success_continue_pool_dir,
-        resolve_small_success_pool_dir,
-        resolve_small_success_wait_pool_dir,
-        resolve_team_member_claims_dir,
-        resolve_team_mother_claims_dir,
-        resolve_team_mother_cooldowns_dir,
-        resolve_team_mother_pool_dir,
-        resolve_team_pool_dir,
-        resolve_team_post_pool_dir,
-        resolve_team_pre_pool_dir,
-    )
-    from others.storage import load_json_payload
-else:
-    from .common import (
-        extract_auth_claims,
-        team_mother_cooldown_key,
-        validate_small_success_seed_payload,
-    )
-    from .paths import (
-        resolve_free_manual_oauth_pool_dir,
-        resolve_shared_root,
-        resolve_small_success_claims_dir,
-        resolve_small_success_continue_pool_dir,
-        resolve_small_success_pool_dir,
-        resolve_small_success_wait_pool_dir,
-        resolve_team_member_claims_dir,
-        resolve_team_mother_claims_dir,
-        resolve_team_mother_cooldowns_dir,
-        resolve_team_mother_pool_dir,
-        resolve_team_pool_dir,
-        resolve_team_post_pool_dir,
-        resolve_team_pre_pool_dir,
-    )
-    from .storage import load_json_payload
+from others.common import (
+    extract_auth_claims,
+    team_mother_cooldown_key,
+    validate_small_success_seed_payload,
+)
+from others.paths import (
+    resolve_free_manual_oauth_pool_dir,
+    resolve_shared_root,
+    resolve_small_success_claims_dir,
+    resolve_small_success_continue_pool_dir,
+    resolve_small_success_pool_dir,
+    resolve_small_success_wait_pool_dir,
+    resolve_team_member_claims_dir,
+    resolve_team_mother_claims_dir,
+    resolve_team_mother_cooldowns_dir,
+    resolve_team_mother_pool_dir,
+    resolve_team_pool_dir,
+    resolve_team_post_pool_dir,
+    resolve_team_pre_pool_dir,
+)
+from others.storage import load_json_payload
 
 
 def derive_output_root_from_run_dir(output_dir: str | None) -> Path:

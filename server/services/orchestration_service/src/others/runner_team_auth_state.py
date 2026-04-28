@@ -8,50 +8,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from others.common import (
-        decode_jwt_payload,
-        ensure_directory,
-        extract_auth_claims,
-        json_log,
-        team_mother_cooldown_key,
-        write_json_atomic,
-    )
-    from others.config import TeamAuthRuntimeConfig
-    from others.paths import (
-        resolve_team_mother_claims_dir,
-        resolve_team_mother_cooldowns_dir,
-        resolve_team_mother_pool_dir,
-    )
-    from others.result_artifacts import team_mother_identity as team_mother_identity_from_result_payload
-    from others.runner_team_cleanup import team_auth_is_capacity_cooled
-    from others.storage import load_json_payload
-else:
-    from .common import (
-        decode_jwt_payload,
-        ensure_directory,
-        extract_auth_claims,
-        json_log,
-        team_mother_cooldown_key,
-        write_json_atomic,
-    )
-    from .config import TeamAuthRuntimeConfig
-    from .paths import (
-        resolve_team_mother_claims_dir,
-        resolve_team_mother_cooldowns_dir,
-        resolve_team_mother_pool_dir,
-    )
-    from .result_artifacts import team_mother_identity as team_mother_identity_from_result_payload
-    from .runner_team_cleanup import team_auth_is_capacity_cooled
-    from .storage import load_json_payload
+from others.common import (
+    decode_jwt_payload,
+    ensure_directory,
+    extract_auth_claims,
+    json_log,
+    team_mother_cooldown_key,
+    write_json_atomic,
+)
+from others.config import TeamAuthRuntimeConfig
+from others.paths import (
+    resolve_team_mother_claims_dir,
+    resolve_team_mother_cooldowns_dir,
+    resolve_team_mother_pool_dir,
+)
+from others.result_artifacts import team_mother_identity as team_mother_identity_from_result_payload
+from others.runner_team_cleanup import team_auth_is_capacity_cooled
+from others.storage import load_json_payload
 
 
 def team_auth_runtime_config(

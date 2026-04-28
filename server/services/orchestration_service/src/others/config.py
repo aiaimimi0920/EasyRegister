@@ -4,28 +4,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from paths import (
-        resolve_free_oauth_pool_dir,
-        resolve_shared_root,
-        resolve_small_success_pool_dir,
-        resolve_team_mother_pool_dir,
-    )
-else:
-    from .paths import (
-        resolve_free_oauth_pool_dir,
-        resolve_shared_root,
-        resolve_small_success_pool_dir,
-        resolve_team_mother_pool_dir,
-    )
+from others.paths import (
+    resolve_free_oauth_pool_dir,
+    resolve_shared_root,
+    resolve_small_success_pool_dir,
+    resolve_team_mother_pool_dir,
+)
 
 
 def env_text(name: str, default: str = "") -> str:

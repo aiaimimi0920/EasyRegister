@@ -4,34 +4,15 @@ import os
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from config import (
-        ArtifactRoutingConfig,
-        CleanupRuntimeConfig,
-        MailboxRuntimeConfig,
-        ProxyRuntimeConfig,
-        RunnerMainConfig,
-        TeamAuthRuntimeConfig,
-    )
-    from paths import resolve_shared_root
-else:
-    from .config import (
-        ArtifactRoutingConfig,
-        CleanupRuntimeConfig,
-        MailboxRuntimeConfig,
-        ProxyRuntimeConfig,
-        RunnerMainConfig,
-        TeamAuthRuntimeConfig,
-    )
-    from .paths import resolve_shared_root
+from others.config import (
+    ArtifactRoutingConfig,
+    CleanupRuntimeConfig,
+    MailboxRuntimeConfig,
+    ProxyRuntimeConfig,
+    RunnerMainConfig,
+    TeamAuthRuntimeConfig,
+)
+from others.paths import resolve_shared_root
 
 
 DEFAULT_EASY_PROXY_BASE_URL_HOST = "http://localhost:19888"

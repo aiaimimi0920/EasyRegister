@@ -10,20 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from bootstrap import ensure_local_bundle_imports
-    from config import ProxyRuntimeConfig, env_first_text
-else:
-    from .bootstrap import ensure_local_bundle_imports
-    from .config import ProxyRuntimeConfig, env_first_text
+from others.bootstrap import ensure_local_bundle_imports
+from others.config import ProxyRuntimeConfig, env_first_text
 
 ensure_local_bundle_imports()
 

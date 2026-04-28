@@ -2,26 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
-from pathlib import Path
 from typing import Any
 
-if __package__ in (None, ""):
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _SRC_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _SRC_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from others.bootstrap import ensure_local_bundle_imports
+from others.bootstrap import ensure_local_bundle_imports
 
-    ensure_local_bundle_imports()
-    from others.runtime import FlowProxyLease, acquire_flow_proxy_lease, release_flow_proxy_lease
-else:
-    from .others.bootstrap import ensure_local_bundle_imports
+ensure_local_bundle_imports()
 
-    ensure_local_bundle_imports()
-    from .others.runtime import FlowProxyLease, acquire_flow_proxy_lease, release_flow_proxy_lease
+from others.runtime import FlowProxyLease, acquire_flow_proxy_lease, release_flow_proxy_lease
 
 
 def _proxy_failure_class_from_code(code: str) -> tuple[str, str]:

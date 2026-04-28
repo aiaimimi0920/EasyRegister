@@ -5,26 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from easyemail_flow import dispatch_easyemail_step
-    from errors import ErrorCodes, result_error_matches, result_error_message
-    from others.common import ensure_directory
-    from others.config import CleanupRuntimeConfig, MailboxRuntimeConfig
-    from others.file_lock import release_lock, try_acquire_lock
-else:
-    from ..easyemail_flow import dispatch_easyemail_step
-    from ..errors import ErrorCodes, result_error_matches, result_error_message
-    from .common import ensure_directory
-    from .config import CleanupRuntimeConfig, MailboxRuntimeConfig
-    from .file_lock import release_lock, try_acquire_lock
+from easyemail_flow import dispatch_easyemail_step
+from errors import ErrorCodes, result_error_matches, result_error_message
+from others.common import ensure_directory
+from others.config import CleanupRuntimeConfig, MailboxRuntimeConfig
+from others.file_lock import release_lock, try_acquire_lock
 
 
 def _cleanup_runtime_config() -> CleanupRuntimeConfig:

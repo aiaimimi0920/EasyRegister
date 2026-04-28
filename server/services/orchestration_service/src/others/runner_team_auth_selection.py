@@ -6,68 +6,32 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from others.common import json_log
-    from others.runner_team_auth_state import (
-        _load_json_dict,
-        _team_auth_sall_cc_weight,
-        _team_auth_team_expand_failure_weight_step,
-        _team_auth_team_expand_floor_weight,
-        _team_auth_team_expand_success_credit,
-        _team_auth_team_expand_window_seconds,
-        _team_auth_zero_success_min_attempts,
-        _team_auth_zero_success_window_seconds,
-        get_team_auth_seat_summary,
-        load_team_mother_availability_state,
-        prune_team_mother_availability_state,
-        team_auth_has_required_seats,
-        team_auth_identity_keys_from_paths,
-        team_auth_is_reserved_for_team_expand,
-        team_auth_path_is_explicit_mother,
-        team_auth_seat_request_for_role,
-        team_mother_cooldowns_dir_for_shared_root,
-        team_mother_identity_from_team_auth_path,
-        team_mother_identity_key,
-        team_mother_reserved_identity_keys_for_shared_root,
-        try_reserve_required_team_auth_seats,
-        write_team_mother_availability_state,
-    )
-    from others.runner_team_cleanup import team_auth_is_capacity_cooled, team_auth_state_dir, team_cleanup_state_path
-else:
-    from .common import json_log
-    from .runner_team_auth_state import (
-        _load_json_dict,
-        _team_auth_sall_cc_weight,
-        _team_auth_team_expand_failure_weight_step,
-        _team_auth_team_expand_floor_weight,
-        _team_auth_team_expand_success_credit,
-        _team_auth_team_expand_window_seconds,
-        _team_auth_zero_success_min_attempts,
-        _team_auth_zero_success_window_seconds,
-        get_team_auth_seat_summary,
-        load_team_mother_availability_state,
-        prune_team_mother_availability_state,
-        team_auth_has_required_seats,
-        team_auth_identity_keys_from_paths,
-        team_auth_is_reserved_for_team_expand,
-        team_auth_path_is_explicit_mother,
-        team_auth_seat_request_for_role,
-        team_mother_cooldowns_dir_for_shared_root,
-        team_mother_identity_from_team_auth_path,
-        team_mother_identity_key,
-        team_mother_reserved_identity_keys_for_shared_root,
-        try_reserve_required_team_auth_seats,
-        write_team_mother_availability_state,
-    )
-    from .runner_team_cleanup import team_auth_is_capacity_cooled, team_auth_state_dir, team_cleanup_state_path
+from others.common import json_log
+from others.runner_team_auth_state import (
+    _load_json_dict,
+    _team_auth_sall_cc_weight,
+    _team_auth_team_expand_failure_weight_step,
+    _team_auth_team_expand_floor_weight,
+    _team_auth_team_expand_success_credit,
+    _team_auth_team_expand_window_seconds,
+    _team_auth_zero_success_min_attempts,
+    _team_auth_zero_success_window_seconds,
+    get_team_auth_seat_summary,
+    load_team_mother_availability_state,
+    prune_team_mother_availability_state,
+    team_auth_has_required_seats,
+    team_auth_identity_keys_from_paths,
+    team_auth_is_reserved_for_team_expand,
+    team_auth_path_is_explicit_mother,
+    team_auth_seat_request_for_role,
+    team_mother_cooldowns_dir_for_shared_root,
+    team_mother_identity_from_team_auth_path,
+    team_mother_identity_key,
+    team_mother_reserved_identity_keys_for_shared_root,
+    try_reserve_required_team_auth_seats,
+    write_team_mother_availability_state,
+)
+from others.runner_team_cleanup import team_auth_is_capacity_cooled, team_auth_state_dir, team_cleanup_state_path
 
 
 def team_auth_email_domain(*, team_auth_path: str) -> str:

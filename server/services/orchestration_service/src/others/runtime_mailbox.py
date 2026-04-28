@@ -6,27 +6,11 @@ import random
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, "", "others"):
-    import sys
-    from pathlib import Path
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from bootstrap import ensure_local_bundle_imports
-    from config import MailboxRuntimeConfig, env_text
-    from local_config import read_easyemail_server_api_key
-    from paths import resolve_shared_root as _shared_root_from_output_root
-    from errors import ensure_protocol_runtime_error
-else:
-    from .bootstrap import ensure_local_bundle_imports
-    from .config import MailboxRuntimeConfig, env_text
-    from .local_config import read_easyemail_server_api_key
-    from .paths import resolve_shared_root as _shared_root_from_output_root
-    from ..errors import ensure_protocol_runtime_error
+from errors import ensure_protocol_runtime_error
+from others.bootstrap import ensure_local_bundle_imports
+from others.config import MailboxRuntimeConfig, env_text
+from others.local_config import read_easyemail_server_api_key
+from others.paths import resolve_shared_root as _shared_root_from_output_root
 
 ensure_local_bundle_imports()
 

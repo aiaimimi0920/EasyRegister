@@ -5,26 +5,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, "", "others"):
-    import sys
-
-    _CURRENT_DIR = Path(__file__).resolve().parent
-    _PARENT_DIR = _CURRENT_DIR.parent
-    for _candidate in (_CURRENT_DIR, _PARENT_DIR):
-        candidate_text = str(_candidate)
-        if candidate_text not in sys.path:
-            sys.path.append(candidate_text)
-    from easyprotocol_flow import dispatch_easyprotocol_step
-    from errors import ErrorCodes, result_error_matches, result_error_message
-    from others.common import ensure_directory
-    from others.config import CleanupRuntimeConfig
-    from others.file_lock import release_lock, try_acquire_lock
-else:
-    from ..easyprotocol_flow import dispatch_easyprotocol_step
-    from ..errors import ErrorCodes, result_error_matches, result_error_message
-    from .common import ensure_directory
-    from .config import CleanupRuntimeConfig
-    from .file_lock import release_lock, try_acquire_lock
+from easyprotocol_flow import dispatch_easyprotocol_step
+from errors import ErrorCodes, result_error_matches, result_error_message
+from others.common import ensure_directory
+from others.config import CleanupRuntimeConfig
+from others.file_lock import release_lock, try_acquire_lock
 
 
 def cleanup_runtime_config() -> CleanupRuntimeConfig:
