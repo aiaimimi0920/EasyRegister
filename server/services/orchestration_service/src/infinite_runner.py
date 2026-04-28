@@ -26,6 +26,7 @@ if __package__ in (None, ""):
         RunnerMainConfig,
     )
     from others.paths import resolve_shared_root as _shared_root_from_output_root
+    from others.preflight import validate_runtime_preflight as _validate_runtime_preflight
     from others.runner_artifacts import (
         artifact_routing_config as _artifact_routing_config,
         backfill_small_success_continue_pool as _backfill_small_success_continue_pool,
@@ -105,6 +106,7 @@ else:
         RunnerMainConfig,
     )
     from .others.paths import resolve_shared_root as _shared_root_from_output_root
+    from .others.preflight import validate_runtime_preflight as _validate_runtime_preflight
     from .others.runner_artifacts import (
         artifact_routing_config as _artifact_routing_config,
         backfill_small_success_continue_pool as _backfill_small_success_continue_pool,
@@ -902,6 +904,8 @@ def _task_slots_exhausted(*, task_counter: Any, max_runs: int) -> bool:
 
 
 def main() -> int:
+    preflight_summary = _validate_runtime_preflight()
+    _json_log({"event": "register_runtime_preflight_ok", **preflight_summary})
     config = RunnerMainConfig.from_env()
     output_root = config.output_root
     _ensure_directory(output_root)

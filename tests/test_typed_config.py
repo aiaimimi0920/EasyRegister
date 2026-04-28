@@ -24,6 +24,7 @@ from others.config import (  # noqa: E402
     env_percent_value,
     env_ratio,
 )
+from others.preflight import validate_runtime_preflight  # noqa: E402
 from others.paths import resolve_shared_root  # noqa: E402
 
 
@@ -220,6 +221,40 @@ class TypedConfigTests(unittest.TestCase):
         ):
             self.assertAlmostEqual(0.75, env_ratio("RATIO_VALUE"))
             self.assertAlmostEqual(75.0, env_percent_value("PERCENT_VALUE"))
+
+    def test_runtime_preflight_rejects_partial_r2_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_R2_BUCKET": "artifacts",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "incomplete_r2_config"):
+                    validate_runtime_preflight()
+
+    def test_runtime_preflight_accepts_minimal_local_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            flow_path = Path(tmp_dir) / "flow.json"
+            flow_path.write_text(
+                '{"definition":{"steps":[{"id":"acquire-mailbox","type":"acquire_mailbox","metadata":{"owner":"easyemail"}}]}}',
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_FLOW_PATH": str(flow_path),
+                },
+                clear=True,
+            ):
+                summary = validate_runtime_preflight()
+        self.assertEqual(str(output_root.resolve()), summary["outputRoot"])
+        self.assertEqual(str(flow_path.resolve()), summary["flowPath"])
 
 
 if __name__ == "__main__":

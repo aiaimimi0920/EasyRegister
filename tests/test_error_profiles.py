@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -132,6 +133,20 @@ class ErrorProfilesTests(unittest.TestCase):
                 attempt_index=1,
             )
         )
+
+    def test_load_dst_flow_requires_explicit_owner_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "missing-owner.json"
+            flow_path.write_text(
+                (
+                    '{"definition":{"steps":['
+                    '{"id":"acquire-mailbox","type":"acquire_mailbox","metadata":{"stage":"mailbox-acquire"}}'
+                    ']}}'
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "missing metadata.owner"):
+                dst_flow.load_dst_flow(flow_path)
 
 
 if __name__ == "__main__":

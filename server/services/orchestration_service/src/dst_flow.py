@@ -80,33 +80,6 @@ class DstExecutionResult:
         }
 
 
-STEP_OWNERS: dict[str, str] = {
-    "acquire_mailbox": "easyemail",
-    "acquire_proxy_chain": "easyproxy",
-    "acquire_small_success_artifact": "orchestration",
-    "validate_free_personal_oauth": "orchestration",
-    "sleep_seconds": "orchestration",
-    "fill_team_pre_pool": "orchestration",
-    "acquire_team_mother_artifact": "orchestration",
-    "acquire_team_member_candidates": "orchestration",
-    "collect_team_pool_artifacts": "orchestration",
-    "create_openai_account": "easyprotocol",
-    "initialize_platform_organization": "easyprotocol",
-    "initialize_chatgpt_login_session": "easyprotocol",
-    "upload_file_to_r2": "easyprotocol",
-    "invite_codex_member": "easyprotocol",
-    "obtain_codex_oauth": "easyprotocol",
-    "revoke_codex_member": "easyprotocol",
-    "obtain_team_mother_oauth": "easyprotocol",
-    "invite_team_members": "easyprotocol",
-    "obtain_team_member_oauth_batch": "easyprotocol",
-    "revoke_team_members": "easyprotocol",
-    "finalize_team_batch": "orchestration",
-    "finalize_small_success_artifact": "orchestration",
-    "release_proxy_chain": "easyproxy",
-    "release_mailbox": "easyemail",
-}
-
 OWNER_DISPATCHERS: dict[str, Callable[..., dict[str, Any]]] = {
     "orchestration": dispatch_orchestration_step,
     "easyemail": dispatch_easyemail_step,
@@ -308,7 +281,7 @@ def _run_statement_once(
     state: dict[str, Any],
     result: DstExecutionResult,
 ) -> Any:
-    owner = str(statement.metadata.get("owner") or STEP_OWNERS.get(statement.step_type) or "").strip().lower()
+    owner = str(statement.metadata.get("owner") or "").strip().lower()
     if not owner:
         raise RuntimeError(f"dst_step_owner_missing:{statement.step_type}")
     dispatcher = OWNER_DISPATCHERS.get(owner)
@@ -365,13 +338,19 @@ def load_dst_flow(path: str | Path | None = None) -> DstPlan:
         step_type = str(raw_step.get("type") or "").strip()
         if not step_type:
             raise RuntimeError(f"dst flow step {step_id} missing type")
+        metadata = raw_step.get("metadata") if isinstance(raw_step.get("metadata"), dict) else {}
+        owner = str(metadata.get("owner") or "").strip().lower()
+        if not owner:
+            raise RuntimeError(f"dst flow step {step_id} missing metadata.owner")
+        if owner not in OWNER_DISPATCHERS:
+            raise RuntimeError(f"dst flow step {step_id} unsupported owner: {owner}")
         result_steps.append(
             DstStatement(
                 step_id=step_id,
                 step_type=step_type,
                 input=raw_step.get("input") if isinstance(raw_step.get("input"), dict) else {},
                 save_as=str(raw_step.get("saveAs") or raw_step.get("save_as") or "").strip() or None,
-                metadata=raw_step.get("metadata") if isinstance(raw_step.get("metadata"), dict) else {},
+                metadata=metadata,
             )
         )
     return DstPlan(

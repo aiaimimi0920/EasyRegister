@@ -49,6 +49,7 @@ if __package__ in (None, "", "others"):
         free_manual_oauth_preserve_codes,
         free_manual_oauth_preserve_enabled,
     )
+    from errors import ErrorCodes
     from others.storage import load_json_payload
 else:
     from .artifact_pool_common import (
@@ -85,6 +86,7 @@ else:
         free_manual_oauth_preserve_codes,
         free_manual_oauth_preserve_enabled,
     )
+    from ..errors import ErrorCodes
     from .storage import load_json_payload
 
 
@@ -179,7 +181,7 @@ def finalize_small_success_artifact(*, step_input: dict[str, Any]) -> dict[str, 
             "task_error_code": task_error_code,
             "email": str(artifact.get("email") or "").strip(),
         }
-    if task_error_code == "free_personal_workspace_missing":
+    if task_error_code == ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING:
         pool_dir = resolve_small_success_wait_pool(step_input)
     else:
         pool_dir = resolve_small_success_pool(
@@ -244,9 +246,9 @@ def validate_free_personal_oauth(*, step_input: dict[str, Any]) -> dict[str, Any
 
     return {
         "ok": False,
-        "status": "free_personal_workspace_missing",
-        "code": "free_personal_workspace_missing",
-        "detail": "free_personal_workspace_missing",
+        "status": ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING,
+        "code": ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING,
+        "detail": ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING,
         "oauth_account_id": oauth_account_id,
         "team_account_id": team_account_id,
         "validation_mode": "missing_personal_claims",

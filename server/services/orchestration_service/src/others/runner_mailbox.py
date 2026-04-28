@@ -161,7 +161,7 @@ def trigger_mailbox_capacity_recovery(*, shared_root: Path, detail: str) -> dict
             result = dispatch_easyemail_step(
                 step_type="recover_mailbox_capacity",
                 step_input={
-                    "failure_code": "mailbox_unavailable",
+                    "failure_code": ErrorCodes.MAILBOX_UNAVAILABLE,
                     "detail": str(detail or "").strip(),
                     "provider_type_key": provider_type_key,
                     "force": True,

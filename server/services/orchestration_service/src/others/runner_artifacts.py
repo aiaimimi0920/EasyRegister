@@ -18,6 +18,7 @@ if __package__ in (None, "", "others"):
         if candidate_text not in sys.path:
             sys.path.append(candidate_text)
     from easyprotocol_flow import dispatch_easyprotocol_step
+    from errors import ErrorCodes
     from others.artifact_transfer import copy_artifact_to_dir
     from others.common import (
         ensure_directory,
@@ -52,6 +53,7 @@ if __package__ in (None, "", "others"):
     from others.storage import load_json_payload
 else:
     from ..easyprotocol_flow import dispatch_easyprotocol_step
+    from ..errors import ErrorCodes
     from .artifact_transfer import copy_artifact_to_dir
     from .common import (
         ensure_directory,
@@ -239,7 +241,7 @@ def small_success_failure_target_pool_dir(*, output_root: Path, result_payload_v
         ).strip()
     if free_manual_oauth_preserve_enabled() and error_code in free_manual_oauth_preserve_codes():
         return resolve_free_manual_oauth_pool_dir(output_root=output_root)
-    if error_code == "free_personal_workspace_missing":
+    if error_code == ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING:
         return resolve_small_success_wait_pool_dir(output_root=output_root)
     return resolve_small_success_pool_dir(output_root=output_root)
 
