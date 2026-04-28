@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from errors import ErrorCodes  # noqa: E402
-from others import runner_artifacts, runner_failures, runner_mailbox, runner_team_cleanup  # noqa: E402
+from others import runner_artifacts, runner_failures, runner_mailbox, runner_team_auth, runner_team_cleanup  # noqa: E402
 
 
 class RunnerArtifactsTests(unittest.TestCase):
@@ -201,6 +201,81 @@ class RunnerTeamCleanupTests(unittest.TestCase):
                     team_auth_path=team_auth_path,
                 )
             )
+
+
+class RunnerTeamAuthTests(unittest.TestCase):
+    def test_temp_blacklist_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            source_path = shared_root / "mother.json"
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.write_text(
+                '{"email":"mother@example.com","account_id":"acct_123"}',
+                encoding="utf-8",
+            )
+            team_auth_path = str(source_path)
+            identity = {
+                "original_name": "mother.json",
+                "email": "mother@example.com",
+                "account_id": "acct_123",
+            }
+            record = runner_team_auth.mark_team_auth_temporary_blacklist(
+                shared_root=shared_root,
+                team_auth_path=team_auth_path,
+                identity=identity,
+                reason="token invalidated",
+                blacklist_seconds=120.0,
+                worker_label="worker-01",
+                task_index=1,
+            )
+            self.assertIsNotNone(record)
+            blacklisted, _ = runner_team_auth.team_auth_is_temp_blacklisted(
+                shared_root=shared_root,
+                team_auth_path=team_auth_path,
+            )
+            self.assertTrue(blacklisted)
+            self.assertTrue(
+                runner_team_auth.clear_team_auth_temporary_blacklist(
+                    shared_root=shared_root,
+                    team_auth_path=team_auth_path,
+                    identity=identity,
+                    worker_label="worker-01",
+                    task_index=1,
+                )
+            )
+            blacklisted, _ = runner_team_auth.team_auth_is_temp_blacklisted(
+                shared_root=shared_root,
+                team_auth_path=team_auth_path,
+            )
+            self.assertFalse(blacklisted)
+
+    def test_release_reservation_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            source_path = shared_root / "mother.json"
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.write_text(
+                '{"email":"mother@example.com","account_id":"acct_123"}',
+                encoding="utf-8",
+            )
+            team_auth_path = str(source_path)
+            reserved, reservation, summary = runner_team_auth.try_reserve_required_team_auth_seats(
+                shared_root=shared_root,
+                team_auth_path=team_auth_path,
+                required_codex_seats=1,
+                required_chatgpt_seats=0,
+                reservation_owner="worker-01",
+                reservation_context="main:1",
+                source_role="main",
+            )
+            self.assertTrue(reserved)
+            self.assertIsNotNone(reservation)
+            self.assertIsInstance(summary, dict)
+            released = runner_team_auth.release_team_auth_seat_reservations(
+                shared_root=shared_root,
+                reservation=reservation,
+            )
+            self.assertIsNotNone(released)
 
 
 if __name__ == "__main__":
