@@ -15,4 +15,4 @@ RUN python -c "import curl_cffi" \
         && rm -rf /var/lib/apt/lists/* \
         && python -m pip install --no-cache-dir --retries 10 --timeout 300 curl-cffi)
 
-CMD ["python", "server/services/orchestration_service/src/infinite_runner.py"]
+CMD ["python", "-m", "infinite_runner"]

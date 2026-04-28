@@ -1,6 +1,6 @@
 # EasyRegister
 
-这个目录是从 `NeuroPlugin` 中裁剪出来的、当前真实在用的注册运行时闭包。
+这个目录是当前独立维护的 `EasyRegister` 注册运行时闭包。
 
 目标不是复制整个旧工程，而是保留当前已经跑通的：
 
@@ -17,7 +17,7 @@
 - EasyBrowser 服务实现
 - 旧工程中的测试、调试、快照、历史产物
 
-这些 EasyXXX 服务仍然应由原始仓库或容器实例提供，`RegisterService` 只负责调用它们。
+这些 EasyXXX 服务仍然应由外部仓库或容器实例提供，`EasyRegister` 只负责调用它们。
 
 另外，迁移过程中已经移除了不属于当前 DST 主链热路径的旧入口文件，例如：
 
@@ -29,7 +29,7 @@
 ## 当前目录结构
 
 - `compose/`
-  - `RegisterService` 容器实例的单独编排入口
+  - `EasyRegister` 容器实例的单独编排入口
 - `server/services/orchestration_service/flows/`
   - 顶层 DST / semantic-flow
 - `server/services/orchestration_service/src/`
@@ -39,9 +39,9 @@
 - `server/services/python_shared/src/`
   - 调用 EasyEmail / EasyProxy 的客户端代码
 
-`RegisterService` 当前不再内嵌本地协议执行器，协议执行边界已经变成：
+`EasyRegister` 当前不再内嵌本地协议执行器，协议执行边界已经变成：
 
-- `RegisterService` -> `EasyProtocol` -> `PythonProtocol`
+- `EasyRegister` -> `EasyProtocol` -> `PythonProtocol`
 
 ## 当前主流程
 
@@ -54,6 +54,7 @@
 - `server/services/orchestration_service/src/infinite_runner.py`
   - 这是当前薄入口文件
   - 实际 supervisor 实现在 `server/services/orchestration_service/src/others/runner_supervisor.py`
+  - 当前推荐模块入口是 `python -m infinite_runner`
 
 当前顶层步骤：
 
@@ -87,11 +88,11 @@
 - `MAILBOX_SERVICE_BASE_URL = http://localhost:18080`
 - `MAILBOX_SERVICE_API_KEY`
   - 从当前工作树向上搜索已有的 `EmailService/deploy/EasyEmail/config.yaml`
-  - 不在 `RegisterService` 内部单独维护一份 EasyEmail 配置
+  - 不在 `EasyRegister` 内部单独维护一份 EasyEmail 配置
 
 当前邮箱策略已经收口成“由 `EasyEmail` 决定 provider 路由”：
 
-- `RegisterService` 默认不再本地维护 provider 主次顺序
+- `EasyRegister` 默认不再本地维护 provider 主次顺序
 - 主注册 / 续跑 / team 三类实例默认都直接调用 `EasyEmail` 的 mailbox 能力接口
 - 如果不显式设置邮箱策略相关环境变量，就使用 `EasyEmail` 自己的默认 strategy mode
 - 当前默认会请求 `EasyEmail` 的 `high-availability` routing profile
@@ -99,15 +100,15 @@
 - `REGISTER_MAILBOX_STRATEGY_MODE_ID` 现在只作为可选的 strategy mode 透传给 `EasyEmail`
 - `REGISTER_MAILBOX_ROUTING_PROFILE_ID` 现在只作为可选的 routing profile id 透传给 `EasyEmail`
 
-`high-availability` 是 `EasyEmail` 内部的通用路由档位，不是 `RegisterService`
+`high-availability` 是 `EasyEmail` 内部的通用路由档位，不是 `EasyRegister`
 里的业务白名单。当前它会把高可用邮箱优先收敛到 `m2u + moemail`，以后如果你要
 调整高可用池，应优先在 `EasyEmail` 内部变更这个档位，而不是改业务侧代码。
 
 其中 provider 的具体能力差异都应由 `EasyEmail` 内部处理。
 
-- `RegisterService` 默认只关心 open / read / release 这些统一邮箱能力
+- `EasyRegister` 默认只关心 open / read / release 这些统一邮箱能力
 - 如果某个 provider 不支持 delete / release mailbox，`EasyEmail` 会返回统一的 skip/no-op 语义
-- `RegisterService` 不再根据 provider 名字分支处理 release 成功条件
+- `EasyRegister` 不再根据 provider 名字分支处理 release 成功条件
 
 Team 凭证读取推荐通过环境变量控制：
 
@@ -164,14 +165,20 @@ DST 的 `platform` 字段作为上传目录。以当前流程为例，最终 aut
 ## 直接运行示例
 
 ```powershell
-python "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\server\services\orchestration_service\src\dst_flow.py" `
+python -m dst_flow `
   --output-dir "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\tmp\run" `
   --team-auth "C:\Users\vmjcv\.cli-proxy-api\codex-1dfcda64-moddc8da@sall.cc-team.json"
 ```
 
+也可以直接启动 supervisor 模块入口：
+
+```powershell
+python -m infinite_runner
+```
+
 ## 容器编排入口
 
-`RegisterService` 的容器实例编排不再放在 `deploy/` 下，当前单独入口是：
+`EasyRegister` 的容器实例编排不再放在 `deploy/` 下，当前单独入口是：
 
 - `compose/docker-compose.yaml`
 
@@ -222,7 +229,7 @@ $env:REGISTER_SERVICE_BASE_IMAGE="python:3.10-bookworm"
 python -m unittest discover -s "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\tests" -v
 ```
 
-当前 compose 会拉起三类 `RegisterService` 实例：
+当前 compose 会拉起三类 `EasyRegister` 实例：
 
 - `register-service`
   - 主注册 flow
@@ -313,7 +320,7 @@ supervisor 还内置了两类容量兜底：
 - 邮箱容量兜底
   - 当 `acquire-mailbox` 连续命中 `mailbox_unavailable` 时，supervisor 会触发一次
     `recover_mailbox_capacity`
-  - `RegisterService` 只把失败 detail 上报给 `EasyEmail`，由 `EasyEmail` 内部判断是否需要执行
+  - `EasyRegister` 只把失败 detail 上报给 `EasyEmail`，由 `EasyEmail` 内部判断是否需要执行
     某个 provider 的容量恢复动作
   - 当前 `EasyEmail` 内部会在匹配到 `MoEmail` 容量故障特征时执行对应清理，默认最多处理 `30` 个邮箱
   - 这个操作可能使正在运行的任务失去邮箱，但可以接受，用于快速释放被卡住的 provider 容量
@@ -416,7 +423,7 @@ supervisor 还内置了两类容量兜底：
 
 ## 当前 smoke 结果
 
-`RegisterService` 本地复制后的 DST smoke 已跑过：
+`EasyRegister` 当前仓内的 DST smoke 已跑过：
 
 - `create_openai_account` 成功
 - `create_openai_account` 已通过 `EasyProtocol -> PythonProtocol` 路径成功
