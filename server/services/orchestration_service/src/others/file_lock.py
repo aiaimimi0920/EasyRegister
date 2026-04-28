@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -15,6 +17,15 @@ def lock_file_is_stale(lock_path: str | Path, *, stale_after_seconds: float, now
         return False
     current_time = time.time() if now is None else float(now)
     return (current_time - modified_at) >= float(stale_after_seconds)
+
+
+def read_lock_metadata(lock_path: str | Path) -> dict[str, object]:
+    path = Path(lock_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def try_acquire_lock(lock_path: str | Path, *, stale_after_seconds: float = 0.0) -> bool:
@@ -34,7 +45,18 @@ def try_acquire_lock(lock_path: str | Path, *, stale_after_seconds: float = 0.0)
                 return False
             continue
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(f"{os.getpid()}\n{int(time.time())}\n")
+            now = time.time()
+            handle.write(
+                json.dumps(
+                    {
+                        "pid": int(os.getpid()),
+                        "acquired_at_epoch": int(now),
+                        "acquired_at_iso": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
         return True
     return False
 

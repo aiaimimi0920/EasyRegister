@@ -1,0 +1,9 @@
+[project]
+name = "easyregister"
+version = "0.1.0"
+description = "Incremental orchestration hardening and refactoring workspace for EasyRegister."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["server/services/orchestration_service/src"]

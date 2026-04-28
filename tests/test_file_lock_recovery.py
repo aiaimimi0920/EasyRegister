@@ -12,7 +12,7 @@ SRC_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "orches
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from others.file_lock import lock_file_is_stale, release_lock, try_acquire_lock  # noqa: E402
+from others.file_lock import lock_file_is_stale, read_lock_metadata, release_lock, try_acquire_lock  # noqa: E402
 
 
 class FileLockRecoveryTests(unittest.TestCase):
@@ -21,6 +21,10 @@ class FileLockRecoveryTests(unittest.TestCase):
             lock_path = Path(tmp_dir) / "cleanup.lock"
             self.assertTrue(try_acquire_lock(lock_path))
             self.assertTrue(lock_path.is_file())
+            metadata = read_lock_metadata(lock_path)
+            self.assertIn("pid", metadata)
+            self.assertIn("acquired_at_epoch", metadata)
+            self.assertIn("acquired_at_iso", metadata)
 
     def test_try_acquire_lock_rejects_fresh_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
