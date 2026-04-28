@@ -1,0 +1,192 @@
+name: Publish GHCR Image
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "release-*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional image version tag override"
+        required: false
+        type: string
+      platform:
+        description: "Docker build platform list"
+        required: false
+        default: "linux/amd64"
+        type: string
+      push_latest:
+        description: "Also publish the latest tag"
+        required: false
+        default: true
+        type: boolean
+      run_smoke:
+        description: "Run smoke checks before pushing"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: easyregister
+
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@v6
+
+      - name: Set Up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Test Dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run Repository Validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -v
+
+      - name: Resolve Release Metadata
+        id: release_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          short_sha="$(git rev-parse --short HEAD)"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            version="${GITHUB_REF_NAME}"
+            push_latest="true"
+            run_smoke="true"
+            platform="linux/amd64"
+          else
+            version="${{ inputs.version }}"
+            if [[ -z "${version}" ]]; then
+              version="release-$(date -u +%Y%m%d)-$(printf '%03d' "${GITHUB_RUN_NUMBER}")"
+            fi
+            push_latest="${{ inputs.push_latest }}"
+            run_smoke="${{ inputs.run_smoke }}"
+            platform="${{ inputs.platform }}"
+          fi
+
+          image_ref="${REGISTRY}/${owner}/${IMAGE_NAME}"
+          smoke_image="${image_ref}:smoke-${GITHUB_RUN_ID}"
+
+          {
+            echo "owner=${owner}"
+            echo "version=${version}"
+            echo "short_sha=${short_sha}"
+            echo "platform=${platform}"
+            echo "image_ref=${image_ref}"
+            echo "smoke_image=${smoke_image}"
+            echo "push_latest=${push_latest}"
+            echo "run_smoke=${run_smoke}"
+            echo "tags<<EOF"
+            echo "${image_ref}:${version}"
+            echo "${image_ref}:sha-${short_sha}"
+            if [[ "${push_latest}" == "true" ]]; then
+              echo "${image_ref}:latest"
+            fi
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Materialize Runtime Env
+        env:
+          EASYREGISTER_RUNTIME_ENV_B64: ${{ secrets.EASYREGISTER_RUNTIME_ENV_B64 }}
+          EASYREGISTER_ENV_EASY_PROTOCOL_BASE_URL: ${{ secrets.EASYREGISTER_ENV_EASY_PROTOCOL_BASE_URL }}
+          EASYREGISTER_ENV_EASY_PROTOCOL_CONTROL_TOKEN: ${{ secrets.EASYREGISTER_ENV_EASY_PROTOCOL_CONTROL_TOKEN }}
+          EASYREGISTER_ENV_EASY_PROTOCOL_CONTROL_ACTOR: ${{ secrets.EASYREGISTER_ENV_EASY_PROTOCOL_CONTROL_ACTOR }}
+          EASYREGISTER_ENV_EASY_PROTOCOL_TIMEOUT_SECONDS: ${{ secrets.EASYREGISTER_ENV_EASY_PROTOCOL_TIMEOUT_SECONDS }}
+          EASYREGISTER_ENV_MAILBOX_SERVICE_BASE_URL: ${{ secrets.EASYREGISTER_ENV_MAILBOX_SERVICE_BASE_URL }}
+          EASYREGISTER_ENV_MAILBOX_SERVICE_API_KEY: ${{ secrets.EASYREGISTER_ENV_MAILBOX_SERVICE_API_KEY }}
+          EASYREGISTER_ENV_EASY_PROXY_BASE_URL: ${{ secrets.EASYREGISTER_ENV_EASY_PROXY_BASE_URL }}
+          EASYREGISTER_ENV_EASY_PROXY_API_KEY: ${{ secrets.EASYREGISTER_ENV_EASY_PROXY_API_KEY }}
+          EASYREGISTER_ENV_REGISTER_ENABLE_EASY_PROXY: ${{ secrets.EASYREGISTER_ENV_REGISTER_ENABLE_EASY_PROXY }}
+          EASYREGISTER_ENV_REGISTER_REQUIRE_EASY_PROXY: ${{ secrets.EASYREGISTER_ENV_REGISTER_REQUIRE_EASY_PROXY }}
+          EASYREGISTER_ENV_REGISTER_PROXY_MODE: ${{ secrets.EASYREGISTER_ENV_REGISTER_PROXY_MODE }}
+          EASYREGISTER_ENV_REGISTER_MAILBOX_ROUTING_PROFILE_ID: ${{ secrets.EASYREGISTER_ENV_REGISTER_MAILBOX_ROUTING_PROFILE_ID }}
+          EASYREGISTER_ENV_REGISTER_MAILBOX_STRATEGY_MODE_ID: ${{ secrets.EASYREGISTER_ENV_REGISTER_MAILBOX_STRATEGY_MODE_ID }}
+          EASYREGISTER_ENV_REGISTER_MAILBOX_PROVIDERS: ${{ secrets.EASYREGISTER_ENV_REGISTER_MAILBOX_PROVIDERS }}
+          EASYREGISTER_ENV_REGISTER_TEAM_AUTH_PATH: ${{ secrets.EASYREGISTER_ENV_REGISTER_TEAM_AUTH_PATH }}
+          EASYREGISTER_ENV_REGISTER_TEAM_AUTH_PATHS: ${{ secrets.EASYREGISTER_ENV_REGISTER_TEAM_AUTH_PATHS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/materialize-action-runtime-env.py \
+            --base-env deploy/easyregister.runtime.env.example \
+            --output "$RUNNER_TEMP/easyregister.runtime.env"
+          echo "EASYREGISTER_RUNTIME_ENV_PATH=$RUNNER_TEMP/easyregister.runtime.env" >> "$GITHUB_ENV"
+
+      - name: Set Up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Smoke Image
+        if: steps.release_meta.outputs.run_smoke == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            -f deploy/Dockerfile \
+            -t "${{ steps.release_meta.outputs.smoke_image }}" \
+            .
+
+      - name: Run Image Smoke Checks
+        if: steps.release_meta.outputs.run_smoke == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --env-file "$EASYREGISTER_RUNTIME_ENV_PATH" --entrypoint python "${{ steps.release_meta.outputs.smoke_image }}" -m dst_flow --help >/dev/null
+          docker run --rm --env-file "$EASYREGISTER_RUNTIME_ENV_PATH" --entrypoint python "${{ steps.release_meta.outputs.smoke_image }}" -m easyemail_flow --help >/dev/null
+          docker run --rm --env-file "$EASYREGISTER_RUNTIME_ENV_PATH" --entrypoint python "${{ steps.release_meta.outputs.smoke_image }}" -m easyprotocol_flow --help >/dev/null
+          docker run --rm --env-file "$EASYREGISTER_RUNTIME_ENV_PATH" --entrypoint python "${{ steps.release_meta.outputs.smoke_image }}" -c "import infinite_runner, easyproxy_flow, dashboard_server, errors; print('ok')" >/dev/null
+
+      - name: Log In To GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.EASYREGISTER_PUBLISH_GHCR_USERNAME != '' && secrets.EASYREGISTER_PUBLISH_GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.EASYREGISTER_PUBLISH_GHCR_TOKEN != '' && secrets.EASYREGISTER_PUBLISH_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Build And Push Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          provenance: mode=max
+          sbom: true
+          platforms: ${{ steps.release_meta.outputs.platform }}
+          tags: ${{ steps.release_meta.outputs.tags }}
+          cache-from: type=gha,scope=easyregister-ghcr
+          cache-to: type=gha,mode=max,scope=easyregister-ghcr
+
+      - name: Publish Summary
+        shell: bash
+        run: |
+          {
+            echo "## EasyRegister GHCR Publish"
+            echo
+            echo "- image: \`${{ steps.release_meta.outputs.image_ref }}\`"
+            echo "- version: \`${{ steps.release_meta.outputs.version }}\`"
+            echo "- platform: \`${{ steps.release_meta.outputs.platform }}\`"
+            echo "- smoke: \`${{ steps.release_meta.outputs.run_smoke }}\`"
+            echo "- runtime env source: \`deploy/easyregister.runtime.env.example + GitHub secrets\`"
+            echo "- optional full env secret: \`EASYREGISTER_RUNTIME_ENV_B64\`"
+            echo "- optional GHCR auth secrets: \`EASYREGISTER_PUBLISH_GHCR_USERNAME\`, \`EASYREGISTER_PUBLISH_GHCR_TOKEN\`"
+          } >> "$GITHUB_STEP_SUMMARY"

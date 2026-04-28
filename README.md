@@ -229,6 +229,42 @@ $env:REGISTER_SERVICE_BASE_IMAGE="python:3.10-bookworm"
 python -m unittest discover -s "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\tests" -v
 ```
 
+## GitHub Actions
+
+当前仓库已经补了两条 GitHub Actions 工作流：
+
+- `.github/workflows/validate.yml`
+  - 在 `main`、`pull_request` 和手动触发时执行
+  - 运行 `python -m unittest discover -s tests -v`
+  - 运行 `docker compose -f compose/docker-compose.test.yaml config`
+- `.github/workflows/publish-ghcr-image.yml`
+  - 在 `v*` / `release-*` tag 推送时执行
+  - 也支持 `workflow_dispatch`
+  - 构建并推送 `ghcr.io/<owner>/easyregister`
+  - 发布前会做一次镜像 smoke
+
+用于 GitHub Actions 的运行时配置示例文件是：
+
+- `deploy/easyregister.runtime.env.example`
+
+配置与 secrets 方案采用和现有仓一致的“在 Action 中物化运行配置”思路：
+
+- 优先使用完整的 Base64 env secret：
+  - `EASYREGISTER_RUNTIME_ENV_B64`
+- 如果不提供完整 env，也可以按单项 secret 覆盖：
+  - 约定前缀是 `EASYREGISTER_ENV_`
+  - 例如：
+    - `EASYREGISTER_ENV_MAILBOX_SERVICE_API_KEY`
+    - `EASYREGISTER_ENV_EASY_PROTOCOL_CONTROL_TOKEN`
+    - `EASYREGISTER_ENV_REGISTER_MAILBOX_ROUTING_PROFILE_ID`
+
+GHCR 登录也支持和参考仓同样的双路径：
+
+- 优先使用：
+  - `EASYREGISTER_PUBLISH_GHCR_USERNAME`
+  - `EASYREGISTER_PUBLISH_GHCR_TOKEN`
+- 如果不提供，则回退到 GitHub Actions 默认的 `GITHUB_TOKEN`
+
 当前 compose 会拉起三类 `EasyRegister` 实例：
 
 - `register-service`

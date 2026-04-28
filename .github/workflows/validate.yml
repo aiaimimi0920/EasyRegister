@@ -1,0 +1,49 @@
+name: Validate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@v6
+
+      - name: Set Up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Test Dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run Unit And Integration Tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -v
+
+      - name: Validate Docker Compose Contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f compose/docker-compose.test.yaml config >/dev/null
+
+      - name: Check Git Diff Formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
