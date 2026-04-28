@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from errors import ErrorCodes  # noqa: E402
-from others import runner_artifacts, runner_failures  # noqa: E402
+from others import runner_artifacts, runner_failures, runner_mailbox  # noqa: E402
 
 
 class RunnerArtifactsTests(unittest.TestCase):
@@ -106,6 +106,59 @@ class RunnerFailuresTests(unittest.TestCase):
         ):
             cooldown = runner_failures.team_mother_failure_cooldown_seconds(result=payload)
         self.assertEqual(123.0, cooldown)
+
+
+class RunnerMailboxTests(unittest.TestCase):
+    def test_mailbox_capacity_failure_detail_uses_structured_code(self) -> None:
+        payload = {
+            "errorStep": "acquire-mailbox",
+            "stepErrors": {
+                "acquire-mailbox": {
+                    "code": ErrorCodes.MAILBOX_UNAVAILABLE,
+                    "message": "mailbox capacity unavailable",
+                }
+            },
+        }
+        detail = runner_mailbox.mailbox_capacity_failure_detail(result_payload_value=payload)
+        self.assertIn("mailbox capacity unavailable", detail)
+
+    def test_record_business_mailbox_domain_outcome_writes_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": False,
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@sall.cc",
+                        "provider": "moemail",
+                    }
+                },
+            }
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+            self.assertIsNotNone(outcome)
+            self.assertEqual("sall.cc", outcome["domain"])
+            state_path = Path(outcome["statePath"])
+            self.assertTrue(state_path.is_file())
+
+    def test_mark_mailbox_capacity_failure_respects_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            with mock.patch.dict(
+                os.environ,
+                {"REGISTER_MAILBOX_CLEANUP_FAILURE_THRESHOLD": "3"},
+                clear=True,
+            ):
+                result = runner_mailbox.mark_mailbox_capacity_failure(
+                    shared_root=shared_root,
+                    detail="mailbox capacity unavailable",
+                )
+            self.assertEqual("recovery_threshold_not_reached", result["status"])
+            self.assertEqual(1, result["consecutiveFailures"])
 
 
 if __name__ == "__main__":
