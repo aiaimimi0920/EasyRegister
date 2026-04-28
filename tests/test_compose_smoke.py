@@ -7,10 +7,15 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+MAIN_COMPOSE_PATH = REPO_ROOT / "compose" / "docker-compose.yaml"
 TEST_COMPOSE_PATH = REPO_ROOT / "compose" / "docker-compose.test.yaml"
 
 
 class ComposeSmokeTests(unittest.TestCase):
+    def test_main_compose_uses_easyaimi_external_network(self) -> None:
+        payload = MAIN_COMPOSE_PATH.read_text(encoding="utf-8")
+        self.assertIn("EasyAiMi", payload)
+
     def test_test_compose_keeps_isolated_contract_strings(self) -> None:
         payload = TEST_COMPOSE_PATH.read_text(encoding="utf-8")
         for expected in (
@@ -19,6 +24,7 @@ class ComposeSmokeTests(unittest.TestCase):
             "easyregister-test-team",
             "29790",
             "tmp/easyregister-test-output",
+            "EasyAiMi",
         ):
             self.assertIn(expected, payload)
 

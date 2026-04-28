@@ -77,6 +77,14 @@
 - EasyProtocol
 - PythonProtocol
 
+并且这些 EZ 系容器应统一加入外部 Docker 网络：
+
+- `EasyAiMi`
+
+当前 `compose/docker-compose.yaml` 和 `compose/docker-compose.test.yaml` 都会直接挂到这个外部网络，
+这样 `EasyRegister` 才能通过容器名访问 `easy-email-service`、`easy-proxy-service`、
+`easy-protocol-service` 以及其他 EZ 系服务实例。
+
 并且需要提供：
 
 - team auth json
@@ -182,6 +190,8 @@ python -m infinite_runner
 
 - `compose/docker-compose.yaml`
 
+这份 compose 会把所有 `EasyRegister` 容器直接加入外部网络 `EasyAiMi`。
+
 典型启动命令：
 
 ```powershell
@@ -201,6 +211,7 @@ docker compose -f "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\compose\d
 - 默认 dashboard 宿主机端口为 `29790`
 - 默认宿主机输出目录使用仓库内 `tmp/easyregister-test-output`
 - 默认本地 free / team 输出目录分别使用 `tmp/easyregister-test-free` 与 `tmp/easyregister-test-team`
+- 仍然加入外部网络 `EasyAiMi`，方便和其他 EZ 系容器联调
 
 典型启动命令：
 

@@ -39,7 +39,7 @@ x-easyregister-test-common: &easyregister-test-common
     - ../server:/app/server
     - ../README.md:/app/README.md:ro
   networks:
-    - Easy
+    - EasyAiMi
 
 services:
   easyregister-test-main:
@@ -141,5 +141,5 @@ services:
       REGISTER_TEAM_WORKSPACE_SELECTOR: ${EASYREGISTER_TEST_TEAM_WORKSPACE_SELECTOR:-first_team}
 
 networks:
-  Easy:
+  EasyAiMi:
     external: true

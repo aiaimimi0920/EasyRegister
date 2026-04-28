@@ -100,6 +100,10 @@ DST `platform` 字段作为默认目录；当前这条链默认就是：
 
 - `C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\compose\docker-compose.yaml`
 
+当前 compose 会把所有 `EasyRegister` 容器加入外部 Docker 网络 `EasyAiMi`，
+方便直接访问同一网络内的 `EasyEmail`、`EasyProxy`、`EasyProtocol`
+和其他 EZ 系服务。
+
 当前容器入口 [infinite_runner.py](C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\server\services\orchestration_service\src\infinite_runner.py)
 已经不是“单轮串行 while 循环”，而是：
 
