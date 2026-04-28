@@ -49,6 +49,12 @@
 
 - `server/services/orchestration_service/src/dst_flow.py`
 
+当前 supervisor 入口：
+
+- `server/services/orchestration_service/src/infinite_runner.py`
+  - 这是当前薄入口文件
+  - 实际 supervisor 实现在 `server/services/orchestration_service/src/others/runner_supervisor.py`
+
 当前顶层步骤：
 
 1. `acquire_mailbox`
@@ -201,6 +207,19 @@ docker compose -f "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\compose\d
 
 ```powershell
 $env:REGISTER_SERVICE_BASE_IMAGE="python:3.10-bookworm"
+```
+
+## 本地测试入口
+
+当前仓库已经补了最小工程化测试入口：
+
+- `pyproject.toml`
+- `requirements-dev.txt`
+
+典型本地验证命令：
+
+```powershell
+python -m unittest discover -s "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\tests" -v
 ```
 
 当前 compose 会拉起三类 `RegisterService` 实例：

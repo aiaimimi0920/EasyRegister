@@ -24,6 +24,21 @@
   - 默认容器名前缀为 `easyregister-test-*`
   - 默认 dashboard 宿主机端口为 `29790`
   - 默认测试输出目录位于仓库内 `tmp/easyregister-test-*`
+- 已完成第一轮结构化错误码与 retry profile 收口
+  - flow JSON 已使用 `retryProfile`
+  - `dst_flow.py` 使用结构化 `code` 判定 step/task retry
+- 已完成第一轮 typed config 收口与 runtime preflight
+  - 核心运行时配置已集中到 `others/config.py`
+  - supervisor 启动前会执行 `others/preflight.py`
+- 已完成 `infinite_runner.py` / `artifact_pool_flow.py` / `runtime.py` 的主体拆分
+  - `infinite_runner.py` 当前仅保留薄入口
+  - supervisor、team auth、artifact pool、runtime proxy/mailbox 已拆到 `others/` 子模块
+- 已消除当前源码中的 `__package__` / `sys.path` 兼容导入分支
+- 已补充工程化入口文件
+  - `pyproject.toml`
+  - `requirements-dev.txt`
+- 已建立当前最小测试分层
+  - 单元测试、轻量流程测试、compose smoke 测试
 
 注意：
 
@@ -32,7 +47,7 @@
 
 ## 3. 总体优化目标
 
-后续优化分为五条主线：
+原始优化主线分为五条：
 
 1. 继续收紧运行时安全边界，避免隐式危险默认值。
 2. 拆分超大模块，优先降低 `infinite_runner.py` 的复杂度和维护风险。
@@ -52,18 +67,23 @@
 
 ### Phase 1. 运行时与锁逻辑稳定化
 
+当前状态：已完成主要目标。
+
 已包含的方向：
 
 - 安全默认值收紧
 - stale cleanup lock recovery
+- lock 元数据标准化
+- 运行态配置校验前置化
 
 后续可继续补强：
 
-- lock 元数据标准化
 - lock 超时与观测日志统一
-- 运行态配置校验前置化
+- 更细的 supervisor / worker 运行态观测
 
 ### Phase 2. `infinite_runner.py` 模块化拆分
+
+当前状态：已完成主要目标。
 
 优先拆出以下子域：
 
@@ -79,7 +99,14 @@
 - 再下沉有状态逻辑
 - 最后缩短 `_worker_loop` 和 `main`
 
+当前结果：
+
+- `infinite_runner.py` 已变为薄入口
+- supervisor / team auth / mailbox / cleanup / artifact 路由逻辑已拆出到 `others/`
+
 ### Phase 3. `artifact_pool_flow.py` 收口
+
+当前状态：已完成主要目标。
 
 目标：
 
@@ -89,6 +116,8 @@
 
 ### Phase 4. `dst_flow.py` 错误与重试体系整理
 
+当前状态：已完成第一轮主目标。
+
 目标：
 
 - 降低 message contains 规则数量
@@ -96,6 +125,8 @@
 - 让 step retry / task retry 判断更可预测
 
 ### Phase 5. 工程化补强
+
+当前状态：已完成第一轮主目标。
 
 目标：
 
@@ -205,13 +236,13 @@
 - 基础 supervisor / worker 拉起
 - dashboard 或状态文件输出验证
 
-## 9. 下一步建议
+## 9. 可选后续项
 
-新仓重新开始对话后的推荐顺序：
+原始计划主线当前已经完成。后续如果继续投入，优先级更像增量质量优化，而不是必做欠账：
 
-1. 使用隔离测试 compose 作为后续验证入口，先确认新的容器名、镜像名、端口和输出目录不会碰生产实例。
-2. 开始 `infinite_runner.py` 第一批模块拆分。
-3. 优先为重复 helper、DST retry 规则、artifact pool 关键路径补最小单元测试。
+1. 继续细化超大子模块，例如 `runner_team_auth_state.py`、`runner_artifacts.py`、`runtime_proxy.py`。
+2. 继续统一日志/状态观测格式，补更多 supervisor / worker / cleanup 观测字段。
+3. 视需要增加更重的隔离集成测试，而不是只停留在 compose config smoke。
 
 ## 10. 重要提醒
 
