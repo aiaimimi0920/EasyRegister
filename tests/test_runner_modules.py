@@ -55,6 +55,48 @@ class RunnerArtifactsTests(unittest.TestCase):
                 )
         self.assertEqual((output_root / "others" / "free-manual-oauth-pool").resolve(), target)
 
+    def test_postprocess_free_success_artifact_can_materialize_from_oauth_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_FREE_LOCAL_DIR": str(output_root / "free-local"),
+                },
+                clear=True,
+            ):
+                result = SimpleNamespace(
+                    ok=True,
+                    to_dict=lambda: {
+                        "steps": {
+                            "validate-free-personal-oauth": "ok",
+                        },
+                        "outputs": {
+                            "obtain-codex-oauth": {
+                                "email": "materialized@example.com",
+                                "access_token": "token",
+                                "refresh_token": "refresh",
+                                "auth": {
+                                    "account_id": "org-abcdef12-rest",
+                                },
+                            }
+                        },
+                    },
+                )
+                postprocess = runner_artifacts.postprocess_free_success_artifact(
+                    result=result,
+                    output_root=output_root,
+                    worker_label="worker-01",
+                    task_index=1,
+                    free_local_selected=True,
+                )
+                self.assertTrue(postprocess["ok"])
+                self.assertEqual("stored_local", postprocess["status"])
+                stored_path = Path(str(postprocess["stored_path"]))
+                self.assertTrue(stored_path.is_file())
+                self.assertEqual("codex-free-org-materialized@example.com.json", stored_path.name)
+
 
 class RunnerTeamArtifactsTests(unittest.TestCase):
     def test_team_has_collectable_artifacts_accepts_result_object(self) -> None:

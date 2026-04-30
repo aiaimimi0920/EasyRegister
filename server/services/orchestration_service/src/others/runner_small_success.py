@@ -16,7 +16,13 @@ from others.common import (
     json_log,
     validate_small_success_seed_payload,
 )
-from others.prepared_artifacts import prepare_free_artifact, route_prepared_artifact
+from others.prepared_artifacts import (
+    delete_artifact_quiet,
+    prepare_free_artifact,
+    prepare_free_artifact_from_payload,
+    route_prepared_artifact,
+    write_prepared_artifact,
+)
 from others.result_artifacts import (
     FREE_SMALL_SUCCESS_SOURCE_CANDIDATES,
     first_existing_output_path,
@@ -299,6 +305,24 @@ def _free_success_artifact_path(*, result: Any) -> Path | None:
     return source_paths[0]
 
 
+def _materialize_free_success_artifact_from_output(*, result: Any, output_root: Path) -> Path | None:
+    oauth_output = output_dict(result, "obtain-codex-oauth")
+    if not oauth_output:
+        return None
+    staging_dir = resolve_free_oauth_pool_dir(output_root=output_root) / "_materialized"
+    ensure_directory(staging_dir)
+    materialized_path = staging_dir / f"materialized-{uuid.uuid4().hex[:12]}.json"
+    prepared = prepare_free_artifact_from_payload(
+        source_path=materialized_path,
+        payload=oauth_output,
+    )
+    prepared.source_path.parent.mkdir(parents=True, exist_ok=True)
+    prepared.source_path.write_text("{}", encoding="utf-8")
+
+    write_prepared_artifact(prepared)
+    return prepared.source_path
+
+
 def postprocess_free_success_artifact(
     *,
     result: Any,
@@ -339,6 +363,13 @@ def postprocess_free_success_artifact(
         }
 
     artifact_path = _free_success_artifact_path(result=result)
+    materialized_artifact_path: Path | None = None
+    if artifact_path is None or not artifact_path.is_file():
+        materialized_artifact_path = _materialize_free_success_artifact_from_output(
+            result=result,
+            output_root=output_root,
+        )
+        artifact_path = materialized_artifact_path
     if artifact_path is None or not artifact_path.is_file():
         return {"ok": False, "status": "missing_free_artifact", "cleanup_run_output": False}
     prepared_artifact = prepare_free_artifact(source_path=artifact_path)
@@ -353,6 +384,8 @@ def postprocess_free_success_artifact(
             target_folder="codex",
             upload_fn=upload_artifact_to_r2,
         )
+        if materialized_artifact_path is not None:
+            delete_artifact_quiet(materialized_artifact_path)
         return {
             "ok": True,
             "status": "stored_local",
@@ -383,6 +416,8 @@ def postprocess_free_success_artifact(
             "transient_path": str(route_result.get("staged_path") or ""),
         }
 
+    if materialized_artifact_path is not None:
+        delete_artifact_quiet(materialized_artifact_path)
     return {
         "ok": True,
         "status": "uploaded_deleted",

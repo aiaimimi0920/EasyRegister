@@ -20,6 +20,7 @@ from others.prepared_artifacts import (  # noqa: E402
     move_prepared_artifact_to_dir,
     prepare_artifact_for_folder,
     prepare_free_artifact,
+    prepare_free_artifact_from_payload,
     prepare_named_artifact,
     prepare_team_artifact,
     route_prepared_artifact,
@@ -65,6 +66,27 @@ class PreparedArtifactsTests(unittest.TestCase):
             self.assertEqual(source.resolve(), prepared.source_path)
             self.assertEqual("codex-free-org-free@example.com.json", prepared.preferred_name)
             self.assertEqual("free@example.com", prepared.payload["email"])
+
+    def test_prepare_free_artifact_from_payload_standardizes_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            source = Path(tmp_dir) / "free.json"
+            payload = {
+                "email": "free2@example.com",
+                "auth": {
+                    "account_id": "org-abcdef12-rest",
+                },
+                "access_token": "token",
+                "refresh_token": "refresh",
+            }
+
+            prepared = prepare_free_artifact_from_payload(
+                source_path=source,
+                payload=payload,
+            )
+
+            self.assertEqual(source.resolve(), prepared.source_path)
+            self.assertEqual("codex-free-org-free2@example.com.json", prepared.preferred_name)
+            self.assertEqual("free2@example.com", prepared.payload["email"])
 
     def test_prepare_team_artifact_uses_team_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

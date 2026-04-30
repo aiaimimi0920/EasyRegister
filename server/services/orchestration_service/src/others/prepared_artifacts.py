@@ -43,6 +43,21 @@ def prepare_named_artifact(*, source_path: Path, preferred_name: str) -> Prepare
     )
 
 
+def prepare_named_artifact_from_payload(
+    *,
+    source_path: Path,
+    payload: dict[str, Any],
+    preferred_name: str,
+) -> PreparedArtifact:
+    resolved_source = Path(source_path).resolve()
+    standardized_payload = standardize_export_credential_payload(payload)
+    return PreparedArtifact(
+        source_path=resolved_source,
+        payload=standardized_payload,
+        preferred_name=str(preferred_name or "").strip() or resolved_source.name,
+    )
+
+
 def prepare_free_artifact(*, source_path: Path) -> PreparedArtifact:
     resolved_source = Path(source_path).resolve()
     payload = standardize_export_credential_payload(load_artifact_json_quiet(resolved_source))
@@ -50,6 +65,15 @@ def prepare_free_artifact(*, source_path: Path) -> PreparedArtifact:
         source_path=resolved_source,
         payload=payload,
         preferred_name=canonical_free_artifact_name(payload),
+    )
+
+
+def prepare_free_artifact_from_payload(*, source_path: Path, payload: dict[str, Any]) -> PreparedArtifact:
+    standardized_payload = standardize_export_credential_payload(payload)
+    return prepare_named_artifact_from_payload(
+        source_path=source_path,
+        payload=standardized_payload,
+        preferred_name=canonical_free_artifact_name(standardized_payload),
     )
 
 
