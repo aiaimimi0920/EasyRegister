@@ -144,6 +144,90 @@ class RunnerProcessSupervisorTests(unittest.TestCase):
         counter = _Counter()
         self.assertTrue(runner_process_supervisor.task_slots_exhausted(task_counter=counter, max_runs=1))
 
+    def test_should_stop_supervisor_after_worker_stop_only_when_last_worker_and_exhausted(self) -> None:
+        counter = SimpleNamespace(get_obj=lambda: SimpleNamespace(value=1))
+        self.assertTrue(
+            runner_process_supervisor.should_stop_supervisor_after_worker_stop(
+                processes={},
+                task_counter=counter,
+                max_runs=1,
+            )
+        )
+        self.assertFalse(
+            runner_process_supervisor.should_stop_supervisor_after_worker_stop(
+                processes={1: object()},
+                task_counter=counter,
+                max_runs=1,
+            )
+        )
+
+    def test_cleanup_process_handle_joins_closes_and_optionally_terminates(self) -> None:
+        process = mock.Mock()
+        process.is_alive.return_value = True
+        runner_process_supervisor.cleanup_process_handle(
+            process=process,
+            join_timeout=0.25,
+            terminate_if_alive=True,
+        )
+        process.join.assert_any_call(timeout=0.25)
+        process.terminate.assert_called_once_with()
+        process.join.assert_any_call(timeout=1.0)
+        process.close.assert_called_once_with()
+
+    def test_main_exits_cleanly_after_last_worker_when_max_runs_reached(self) -> None:
+        fake_process = mock.Mock()
+        fake_process.pid = 321
+        fake_process.exitcode = 0
+        fake_process.is_alive.return_value = False
+
+        stop_event = mock.Mock()
+        stop_event.is_set.return_value = False
+        task_counter = SimpleNamespace(get_obj=lambda: SimpleNamespace(value=1))
+        ctx = SimpleNamespace(
+            Event=mock.Mock(return_value=stop_event),
+            Value=mock.Mock(return_value=task_counter),
+        )
+        config = SimpleNamespace(
+            output_root=Path("C:/tmp/register-output"),
+            shared_root=Path("C:/tmp/register-output"),
+            small_success_pool_dir=Path("C:/tmp/register-output/small-success-pool"),
+            free_oauth_pool_dir=Path("C:/tmp/register-output/free-oauth-pool"),
+            flow_path="team-flow.json",
+            instance_id="mixed-test",
+            instance_role="mixed",
+            worker_count=1,
+            delay_seconds=0.0,
+            worker_stagger_seconds=0.0,
+            max_runs=1,
+            task_max_attempts=1,
+            flow_specs=(),
+            easy_protocol_base_url="http://easy-protocol-service:9788",
+            easy_protocol_control_token="secure-token",
+            easy_protocol_control_actor="register-dashboard",
+        )
+        service_state = mock.Mock()
+        with mock.patch.object(runner_process_supervisor, "_validate_runtime_preflight", return_value={}):
+            with mock.patch.object(runner_process_supervisor, "RunnerMainConfig") as config_cls:
+                config_cls.from_env.return_value = config
+                with mock.patch.object(runner_process_supervisor, "_ensure_directory"):
+                    with mock.patch.object(runner_process_supervisor, "cleanup_dashboard_worker_state_files"):
+                        with mock.patch.object(runner_process_supervisor, "ServiceRuntimeState", return_value=service_state):
+                            with mock.patch.object(runner_process_supervisor, "install_signal_handlers"):
+                                with mock.patch.object(runner_process_supervisor, "start_dashboard_server_if_enabled", return_value=None):
+                                    with mock.patch.object(runner_process_supervisor.mp, "get_context", return_value=ctx):
+                                        with mock.patch.object(runner_process_supervisor, "start_worker", return_value=fake_process):
+                                            with mock.patch.object(runner_process_supervisor, "_json_log") as json_log:
+                                                exit_code = runner_process_supervisor.main()
+        self.assertEqual(0, exit_code)
+        service_state.started.assert_called_once_with(pid=mock.ANY, max_runs=1)
+        service_state.stopped.assert_called_once_with(pid=mock.ANY, task_count=1)
+        stop_event.set.assert_not_called()
+        fake_process.join.assert_any_call(timeout=0.0)
+        fake_process.close.assert_called_once_with()
+        events = [call.args[0]["event"] for call in json_log.call_args_list if call.args and isinstance(call.args[0], dict) and "event" in call.args[0]]
+        self.assertIn("register_supervisor_finally_entered", events)
+        self.assertIn("register_supervisor_stopped", events)
+
 
 class RunnerFailuresTests(unittest.TestCase):
     def test_team_auth_blacklist_reason_requires_retry_evidence(self) -> None:

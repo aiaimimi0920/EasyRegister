@@ -102,6 +102,46 @@ def task_counter_value(task_counter: Any) -> int:
     return int(getattr(task_counter, "value", 0) or 0)
 
 
+def cleanup_process_handle(*, process: Any, join_timeout: float = 0.0, terminate_if_alive: bool = False) -> None:
+    join = getattr(process, "join", None)
+    if callable(join):
+        try:
+            join(timeout=max(0.0, float(join_timeout or 0.0)))
+        except Exception:
+            pass
+    if terminate_if_alive:
+        is_alive = getattr(process, "is_alive", None)
+        terminate = getattr(process, "terminate", None)
+        if callable(is_alive) and callable(terminate):
+            try:
+                if is_alive():
+                    terminate()
+            except Exception:
+                pass
+        if callable(join):
+            try:
+                join(timeout=1.0)
+            except Exception:
+                pass
+    close = getattr(process, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
+def should_stop_supervisor_after_worker_stop(
+    *,
+    processes: dict[int, Any],
+    task_counter: Any,
+    max_runs: int,
+) -> bool:
+    if processes:
+        return False
+    return task_slots_exhausted(task_counter=task_counter, max_runs=max_runs)
+
+
 def main() -> int:
     preflight_summary = _validate_runtime_preflight()
     _json_log({"event": "register_runtime_preflight_ok", **preflight_summary})
@@ -117,6 +157,7 @@ def main() -> int:
     task_counter = ctx.Value("i", 0)
     processes: dict[int, Any] = {}
     dashboard_server = None
+    shutdown_requested = False
     cleanup_dashboard_worker_state_files(shared_root=shared_root, instance_id=config.instance_id)
     service_state = ServiceRuntimeState(
         shared_root=shared_root,
@@ -178,6 +219,8 @@ def main() -> int:
                 time.sleep(config.worker_stagger_seconds)
 
         while processes:
+            if shutdown_requested:
+                break
             if stop_event.is_set():
                 break
             for worker_id, process in list(processes.items()):
@@ -193,6 +236,22 @@ def main() -> int:
                         "exitCode": exit_code,
                     }
                 )
+                cleanup_process_handle(process=process, join_timeout=0.0)
+                if should_stop_supervisor_after_worker_stop(
+                    processes=processes,
+                    task_counter=task_counter,
+                    max_runs=config.max_runs,
+                ):
+                    _json_log(
+                        {
+                            "event": "register_supervisor_max_runs_reached",
+                            "pid": os.getpid(),
+                            "instanceId": config.instance_id,
+                            "taskCount": task_counter_value(task_counter),
+                        }
+                    )
+                    shutdown_requested = True
+                    break
                 if stop_event.is_set():
                     continue
                 if task_slots_exhausted(task_counter=task_counter, max_runs=config.max_runs):
@@ -219,10 +278,23 @@ def main() -> int:
                 )
                 if config.worker_stagger_seconds > 0:
                     time.sleep(config.worker_stagger_seconds)
+            if shutdown_requested:
+                break
             if processes:
                 time.sleep(1.0)
     finally:
-        stop_event.set()
+        _json_log(
+            {
+                "event": "register_supervisor_finally_entered",
+                "pid": os.getpid(),
+                "instanceId": config.instance_id,
+                "remainingProcesses": len(processes),
+                "taskCount": task_counter_value(task_counter),
+                "stopEventSet": bool(stop_event.is_set()),
+            }
+        )
+        if processes:
+            stop_event.set()
         shutdown_deadline = time.monotonic() + 15.0
         for process in processes.values():
             remaining = max(0.0, shutdown_deadline - time.monotonic())
@@ -230,10 +302,7 @@ def main() -> int:
                 break
             process.join(timeout=min(remaining, 2.0))
         for process in processes.values():
-            if process.is_alive():
-                process.terminate()
-        for process in processes.values():
-            process.join(timeout=1.0)
+            cleanup_process_handle(process=process, join_timeout=0.0, terminate_if_alive=True)
         _json_log(
             {
                 "event": "register_supervisor_stopped",
