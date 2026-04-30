@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import os
 import sys
 import tempfile
@@ -417,6 +418,42 @@ class RunnerWorkerMaintenanceTests(unittest.TestCase):
 
 
 class RunnerWorkerLoopTests(unittest.TestCase):
+    def test_worker_loop_exits_before_flow_selection_when_max_runs_already_reached(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            free_oauth_pool_dir = output_root / "free-oauth-pool"
+            spec = RunnerFlowSpec(
+                name="continue-openai",
+                flow_path="continue-flow.json",
+                instance_role="continue",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=3,
+                small_success_pool_dir=output_root / "others" / "small-success-continue-pool",
+                mailbox_business_key="openai",
+            )
+            task_counter = SimpleNamespace(value=1, get_lock=lambda: nullcontext())
+            worker_state = mock.Mock()
+            with mock.patch.object(runner_worker_loop, "WorkerRuntimeState", return_value=worker_state):
+                with mock.patch.object(runner_worker_loop, "_process_worker_maintenance") as maintenance:
+                    with mock.patch.object(runner_worker_loop, "_choose_runnable_flow_spec") as choose_flow:
+                        runner_worker_loop.worker_loop(
+                            worker_id=1,
+                            instance_id="mixed",
+                            instance_role="mixed",
+                            output_root_text=str(output_root),
+                            delay_seconds=0.0,
+                            max_runs=1,
+                            task_max_attempts=0,
+                            flow_specs=(spec,),
+                            stop_event=SimpleNamespace(is_set=lambda: False),
+                            task_counter=task_counter,
+                            free_oauth_pool_dir_text=str(free_oauth_pool_dir),
+                        )
+        maintenance.assert_not_called()
+        choose_flow.assert_not_called()
+        worker_state.exited.assert_called_once_with(local_runs=0)
+
     def test_worker_loop_runs_selected_flow_spec(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"

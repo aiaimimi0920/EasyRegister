@@ -63,6 +63,20 @@ def claim_task_index(
         return current
 
 
+def task_slots_exhausted(
+    *,
+    task_counter: Any,
+    max_runs: int,
+) -> bool:
+    if max_runs <= 0:
+        return False
+    lock_factory = getattr(task_counter, "get_lock", None)
+    if callable(lock_factory):
+        with lock_factory():
+            return int(getattr(task_counter, "value", 0) or 0) >= max_runs
+    return int(getattr(task_counter, "value", 0) or 0) >= max_runs
+
+
 def worker_loop(
     *,
     worker_id: int,
@@ -124,6 +138,8 @@ def worker_loop(
         ).start()
 
     while not stop_event.is_set():
+        if task_slots_exhausted(task_counter=task_counter, max_runs=max_runs):
+            break
         _process_worker_maintenance(
             active_roles=configured_roles,
             output_root=output_root,
