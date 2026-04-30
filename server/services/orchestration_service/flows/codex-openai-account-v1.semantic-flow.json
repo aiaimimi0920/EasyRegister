@@ -81,7 +81,7 @@
           "retry": {
             "maxAttempts": 2,
             "backoffSeconds": 2,
-            "retryProfile": "step-proxy-refresh",
+            "retryProfile": "step-create-account-recover",
             "refreshSavedStates": [
               "proxy_chain"
             ]

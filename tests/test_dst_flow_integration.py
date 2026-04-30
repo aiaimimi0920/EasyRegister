@@ -370,3 +370,76 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual(2, result.step_attempts["create-openai-account"])
         self.assertEqual(["http://proxy-1", "http://proxy-2"], create_proxy_urls)
         self.assertEqual(2, proxy_call_count)
+
+    def test_run_dst_flow_once_retries_create_account_after_user_register_400(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "acquire-proxy-chain",
+                                    "type": "acquire_proxy_chain",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "saveAs": "proxy_chain",
+                                },
+                                {
+                                    "id": "create-openai-account",
+                                    "type": "create_openai_account",
+                                    "metadata": {
+                                        "owner": "easyprotocol",
+                                        "retry": {
+                                            "maxAttempts": 2,
+                                            "retryProfile": "step-create-account-recover",
+                                            "refreshSavedStates": [
+                                                "proxy_chain"
+                                            ],
+                                        },
+                                    },
+                                    "input": {
+                                        "proxy_url": "{{proxy_chain.proxy_url}}",
+                                    },
+                                    "saveAs": "create_openai_account",
+                                },
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proxy_call_count = 0
+            create_proxy_urls: list[str] = []
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                nonlocal proxy_call_count
+                if step_type == "acquire_proxy_chain":
+                    proxy_call_count += 1
+                    return {"ok": True, "proxy_url": f"http://proxy-{proxy_call_count}"}
+                if step_type == "create_openai_account":
+                    create_proxy_urls.append(str(step_input.get("proxy_url") or ""))
+                    if len(create_proxy_urls) == 1:
+                        raise RuntimeError(
+                            "user_register status=400 body={"
+                            "\"error\":{\"message\":\"Failed to create account. Please try again.\"}}"
+                        )
+                    return {
+                        "ok": True,
+                        "status": "completed",
+                        "storage_path": "/tmp/create-success.json",
+                    }
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(dst_flow.OWNER_DISPATCHERS, {"easyprotocol": _dispatcher}, clear=True):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(2, result.step_attempts["create-openai-account"])
+        self.assertEqual(["http://proxy-1", "http://proxy-2"], create_proxy_urls)
+        self.assertEqual(2, proxy_call_count)

@@ -60,6 +60,19 @@ class ErrorProfilesTests(unittest.TestCase):
             resolve_retry_codes({"retryProfile": "step-invite-recover"}),
         )
 
+    def test_resolve_retry_codes_uses_create_account_recover_profile(self) -> None:
+        self.assertEqual(
+            {
+                ErrorCodes.USER_REGISTER_400,
+                ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
+                ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
+                ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+                ErrorCodes.PROXY_CONNECT_FAILED,
+                ErrorCodes.TRANSPORT_ERROR,
+            },
+            resolve_retry_codes({"retryProfile": "step-create-account-recover"}),
+        )
+
     def test_resolve_retry_codes_uses_proxy_refresh_profile(self) -> None:
         self.assertEqual(
             {

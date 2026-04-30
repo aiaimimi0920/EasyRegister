@@ -84,6 +84,14 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.TRANSPORT_ERROR,
         ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR,
     ),
+    "step-create-account-recover": (
+        ErrorCodes.USER_REGISTER_400,
+        ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
+        ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
+        ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+        ErrorCodes.PROXY_CONNECT_FAILED,
+        ErrorCodes.TRANSPORT_ERROR,
+    ),
     "step-proxy-refresh": (
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
