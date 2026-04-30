@@ -77,7 +77,15 @@
         "saveAs": "create_openai_account",
         "metadata": {
           "owner": "easyprotocol",
-          "stage": "account-create"
+          "stage": "account-create",
+          "retry": {
+            "maxAttempts": 2,
+            "backoffSeconds": 2,
+            "retryProfile": "step-proxy-refresh",
+            "refreshSavedStates": [
+              "proxy_chain"
+            ]
+          }
         }
       },
       {
