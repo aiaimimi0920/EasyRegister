@@ -60,6 +60,15 @@ class ErrorProfilesTests(unittest.TestCase):
             resolve_retry_codes({"retryProfile": "step-invite-recover"}),
         )
 
+    def test_resolve_retry_codes_uses_proxy_refresh_profile(self) -> None:
+        self.assertEqual(
+            {
+                ErrorCodes.PROXY_CONNECT_FAILED,
+                ErrorCodes.TRANSPORT_ERROR,
+            },
+            resolve_retry_codes({"retryProfile": "step-proxy-refresh"}),
+        )
+
     def test_protocol_runtime_error_carries_inferred_code(self) -> None:
         exc = ensure_protocol_runtime_error(
             RuntimeError("mailbox capacity unavailable"),

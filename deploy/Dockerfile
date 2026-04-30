@@ -10,9 +10,13 @@ COPY server ./server
 COPY README.md ./README.md
 
 RUN python -c "import curl_cffi" \
-    || (apt-get -o Acquire::Retries=5 update \
+    || (sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+        && apt-get -o Acquire::Retries=5 update \
         && apt-get -o Acquire::Retries=5 install -y --fix-missing --no-install-recommends ca-certificates \
         && rm -rf /var/lib/apt/lists/* \
-        && python -m pip install --no-cache-dir --retries 10 --timeout 300 curl-cffi)
+        && python -m pip install --no-cache-dir --retries 10 --timeout 300 \
+            --index-url https://mirrors.aliyun.com/pypi/simple \
+            --trusted-host mirrors.aliyun.com \
+            curl-cffi)
 
 CMD ["python", "-m", "infinite_runner"]

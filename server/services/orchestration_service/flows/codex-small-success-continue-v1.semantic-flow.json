@@ -90,7 +90,15 @@
         "saveAs": "initialize_platform_organization",
         "metadata": {
           "owner": "easyprotocol",
-          "stage": "platform-org-init"
+          "stage": "platform-org-init",
+          "retry": {
+            "maxAttempts": 2,
+            "backoffSeconds": 2,
+            "retryProfile": "step-proxy-refresh",
+            "refreshSavedStates": [
+              "proxy_chain"
+            ]
+          }
         }
       },
       {
@@ -105,7 +113,15 @@
         "saveAs": "initialize_chatgpt_login_session",
         "metadata": {
           "owner": "easyprotocol",
-          "stage": "chatgpt-login-init"
+          "stage": "chatgpt-login-init",
+          "retry": {
+            "maxAttempts": 2,
+            "backoffSeconds": 2,
+            "retryProfile": "step-proxy-refresh",
+            "refreshSavedStates": [
+              "proxy_chain"
+            ]
+          }
         }
       },
       {
