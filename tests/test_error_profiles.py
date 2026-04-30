@@ -73,6 +73,18 @@ class ErrorProfilesTests(unittest.TestCase):
             resolve_retry_codes({"retryProfile": "step-create-account-recover"}),
         )
 
+    def test_resolve_retry_codes_uses_login_init_recover_profile(self) -> None:
+        self.assertEqual(
+            {
+                ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
+                ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
+                ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+                ErrorCodes.PROXY_CONNECT_FAILED,
+                ErrorCodes.TRANSPORT_ERROR,
+            },
+            resolve_retry_codes({"retryProfile": "step-login-init-recover"}),
+        )
+
     def test_resolve_retry_codes_uses_proxy_refresh_profile(self) -> None:
         self.assertEqual(
             {
@@ -81,6 +93,13 @@ class ErrorProfilesTests(unittest.TestCase):
             },
             resolve_retry_codes({"retryProfile": "step-proxy-refresh"}),
         )
+
+    def test_build_error_details_classifies_chat_requirements_unauthorized(self) -> None:
+        details = build_error_details(
+            step_type="initialize_chatgpt_login_session",
+            message='chat_requirements_failed status=401 body={"detail":"Unauthorized"}',
+        )
+        self.assertEqual(ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION, details["code"])
 
     def test_protocol_runtime_error_carries_inferred_code(self) -> None:
         exc = ensure_protocol_runtime_error(

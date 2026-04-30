@@ -105,7 +105,7 @@
           "retry": {
             "maxAttempts": 2,
             "backoffSeconds": 2,
-            "retryProfile": "step-proxy-refresh",
+            "retryProfile": "step-login-init-recover",
             "refreshSavedStates": [
               "proxy_chain"
             ]

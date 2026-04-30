@@ -443,3 +443,73 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual(2, result.step_attempts["create-openai-account"])
         self.assertEqual(["http://proxy-1", "http://proxy-2"], create_proxy_urls)
         self.assertEqual(2, proxy_call_count)
+
+    def test_run_dst_flow_once_retries_chatgpt_login_after_chat_requirements_401(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "acquire-proxy-chain",
+                                    "type": "acquire_proxy_chain",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "saveAs": "proxy_chain",
+                                },
+                                {
+                                    "id": "initialize-chatgpt-login-session",
+                                    "type": "initialize_chatgpt_login_session",
+                                    "metadata": {
+                                        "owner": "easyprotocol",
+                                        "retry": {
+                                            "maxAttempts": 2,
+                                            "retryProfile": "step-login-init-recover",
+                                            "refreshSavedStates": [
+                                                "proxy_chain"
+                                            ],
+                                        },
+                                    },
+                                    "input": {
+                                        "proxy_url": "{{proxy_chain.proxy_url}}",
+                                    },
+                                    "saveAs": "initialize_chatgpt_login_session",
+                                },
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proxy_call_count = 0
+            login_proxy_urls: list[str] = []
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                nonlocal proxy_call_count
+                if step_type == "acquire_proxy_chain":
+                    proxy_call_count += 1
+                    return {"ok": True, "proxy_url": f"http://proxy-{proxy_call_count}"}
+                if step_type == "initialize_chatgpt_login_session":
+                    login_proxy_urls.append(str(step_input.get("proxy_url") or ""))
+                    if len(login_proxy_urls) == 1:
+                        raise RuntimeError('chat_requirements_failed status=401 body={"detail":"Unauthorized"}')
+                    return {
+                        "ok": True,
+                        "status": "completed",
+                        "workspaceId": "ws_personal",
+                    }
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(dst_flow.OWNER_DISPATCHERS, {"easyprotocol": _dispatcher}, clear=True):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(2, result.step_attempts["initialize-chatgpt-login-session"])
+        self.assertEqual(["http://proxy-1", "http://proxy-2"], login_proxy_urls)
+        self.assertEqual(2, proxy_call_count)

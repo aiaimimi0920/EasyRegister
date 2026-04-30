@@ -92,6 +92,13 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
     ),
+    "step-login-init-recover": (
+        ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
+        ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
+        ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+        ErrorCodes.PROXY_CONNECT_FAILED,
+        ErrorCodes.TRANSPORT_ERROR,
+    ),
     "step-proxy-refresh": (
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
@@ -211,6 +218,8 @@ def classify_error_code(
         return ErrorCodes.TEAM_SEATS_FULL
     if normalized_detail == "user_register" or "user_register" in lowered:
         return ErrorCodes.USER_REGISTER_400
+    if "chat_requirements_failed" in lowered and ("status=401" in lowered or '"detail":"unauthorized"' in lowered):
+        return ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION
     if "authorize_continue" in lowered and ("status=429" in lowered or "rate limit exceeded" in lowered):
         return ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED
     if normalized_detail == "authorize_continue" or (
