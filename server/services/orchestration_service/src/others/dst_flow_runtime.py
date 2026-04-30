@@ -17,6 +17,60 @@ from others.dst_flow_support import step_output_ok
 from others.dst_flow_support import step_retry_policy
 
 
+def _cleanup_saved_state_before_refresh(*, refresh_statement: DstStatement, state: dict[str, Any], result: DstExecutionResult) -> None:
+    save_as_name = str(refresh_statement.save_as or "").strip()
+    if not save_as_name:
+        return
+    existing_output = state.get(save_as_name)
+    if not isinstance(existing_output, dict):
+        existing_output = result.outputs.get(refresh_statement.step_id)
+    if not isinstance(existing_output, dict) or not existing_output:
+        return
+
+    owner = str(refresh_statement.metadata.get("owner") or "").strip().lower()
+    dispatcher = OWNER_DISPATCHERS.get(owner)
+    if dispatcher is None:
+        return
+
+    normalized_step_type = str(refresh_statement.step_type or "").strip().lower()
+    if normalized_step_type == "acquire_proxy_chain":
+        proxy_url = str(existing_output.get("proxy_url") or "").strip()
+        lease_id = str(existing_output.get("lease_id") or "").strip()
+        if not proxy_url and not lease_id:
+            return
+        try:
+            dispatcher(
+                step_type="release_proxy_chain",
+                step_input={
+                    "proxy_url": proxy_url,
+                    "lease_id": lease_id,
+                    "error_code": "refresh_retry_state",
+                },
+            )
+        except Exception:
+            pass
+        return
+
+    if normalized_step_type == "acquire_mailbox":
+        mailbox_ref = str(existing_output.get("mailbox_ref") or "").strip()
+        mailbox_session_id = str(existing_output.get("session_id") or "").strip()
+        provider = str(existing_output.get("provider") or "").strip().lower()
+        if not mailbox_ref and not mailbox_session_id:
+            return
+        try:
+            dispatcher(
+                step_type="release_mailbox",
+                step_input={
+                    "provider": provider,
+                    "mailbox_ref": mailbox_ref,
+                    "mailbox_session_id": mailbox_session_id,
+                    "error_code": "refresh_retry_state",
+                },
+            )
+        except Exception:
+            pass
+
+
 def should_retry_step(*, statement: DstStatement, error_details: dict[str, Any], attempt_index: int) -> bool:
     retry = step_retry_policy(statement)
     try:
@@ -153,6 +207,11 @@ def refresh_retry_state(
         refresh_statement = save_as_index.get(normalized_name)
         if refresh_statement is None:
             raise RuntimeError(f"dst_refresh_state_missing:{normalized_name}")
+        _cleanup_saved_state_before_refresh(
+            refresh_statement=refresh_statement,
+            state=state,
+            result=result,
+        )
         refresh_attempts = int(result.step_attempts.get(refresh_statement.step_id, 0) or 0) + 1
         result.step_attempts[refresh_statement.step_id] = refresh_attempts
         run_statement_once(statement=refresh_statement, state=state, result=result)

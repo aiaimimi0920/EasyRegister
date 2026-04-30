@@ -33,6 +33,7 @@
           "preallocated_email": "{{task.preallocated_email}}",
           "preallocated_session_id": "{{task.preallocated_session_id}}",
           "preallocated_mailbox_ref": "{{task.preallocated_mailbox_ref}}",
+          "recreate_preallocated_email": "{{task.mailbox_recreate_preallocated}}",
           "business_key": "{{task.mailbox_business_key}}"
         },
         "saveAs": "mailbox",
@@ -83,6 +84,7 @@
             "backoffSeconds": 2,
             "retryProfile": "step-create-account-recover",
             "refreshSavedStates": [
+              "mailbox",
               "proxy_chain"
             ]
           }

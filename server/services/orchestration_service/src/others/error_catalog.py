@@ -220,6 +220,8 @@ def classify_error_code(
         return ErrorCodes.USER_REGISTER_400
     if "chat_requirements_failed" in lowered and ("status=401" in lowered or '"detail":"unauthorized"' in lowered):
         return ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION
+    if "chatgpt_login_authorize_init_failed" in lowered and ("just a moment" in lowered or "status=403" in lowered):
+        return ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED
     if "authorize_continue" in lowered and ("status=429" in lowered or "rate limit exceeded" in lowered):
         return ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED
     if normalized_detail == "authorize_continue" or (

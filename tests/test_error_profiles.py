@@ -101,6 +101,13 @@ class ErrorProfilesTests(unittest.TestCase):
         )
         self.assertEqual(ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION, details["code"])
 
+    def test_build_error_details_classifies_chatgpt_login_authorize_init_blocked(self) -> None:
+        details = build_error_details(
+            step_type="initialize_chatgpt_login_session",
+            message='chatgpt_login_authorize_init_failed status=403 body=<!DOCTYPE html><title>Just a moment...</title>',
+        )
+        self.assertEqual(ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, details["code"])
+
     def test_protocol_runtime_error_carries_inferred_code(self) -> None:
         exc = ensure_protocol_runtime_error(
             RuntimeError("mailbox capacity unavailable"),
