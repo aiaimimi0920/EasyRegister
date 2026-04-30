@@ -225,6 +225,8 @@ def classify_error_code(
         return ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED
     if "chatgpt_login_otp_validate_failed" in lowered and "wrong_email_otp_code" in lowered:
         return ErrorCodes.OTP_TIMEOUT
+    if "platform_login" in lowered and ("just a moment" in lowered or "status=403" in lowered):
+        return ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED
     if "authorize_continue" in lowered and ("status=429" in lowered or "rate limit exceeded" in lowered):
         return ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED
     if normalized_detail == "authorize_continue" or (

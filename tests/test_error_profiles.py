@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 
@@ -24,6 +25,24 @@ from errors import (  # noqa: E402
 
 
 class ErrorProfilesTests(unittest.TestCase):
+    def test_main_flow_retry_profiles_match_expected_steps(self) -> None:
+        flow_path = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows" / "codex-openai-account-v1.semantic-flow.json"
+        payload = json.loads(flow_path.read_text(encoding="utf-8"))
+        steps = payload["definition"]["steps"]
+        by_id = {str(step.get("id") or ""): step for step in steps}
+        self.assertEqual(
+            "step-create-account-recover",
+            by_id["create-openai-account"]["metadata"]["retry"]["retryProfile"],
+        )
+        self.assertEqual(
+            "step-login-init-recover",
+            by_id["initialize-chatgpt-login-session"]["metadata"]["retry"]["retryProfile"],
+        )
+        self.assertEqual(
+            "step-proxy-refresh",
+            by_id["initialize-platform-organization"]["metadata"]["retry"]["retryProfile"],
+        )
+
     def test_build_error_details_classifies_team_auth_token_invalidated(self) -> None:
         details = build_error_details(
             step_type="invite_codex_member",
@@ -115,6 +134,13 @@ class ErrorProfilesTests(unittest.TestCase):
             message='chatgpt_login_otp_validate_failed status=401 body={"error":{"code":"wrong_email_otp_code"}}',
         )
         self.assertEqual(ErrorCodes.OTP_TIMEOUT, details["code"])
+
+    def test_build_error_details_classifies_platform_login_blocked(self) -> None:
+        details = build_error_details(
+            step_type="create_openai_account",
+            message='platform_login status=403 body=<!DOCTYPE html><title>Just a moment...</title>',
+        )
+        self.assertEqual(ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, details["code"])
 
     def test_protocol_runtime_error_carries_inferred_code(self) -> None:
         exc = ensure_protocol_runtime_error(

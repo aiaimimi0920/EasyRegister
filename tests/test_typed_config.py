@@ -127,6 +127,33 @@ class TypedConfigTests(unittest.TestCase):
         )
         self.assertEqual(str(flow_main.resolve()), config.flow_path)
 
+    def test_runner_main_config_parses_relaxed_flow_specs_from_docker_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            flow_main = Path(tmp_dir) / "main-flow.json"
+            flow_main.write_text("{}", encoding="utf-8")
+            relaxed_specs = (
+                "["
+                "{name:openai-main,path:" + str(flow_main.resolve()).replace("\\", "/") + ",role:main,weight:100,mailboxBusinessKey:openai}"
+                "]"
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_INSTANCE_ID": "mixed",
+                    "REGISTER_INSTANCE_ROLE": "mixed",
+                    "REGISTER_FLOW_SPECS_JSON": relaxed_specs,
+                },
+                clear=True,
+            ):
+                config = RunnerMainConfig.from_env()
+        self.assertEqual(1, len(config.flow_specs))
+        self.assertEqual("openai-main", config.flow_specs[0].name)
+        self.assertEqual("main", config.flow_specs[0].instance_role)
+        self.assertEqual(flow_main.resolve(), Path(config.flow_specs[0].flow_path).resolve())
+        self.assertEqual(flow_main.resolve(), Path(config.flow_path).resolve())
+
     def test_proxy_runtime_config_normalizes_mode_and_fallbacks(self) -> None:
         with mock.patch.dict(
             os.environ,

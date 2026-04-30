@@ -106,6 +106,129 @@ def _default_small_success_pool_dir_for_role(
     return Path(resolve_small_success_pool_dir(str(output_root))).resolve()
 
 
+def _split_top_level_parts(text: str, delimiter: str) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    quote_char = ""
+    escaped = False
+    for char in str(text or ""):
+        if quote_char:
+            current.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote_char:
+                quote_char = ""
+            continue
+        if char in {"'", '"'}:
+            quote_char = char
+            current.append(char)
+            continue
+        if char in {"{", "["}:
+            depth += 1
+            current.append(char)
+            continue
+        if char in {"}", "]"}:
+            depth = max(0, depth - 1)
+            current.append(char)
+            continue
+        if char == delimiter and depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    if current:
+        parts.append("".join(current).strip())
+    return [part for part in parts if part]
+
+
+def _find_top_level_colon(text: str) -> int:
+    depth = 0
+    quote_char = ""
+    escaped = False
+    for index, char in enumerate(str(text or "")):
+        if quote_char:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote_char:
+                quote_char = ""
+            continue
+        if char in {"'", '"'}:
+            quote_char = char
+            continue
+        if char in {"{", "["}:
+            depth += 1
+            continue
+        if char in {"}", "]"}:
+            depth = max(0, depth - 1)
+            continue
+        if char == ":" and depth == 0:
+            return index
+    return -1
+
+
+def _strip_optional_quotes(value: str) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def _parse_relaxed_scalar(value: str) -> Any:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text[0] in {"'", '"'} and text[-1] == text[0]:
+        return _strip_optional_quotes(text)
+    lowered = text.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered == "null":
+        return None
+    try:
+        if any(marker in text for marker in (".", "e", "E")):
+            return float(text)
+        return int(text)
+    except Exception:
+        return text
+
+
+def _parse_relaxed_flow_spec_items(text: str) -> list[dict[str, Any]]:
+    raw = str(text or "").strip()
+    if not raw.startswith("[") or not raw.endswith("]"):
+        return []
+    inner = raw[1:-1].strip()
+    if not inner:
+        return []
+    items: list[dict[str, Any]] = []
+    for candidate in _split_top_level_parts(inner, ","):
+        body = candidate.strip()
+        if body.startswith("{") and body.endswith("}"):
+            body = body[1:-1].strip()
+        if not body:
+            continue
+        parsed: dict[str, Any] = {}
+        for pair in _split_top_level_parts(body, ","):
+            split_index = _find_top_level_colon(pair)
+            if split_index <= 0:
+                continue
+            raw_key = pair[:split_index].strip()
+            raw_value = pair[split_index + 1 :].strip()
+            key = _strip_optional_quotes(raw_key)
+            if not key:
+                continue
+            parsed[key] = _parse_relaxed_scalar(raw_value)
+        if parsed:
+            items.append(parsed)
+    return items
+
+
 def _parse_runner_flow_specs(
     raw: str,
     *,
@@ -121,7 +244,7 @@ def _parse_runner_flow_specs(
     try:
         payload = json.loads(text)
     except Exception:
-        return ()
+        payload = _parse_relaxed_flow_spec_items(text)
     items = payload.get("flows") if isinstance(payload, dict) and isinstance(payload.get("flows"), list) else payload
     if not isinstance(items, list):
         return ()
