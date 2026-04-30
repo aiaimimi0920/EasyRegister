@@ -58,7 +58,7 @@ services:
       REGISTER_DASHBOARD_RECENT_WINDOW_SECONDS: ${REGISTER_DASHBOARD_RECENT_WINDOW_SECONDS:-900}
     volumes:
       - ${REGISTER_OUTPUT_DIR_HOST}:/shared/register-output
-      - ${REGISTER_TEAM_AUTH_DIR_HOST}:/shared/team-auth:ro
+      - ${REGISTER_TEAM_AUTH_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/team-auth:ro
       - ${REGISTER_FREE_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/free}:/shared/local-free-store
       - ${REGISTER_TEAM_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/local-team-store
       - ../server:/app/server
@@ -117,7 +117,7 @@ services:
       REGISTER_DASHBOARD_ENABLED: "false"
     volumes:
       - ${REGISTER_OUTPUT_DIR_HOST}:/shared/register-output
-      - ${REGISTER_TEAM_AUTH_DIR_HOST}:/shared/team-auth:ro
+      - ${REGISTER_TEAM_AUTH_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/team-auth:ro
       - ${REGISTER_FREE_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/free}:/shared/local-free-store
       - ${REGISTER_TEAM_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/local-team-store
       - ../server:/app/server
@@ -179,7 +179,7 @@ services:
       REGISTER_TEAM_WORKSPACE_SELECTOR: ${REGISTER_TEAM_WORKSPACE_SELECTOR:-first_team}
     volumes:
       - ${REGISTER_OUTPUT_DIR_HOST}:/shared/register-output
-      - ${REGISTER_TEAM_AUTH_DIR_HOST}:/shared/team-auth:ro
+      - ${REGISTER_TEAM_AUTH_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/team-auth:ro
       - ${REGISTER_FREE_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/free}:/shared/local-free-store
       - ${REGISTER_TEAM_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/local-team-store
       - ../server:/app/server
