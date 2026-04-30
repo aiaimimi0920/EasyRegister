@@ -16,6 +16,7 @@ class DstStatement:
 @dataclass(frozen=True)
 class DstPlan:
     steps: list[DstStatement]
+    flow_id: str = ""
     platform: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -24,6 +25,7 @@ class DstPlan:
 class DstExecutionResult:
     ok: bool
     task_attempts: int = 1
+    task_context: dict[str, Any] = field(default_factory=dict)
     steps: dict[str, str] = field(default_factory=dict)
     outputs: dict[str, Any] = field(default_factory=dict)
     step_attempts: dict[str, int] = field(default_factory=dict)
@@ -35,6 +37,7 @@ class DstExecutionResult:
         return {
             "ok": self.ok,
             "taskAttempts": int(self.task_attempts or 1),
+            "taskContext": dict(self.task_context),
             "steps": dict(self.steps),
             "outputs": dict(self.outputs),
             "stepAttempts": dict(self.step_attempts),

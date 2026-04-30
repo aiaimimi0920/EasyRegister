@@ -26,6 +26,15 @@
 - `protocol_runtime/platform_protocol_register.py`
 - `protocol_runtime/semantic_auth_flow.py`
 
+## 开发规范
+
+当前统一的跨仓开发规范已经落在：
+
+- `docs/development-workflow.md`
+
+后续请按这份文档执行新仓开发、本地优先验证、临时测试资产归档到 `linshi`、
+以及最终 GHCR 验收流程。
+
 ## 当前目录结构
 
 - `compose/`
@@ -107,6 +116,21 @@
 - `REGISTER_MAILBOX_PROVIDERS` 现在只作为可选的 provider group 过滤条件透传给 `EasyEmail`
 - `REGISTER_MAILBOX_STRATEGY_MODE_ID` 现在只作为可选的 strategy mode 透传给 `EasyEmail`
 - `REGISTER_MAILBOX_ROUTING_PROFILE_ID` 现在只作为可选的 routing profile id 透传给 `EasyEmail`
+- `REGISTER_MAILBOX_BUSINESS_KEY` 现在只作为默认业务标签兜底；真正的业务标签应由具体 DST / task 传入
+- `REGISTER_MAILBOX_DOMAIN_BLACKLIST` 是默认业务策略的显式域名黑名单
+- `REGISTER_MAILBOX_DOMAIN_POOL` 是默认业务策略的偏好域名池
+- `REGISTER_MAILBOX_BUSINESS_POLICIES_JSON` 可以在同一个镜像实例里声明多套业务邮箱策略，按业务 key 选不同域名池和黑名单
+
+当前邮箱域名黑名单是业务级别的，而不是全局级别的：
+
+- `openai` 业务里拉黑的域名，不会自动污染其他业务的域名判断
+- 运行态统计会按 task / flow 实际携带的 `businessKey` 分桶记录
+- 如果当前业务显式拉黑某个域名，后续申请到该域名会立即释放并重新申请
+- 对 `moemail` 这类业务邮箱，如果实际返回域名不在当前业务配置的域名池里，也会立即丢弃并重申请
+- 当前默认策略下，只有明确命中 `unsupported_email` 这类“业务明确不支持该邮箱域”的结果，才建议进入业务黑名单
+- 像 `cksa.eu.cc` 这种当前阶段高失败、但仍可能偶发通过的域名，默认只做统计，不会因为失败率高就自动进入业务黑名单
+
+推荐做法是让每个 DST 在自己的 flow metadata 里声明 `mailbox.businessKey`，然后由统一镜像实例按业务 key 选策略，而不是为每个业务单独做一份“当前 DST 专用镜像”。
 
 `high-availability` 是 `EasyEmail` 内部的通用路由档位，不是 `EasyRegister`
 里的业务白名单。当前它会把高可用邮箱优先收敛到 `m2u + moemail`，以后如果你要
@@ -303,31 +327,58 @@ GHCR 登录也支持和参考仓同样的双路径：
 - 容器内只有一个中心控制端
 - supervisor 负责拉起多个独立 worker 进程
 - 每个 worker 串行执行一整条 DST
-- 多个 worker 可以并发跑不同任务
+- 多个 worker 可以并发跑不同任务，也可以在同一个实例里混跑不同 flow
 - worker 之间通过进程隔离，避免代理/邮箱运行时全局状态互相污染
 
 相关环境变量：
 
 - `REGISTER_WORKER_COUNT`
-  - 主注册 worker 数量，默认 `7`
+  - supervisor 拉起的总 worker 数量
 - `REGISTER_WORKER_STAGGER_SECONDS`
-  - 主注册 worker 启动错峰秒数，默认 `20`
+  - worker 启动错峰秒数
 - `REGISTER_LOOP_DELAY_SECONDS`
   - 每个 worker 完成一轮后的等待秒数
 - `REGISTER_INFINITE_MAX_RUNS`
   - 整个 supervisor 总共允许启动的任务数；`0` 表示无限
-- `REGISTER_CONTINUE_WORKER_COUNT`
-  - 续跑 worker 数量，默认 `2`
-- `REGISTER_CONTINUE_WORKER_STAGGER_SECONDS`
-  - 续跑 worker 启动错峰秒数，默认 `5`
-- `REGISTER_CONTINUE_LOOP_DELAY_SECONDS`
-  - 续跑 worker 每轮完成后的等待秒数，默认 `15`
-- `REGISTER_TEAM_WORKER_COUNT`
-  - team 扩容 worker 数量，默认 `1`
-- `REGISTER_TEAM_WORKER_STAGGER_SECONDS`
-  - team 扩容 worker 启动错峰秒数，默认 `5`
-- `REGISTER_TEAM_LOOP_DELAY_SECONDS`
-  - team 扩容 worker 每轮完成后的等待秒数，默认 `20`
+- `REGISTER_FLOW_PATH`
+  - 兼容旧模式的单 flow 入口；不配置时仍回退到默认 `codex-openai-account-v1`
+- `REGISTER_FLOW_SPECS_JSON`
+  - 新的混跑入口；可以在同一个实例里声明多条 flow spec，每条 spec 自带 `path`、`role`、`weight`，worker 每轮会从可运行 flow 中按权重选择一条
+- `REGISTER_INSTANCE_ID`
+  - service 级实例标识；建议混跑实例使用类似 `mixed`
+- `REGISTER_INSTANCE_ROLE`
+  - service 级标签；混跑实例建议设成 `mixed`
+
+一个典型的混跑配置示例：
+
+```json
+[
+  {
+    "name": "openai-main",
+    "path": "server/services/orchestration_service/flows/codex-openai-account-v1.semantic-flow.json",
+    "role": "main",
+    "weight": 5
+  },
+  {
+    "name": "openai-continue",
+    "path": "server/services/orchestration_service/flows/codex-small-success-continue-v1.semantic-flow.json",
+    "role": "continue",
+    "weight": 2
+  },
+  {
+    "name": "codex-team-expand",
+    "path": "server/services/orchestration_service/flows/codex-team-expand-v1.semantic-flow.json",
+    "role": "team",
+    "weight": 1
+  }
+]
+```
+
+其中：
+
+- `main` flow 默认消费 `small-success-pool`
+- `continue` flow 默认消费 `small-success-continue-pool`
+- `team` flow 默认仍从主 `small-success-pool` 补 `team-pre-pool`，并等待 `team-mother-pool` 有可用 mother 后再被调度
 - `REGISTER_TEAM_PRE_FILL_COUNT`
   - 每轮最多从 `small-success-pool` 随机移动到 `others/team-pre-pool` 的文件数，默认 `1`
 - `REGISTER_TEAM_MEMBER_COUNT`

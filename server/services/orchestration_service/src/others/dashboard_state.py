@@ -87,7 +87,19 @@ class WorkerRuntimeState:
         )
         self._save()
 
-    def run_started(self, *, task_index: int, local_run_index: int, started_at: str, output_dir: str, team_auth_path: str, team_auth_pool_size: int) -> None:
+    def run_started(
+        self,
+        *,
+        task_index: int,
+        local_run_index: int,
+        started_at: str,
+        output_dir: str,
+        team_auth_path: str,
+        team_auth_pool_size: int,
+        flow_name: str = "",
+        flow_path: str = "",
+        task_role: str = "",
+    ) -> None:
         self._state.update(
             {
                 "status": "running",
@@ -97,6 +109,9 @@ class WorkerRuntimeState:
                 "currentOutputDir": str(output_dir),
                 "teamAuthPath": str(team_auth_path or ""),
                 "teamAuthPoolSize": int(team_auth_pool_size),
+                "currentFlowName": str(flow_name or ""),
+                "currentFlowPath": str(flow_path or ""),
+                "currentTaskRole": str(task_role or ""),
                 "updatedAt": utcnow().isoformat(),
             }
         )
@@ -126,6 +141,9 @@ class WorkerRuntimeState:
                 "status": "idle" if bool(result.get("ok")) else "failed",
                 "taskIndex": int(task_index),
                 "currentOutputDir": "",
+                "currentFlowName": "",
+                "currentFlowPath": "",
+                "currentTaskRole": "",
                 "lastFinishedAt": str(finished_at),
                 "lastResult": {
                     "ok": bool(result.get("ok")),
@@ -147,6 +165,9 @@ class WorkerRuntimeState:
                 "status": "crashed",
                 "taskIndex": int(task_index),
                 "currentOutputDir": "",
+                "currentFlowName": "",
+                "currentFlowPath": "",
+                "currentTaskRole": "",
                 "lastFinishedAt": str(finished_at),
                 "lastResult": {
                     "ok": False,
@@ -195,6 +216,7 @@ class ServiceRuntimeState:
         delay_seconds: float,
         worker_stagger_seconds: float,
         small_success_pool_dir: str,
+        flow_specs: list[dict[str, Any]] | None = None,
     ) -> None:
         self._path = service_state_path(shared_root, instance_id)
         self._state = read_json(self._path)
@@ -208,6 +230,7 @@ class ServiceRuntimeState:
                 "delaySeconds": float(delay_seconds),
                 "workerStaggerSeconds": float(worker_stagger_seconds),
                 "smallSuccessPoolDir": str(small_success_pool_dir),
+                "flowSpecs": list(flow_specs or []),
             }
         )
 

@@ -95,6 +95,38 @@ class TypedConfigTests(unittest.TestCase):
             self.assertEqual(config.shared_root / "small-success-pool", config.small_success_pool_dir)
             self.assertEqual(config.shared_root / "free-oauth-pool", config.free_oauth_pool_dir)
 
+    def test_runner_main_config_parses_mixed_flow_specs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            flow_main = Path(tmp_dir) / "main-flow.json"
+            flow_continue = Path(tmp_dir) / "continue-flow.json"
+            flow_main.write_text("{}", encoding="utf-8")
+            flow_continue.write_text("{}", encoding="utf-8")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_INSTANCE_ID": "mixed",
+                    "REGISTER_FLOW_SPECS_JSON": (
+                        "["
+                        "{\"name\":\"main-openai\",\"path\":\"" + str(flow_main).replace("\\", "\\\\") + "\",\"role\":\"main\",\"weight\":3},"
+                        "{\"name\":\"continue-openai\",\"path\":\"" + str(flow_continue).replace("\\", "\\\\") + "\",\"role\":\"continue\",\"weight\":1}"
+                        "]"
+                    ),
+                },
+                clear=True,
+            ):
+                config = RunnerMainConfig.from_env()
+        self.assertEqual(2, len(config.flow_specs))
+        self.assertEqual("main-openai", config.flow_specs[0].name)
+        self.assertEqual("main", config.flow_specs[0].instance_role)
+        self.assertEqual("continue", config.flow_specs[1].instance_role)
+        self.assertEqual(
+            config.shared_root / "others" / "small-success-continue-pool",
+            config.flow_specs[1].small_success_pool_dir,
+        )
+        self.assertEqual(str(flow_main.resolve()), config.flow_path)
+
     def test_proxy_runtime_config_normalizes_mode_and_fallbacks(self) -> None:
         with mock.patch.dict(
             os.environ,
@@ -127,6 +159,8 @@ class TypedConfigTests(unittest.TestCase):
             with mock.patch.dict(
                 os.environ,
                 {
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "openai-signup",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST": "coolkid.icu, cksa.eu.cc",
                     "MAILBOX_PROVIDER_CANDIDATES": "m2u, moemail, m2u",
                     "MAILBOX_PROVIDER_STRATEGY_MODE_ID": "fast-lane",
                     "MAILBOX_PROVIDER_ROUTING_PROFILE_ID": "stable",
@@ -144,8 +178,40 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual(("m2u", "moemail"), config.providers)
         self.assertEqual("fast-lane", config.strategy_mode_id)
         self.assertEqual("stable", config.routing_profile_id)
+        self.assertEqual("openai-signup", config.business_key)
         self.assertEqual(state_path.resolve(), config.domain_state_path)
+        self.assertEqual(("coolkid.icu", "cksa.eu.cc"), config.explicit_blacklist_domains)
         self.assertEqual(90.0, config.blacklist_failure_rate_percent)
+
+    def test_mailbox_runtime_config_parses_business_policy_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "domain-state.json"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_POOL": "fallback.test",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST": "fallback-black.test",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"domainPool":["zhooo.org","cnmlgb.de"],'
+                        '"explicitBlacklistDomains":["coolkid.icu"]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                config = MailboxRuntimeConfig.from_env(
+                    default_ttl_seconds=90,
+                    default_state_path=state_path,
+                    default_business_domain_pool=("a.test", "b.test"),
+                    default_blacklist_min_attempts=20,
+                    default_blacklist_failure_rate=90.0,
+                )
+        fallback_policy = config.resolve_business_policy()
+        openai_policy = config.resolve_business_policy("openai")
+        self.assertEqual(("fallback.test",), fallback_policy.domain_pool)
+        self.assertEqual(("fallback-black.test",), fallback_policy.explicit_blacklist_domains)
+        self.assertEqual(("zhooo.org", "cnmlgb.de"), openai_policy.domain_pool)
+        self.assertEqual(("coolkid.icu",), openai_policy.explicit_blacklist_domains)
 
     def test_team_auth_runtime_config_normalizes_seat_limits_and_weights(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -261,6 +327,33 @@ class TypedConfigTests(unittest.TestCase):
                 summary = validate_runtime_preflight()
         self.assertEqual(str(output_root.resolve()), summary["outputRoot"])
         self.assertEqual(str(flow_path.resolve()), summary["flowPath"])
+
+    def test_runtime_preflight_accepts_mixed_flow_specs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            flow_main = Path(tmp_dir) / "main-flow.json"
+            flow_continue = Path(tmp_dir) / "continue-flow.json"
+            for flow_path in (flow_main, flow_continue):
+                flow_path.write_text(
+                    '{"definition":{"steps":[{"id":"acquire-mailbox","type":"acquire_mailbox","metadata":{"owner":"easyemail"}}]}}',
+                    encoding="utf-8",
+                )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_FLOW_SPECS_JSON": (
+                        "["
+                        "{\"name\":\"main-openai\",\"path\":\"" + str(flow_main).replace("\\", "\\\\") + "\",\"role\":\"main\"},"
+                        "{\"name\":\"continue-openai\",\"path\":\"" + str(flow_continue).replace("\\", "\\\\") + "\",\"role\":\"continue\"}"
+                        "]"
+                    ),
+                },
+                clear=True,
+            ):
+                summary = validate_runtime_preflight()
+        self.assertEqual(2, len(summary["flowSpecs"]))
+        self.assertEqual(str(flow_main.resolve()), summary["flowSpecs"][0]["flowPath"])
 
 
 if __name__ == "__main__":

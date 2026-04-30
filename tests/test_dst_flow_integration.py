@@ -88,3 +88,145 @@ class DstFlowIntegrationTests(unittest.TestCase):
             ],
             calls,
         )
+
+    def test_run_dst_flow_once_propagates_mailbox_business_key_from_flow_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "id": "test-openai-flow",
+                            "platform": "chatgpt",
+                            "metadata": {
+                                "mailbox": {
+                                    "businessKey": "openai"
+                                }
+                            },
+                            "steps": [
+                                {
+                                    "id": "acquire-mailbox",
+                                    "type": "acquire_mailbox",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"business_key": "{{task.mailbox_business_key}}"},
+                                }
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            calls: list[tuple[str, dict[str, object]]] = []
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                calls.append((step_type, dict(step_input)))
+                return {"ok": True, "email": "user@example.com"}
+
+            with mock.patch.dict(dst_flow.OWNER_DISPATCHERS, {"easyprotocol": _dispatcher}, clear=True):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual("openai", result.to_dict()["taskContext"]["mailboxBusinessKey"])
+        self.assertEqual([("acquire_mailbox", {"business_key": "openai"})], calls)
+
+    def test_run_dst_flow_once_retries_invite_after_proxy_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "acquire-proxy-chain",
+                                    "type": "acquire_proxy_chain",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "saveAs": "proxy_chain",
+                                },
+                                {
+                                    "id": "refresh-team-auth-on-demand",
+                                    "type": "obtain_team_mother_oauth",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "saveAs": "team_mother_oauth_refresh",
+                                },
+                                {
+                                    "id": "invite-codex-member",
+                                    "type": "invite_codex_member",
+                                    "metadata": {
+                                        "owner": "easyprotocol",
+                                        "retry": {
+                                            "maxAttempts": 2,
+                                            "retryProfile": "step-invite-recover",
+                                            "refreshSavedStates": [
+                                                "proxy_chain",
+                                                "team_mother_oauth_refresh",
+                                            ],
+                                        },
+                                    },
+                                    "input": {
+                                        "proxy_url": "{{proxy_chain.proxy_url}}",
+                                        "team_auth_path": "{{team_mother_oauth_refresh.successPath}}",
+                                    },
+                                    "saveAs": "invite_codex_member",
+                                },
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proxy_call_count = 0
+            refresh_call_count = 0
+            invite_proxy_urls: list[str] = []
+            invite_team_auth_paths: list[str] = []
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                nonlocal proxy_call_count, refresh_call_count
+                if step_type == "acquire_proxy_chain":
+                    proxy_call_count += 1
+                    return {"ok": True, "proxy_url": f"http://proxy-{proxy_call_count}"}
+                if step_type == "obtain_team_mother_oauth":
+                    refresh_call_count += 1
+                    return {
+                        "ok": True,
+                        "successPath": f"/tmp/team-auth-refresh-{refresh_call_count}.json",
+                    }
+                if step_type == "invite_codex_member":
+                    invite_proxy_urls.append(str(step_input.get("proxy_url") or ""))
+                    invite_team_auth_paths.append(str(step_input.get("team_auth_path") or ""))
+                    if len(invite_proxy_urls) == 1:
+                        raise RuntimeError(
+                            "Failed to perform, curl: (28) Operation timed out after 30001 milliseconds with 0 bytes received."
+                        )
+                    return {
+                        "ok": True,
+                        "status": "already_invited",
+                        "team_account_id": "acct_123",
+                        "team_email": "mother@example.com",
+                    }
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(dst_flow.OWNER_DISPATCHERS, {"easyprotocol": _dispatcher}, clear=True):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(2, result.step_attempts["invite-codex-member"])
+        self.assertEqual(["http://proxy-1", "http://proxy-2"], invite_proxy_urls)
+        self.assertEqual(
+            [
+                "/tmp/team-auth-refresh-1.json",
+                "/tmp/team-auth-refresh-2.json",
+            ],
+            invite_team_auth_paths,
+        )
+        self.assertEqual(2, proxy_call_count)
+        self.assertEqual(2, refresh_call_count)

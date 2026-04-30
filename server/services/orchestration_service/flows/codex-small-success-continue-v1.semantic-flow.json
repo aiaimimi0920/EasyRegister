@@ -8,6 +8,9 @@
     "description": "Continue the later registration stages from a pooled small_success artifact. A fresh mailbox is acquired because the original mailbox may have expired.",
     "resourcePolicies": [],
     "metadata": {
+      "mailbox": {
+        "businessKey": "openai"
+      },
       "taskRetry": {
         "maxAttempts": 6,
         "backoffSeconds": 3,
@@ -29,7 +32,8 @@
         "input": {
           "preallocated_email": "{{task.preallocated_email}}",
           "preallocated_session_id": "{{task.preallocated_session_id}}",
-          "preallocated_mailbox_ref": "{{task.preallocated_mailbox_ref}}"
+          "preallocated_mailbox_ref": "{{task.preallocated_mailbox_ref}}",
+          "business_key": "{{task.mailbox_business_key}}"
         },
         "saveAs": "mailbox",
         "metadata": {
@@ -134,8 +138,10 @@
           "stage": "invite",
           "retry": {
             "maxAttempts": 2,
-            "retryProfile": "step-team-auth-refresh",
+            "backoffSeconds": 2,
+            "retryProfile": "step-invite-recover",
             "refreshSavedStates": [
+              "proxy_chain",
               "team_mother_oauth_refresh"
             ]
           }

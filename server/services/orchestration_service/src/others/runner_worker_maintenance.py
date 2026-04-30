@@ -37,13 +37,13 @@ class WorkerTeamAuthSelection:
 
 def process_worker_maintenance(
     *,
-    normalized_role: str,
+    active_roles: set[str],
     output_root: Path,
     free_oauth_pool_dir: Path,
     worker_label: str,
 ) -> None:
     wait_pool_result: dict[str, Any] | None = None
-    if normalized_role in {"main", "continue"}:
+    if active_roles & {"main", "continue"}:
         wait_pool_result = _drain_small_success_wait_pool(
             wait_pool_dir=_resolve_small_success_wait_pool_dir(output_root=output_root),
             continue_pool_dir=_resolve_small_success_continue_pool_dir(output_root=output_root),
@@ -54,13 +54,13 @@ def process_worker_maintenance(
             {
                 "event": "register_small_success_wait_pool_processed",
                 "workerId": worker_label,
-                "instanceRole": normalized_role,
+                "instanceRoles": sorted(active_roles),
                 "result": wait_pool_result,
             }
         )
 
     continue_prefill_result: dict[str, Any] | None = None
-    if normalized_role == "continue":
+    if "continue" in active_roles:
         continue_prefill_result = _backfill_small_success_continue_pool(
             source_pool_dir=_shared_root_from_output_root(output_root) / "small-success-pool",
             continue_pool_dir=_resolve_small_success_continue_pool_dir(output_root=output_root),
@@ -75,35 +75,47 @@ def process_worker_maintenance(
             {
                 "event": "register_small_success_continue_pool_prefilled",
                 "workerId": worker_label,
-                "instanceRole": normalized_role,
+                "instanceRoles": sorted(active_roles),
                 "result": continue_prefill_result,
             }
         )
 
     artifact_config = _artifact_routing_config(output_root=output_root)
-    backlog_result: dict[str, Any] | None = None
-    if normalized_role in {"main", "continue"}:
-        backlog_result = _drain_oauth_pool_backlog(
-            pool_dir=free_oauth_pool_dir,
-            target_folder="codex",
-            local_percent=artifact_config.free_local_split_percent,
-            local_dir=artifact_config.free_local_dir,
+    backlog_jobs: list[tuple[Path, str, float, Path]] = []
+    if active_roles & {"main", "continue"}:
+        backlog_jobs.append(
+            (
+                free_oauth_pool_dir,
+                "codex",
+                artifact_config.free_local_split_percent,
+                artifact_config.free_local_dir,
+            )
         )
-    elif normalized_role == "team":
-        backlog_result = _drain_oauth_pool_backlog(
-            pool_dir=_shared_root_from_output_root(output_root) / "team-oauth-pool",
-            target_folder="codex-team",
-            local_percent=artifact_config.team_local_split_percent,
-            local_dir=artifact_config.team_local_dir,
+    if "team" in active_roles:
+        backlog_jobs.append(
+            (
+                _shared_root_from_output_root(output_root) / "team-oauth-pool",
+                "codex-team",
+                artifact_config.team_local_split_percent,
+                artifact_config.team_local_dir,
+            )
         )
-    if isinstance(backlog_result, dict) and (
-        backlog_result.get("uploaded") or backlog_result.get("failures")
-    ):
+    for pool_dir, target_folder, local_percent, local_dir in backlog_jobs:
+        backlog_result = _drain_oauth_pool_backlog(
+            pool_dir=pool_dir,
+            target_folder=target_folder,
+            local_percent=local_percent,
+            local_dir=local_dir,
+        )
+        if not (isinstance(backlog_result, dict) and (backlog_result.get("uploaded") or backlog_result.get("failures"))):
+            continue
         _json_log(
             {
                 "event": "register_oauth_pool_backlog_processed",
                 "workerId": worker_label,
-                "instanceRole": normalized_role,
+                "instanceRoles": sorted(active_roles),
+                "targetFolder": target_folder,
+                "poolDir": str(pool_dir),
                 "result": backlog_result,
             }
         )

@@ -9,13 +9,13 @@ from typing import Any
 from errors import ensure_protocol_runtime_error
 from others.bootstrap import ensure_local_bundle_imports
 from others.common import json_log
-from others.config import MailboxRuntimeConfig, env_text
+from others.config import MailboxRuntimeConfig, env_int, env_text
 from others.local_config import read_easyemail_server_api_key
 from others.paths import resolve_shared_root as _shared_root_from_output_root
 
 ensure_local_bundle_imports()
 
-from shared_mailbox.easy_email_client import Mailbox, create_mailbox, plan_mailbox
+from shared_mailbox.easy_email_client import Mailbox, create_mailbox, plan_mailbox, release_mailbox
 
 
 DEFAULT_ORCHESTRATION_HOST_ID = "python-register-orchestration"
@@ -33,6 +33,7 @@ DEFAULT_REGISTER_MOEMAIL_DOMAIN_POOL = (
 )
 DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS = 20
 DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE = 90.0
+DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS = 4
 
 
 def _mailbox_runtime_config() -> MailboxRuntimeConfig:
@@ -134,8 +135,16 @@ def _load_mailbox_domain_state() -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _resolve_business_mailbox_domain_pool() -> tuple[str, ...]:
-    return _mailbox_runtime_config().business_domain_pool
+def _resolve_business_mailbox_domain_pool(*, business_key: str | None = None) -> tuple[str, ...]:
+    return _mailbox_runtime_config().resolve_business_policy(business_key).domain_pool
+
+
+def resolve_mailbox_business_key(*, business_key: str | None = None) -> str:
+    return _mailbox_runtime_config().resolve_business_key(business_key)
+
+
+def _resolve_mailbox_explicit_blacklist_domains(*, business_key: str | None = None) -> tuple[str, ...]:
+    return _mailbox_runtime_config().resolve_business_policy(business_key).explicit_blacklist_domains
 
 
 def _resolve_mailbox_domain_blacklist_min_attempts() -> int:
@@ -146,7 +155,17 @@ def _resolve_mailbox_domain_blacklist_failure_rate() -> float:
     return _mailbox_runtime_config().blacklist_failure_rate_percent
 
 
-def _mailbox_domain_stats(domain: str, state_payload: dict[str, Any]) -> dict[str, Any]:
+def _mailbox_domain_stats(domain: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> dict[str, Any]:
+    resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
+    businesses = state_payload.get("businesses")
+    if isinstance(businesses, dict):
+        business_payload = businesses.get(resolved_business_key)
+        if isinstance(business_payload, dict):
+            domains = business_payload.get("domains")
+            if isinstance(domains, dict):
+                stats = domains.get(domain)
+                if isinstance(stats, dict):
+                    return stats
     domains = state_payload.get("domains")
     if not isinstance(domains, dict):
         return {}
@@ -154,34 +173,149 @@ def _mailbox_domain_stats(domain: str, state_payload: dict[str, Any]) -> dict[st
     return stats if isinstance(stats, dict) else {}
 
 
-def _mailbox_domain_is_business_blacklisted(domain: str, state_payload: dict[str, Any]) -> bool:
-    stats = _mailbox_domain_stats(domain, state_payload)
-    attempts = int(stats.get("attempts") or 0)
-    failures = int(stats.get("failures") or 0)
-    if attempts < _resolve_mailbox_domain_blacklist_min_attempts():
-        return False
-    if attempts <= 0:
-        return False
-    failure_rate = (float(failures) / float(attempts)) * 100.0
-    return failure_rate >= _resolve_mailbox_domain_blacklist_failure_rate()
+def _mailbox_domain_is_business_blacklisted(domain: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> bool:
+    if domain in set(_resolve_mailbox_explicit_blacklist_domains(business_key=business_key)):
+        return True
+    stats = _mailbox_domain_stats(domain, state_payload, business_key=business_key)
+    return bool(stats.get("blacklisted"))
 
 
-def _select_business_mailbox_domain() -> tuple[str, dict[str, Any]]:
-    domain_pool = list(_resolve_business_mailbox_domain_pool())
+def _select_business_mailbox_domain(*, business_key: str | None = None) -> tuple[str, dict[str, Any]]:
+    resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
+    domain_pool = list(_resolve_business_mailbox_domain_pool(business_key=resolved_business_key))
     if not domain_pool:
-        return "", {"reason": "empty_pool", "pool_size": 0, "eligible_count": 0, "blacklisted": []}
+        return "", {"reason": "empty_pool", "pool_size": 0, "eligible_count": 0, "dynamic_blacklisted": [], "explicit_blacklisted": []}
 
     state_payload = _load_mailbox_domain_state()
-    blacklisted = [domain for domain in domain_pool if _mailbox_domain_is_business_blacklisted(domain, state_payload)]
-    eligible = [domain for domain in domain_pool if domain not in blacklisted]
-    effective_pool = eligible or domain_pool
+    explicit_blacklisted = [
+        domain
+        for domain in domain_pool
+        if domain in set(_resolve_mailbox_explicit_blacklist_domains(business_key=resolved_business_key))
+    ]
+    candidate_pool = [domain for domain in domain_pool if domain not in explicit_blacklisted]
+    if not candidate_pool:
+        return "", {
+            "reason": "empty_pool_after_explicit_blacklist",
+            "pool_size": len(domain_pool),
+            "eligible_count": 0,
+            "dynamic_blacklisted": [],
+            "explicit_blacklisted": explicit_blacklisted,
+            "business_key": resolved_business_key,
+        }
+    dynamic_blacklisted = [
+        domain
+        for domain in candidate_pool
+        if _mailbox_domain_is_business_blacklisted(
+            domain,
+            state_payload,
+            business_key=resolved_business_key,
+        )
+    ]
+    eligible = [domain for domain in candidate_pool if domain not in dynamic_blacklisted]
+    effective_pool = eligible or candidate_pool
     selected_domain = random.SystemRandom().choice(effective_pool)
     return selected_domain, {
-        "reason": "eligible_pool" if eligible else "all_blacklisted_fallback",
+        "reason": "eligible_pool" if eligible else "all_dynamic_blacklisted_fallback",
         "pool_size": len(domain_pool),
         "eligible_count": len(eligible),
-        "blacklisted": blacklisted,
+        "dynamic_blacklisted": dynamic_blacklisted,
+        "explicit_blacklisted": explicit_blacklisted,
+        "business_key": resolved_business_key,
     }
+
+
+def _resolve_mailbox_business_retry_attempts() -> int:
+    return max(1, env_int("REGISTER_MAILBOX_BUSINESS_RETRY_ATTEMPTS", DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS))
+
+
+def _mailbox_domain_from_email(email: str) -> str:
+    normalized = str(email or "").strip().lower()
+    if "@" not in normalized:
+        return ""
+    return normalized.rsplit("@", 1)[-1].strip().lower()
+
+
+def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | None = None) -> dict[str, Any] | None:
+    resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
+    provider = _normalize_mailbox_provider(str(getattr(mailbox, "provider", "") or ""))
+    email = str(getattr(mailbox, "email", "") or "").strip().lower()
+    domain = _mailbox_domain_from_email(email)
+    if not domain:
+        return None
+
+    explicit_blacklist = set(_resolve_mailbox_explicit_blacklist_domains(business_key=resolved_business_key))
+    if domain in explicit_blacklist:
+        return {
+            "reason": "explicit_business_blacklist",
+            "business_key": resolved_business_key,
+            "provider": provider,
+            "domain": domain,
+            "email": email,
+        }
+
+    business_domain_pool = set(_resolve_business_mailbox_domain_pool(business_key=resolved_business_key))
+    if provider == "moemail" and business_domain_pool and domain not in business_domain_pool:
+        return {
+            "reason": "outside_business_domain_pool",
+            "business_key": resolved_business_key,
+            "provider": provider,
+            "domain": domain,
+            "email": email,
+        }
+
+    state_payload = _load_mailbox_domain_state()
+    if _mailbox_domain_is_business_blacklisted(
+        domain,
+        state_payload,
+        business_key=resolved_business_key,
+    ):
+        return {
+            "reason": "dynamic_business_blacklist",
+            "business_key": resolved_business_key,
+            "provider": provider,
+            "domain": domain,
+            "email": email,
+        }
+    return None
+
+
+def _release_mailbox_quiet(mailbox: Mailbox, *, reason: str) -> None:
+    try:
+        release_mailbox(
+            mailbox_ref=str(getattr(mailbox, "ref", "") or "").strip() or None,
+            session_id=str(getattr(mailbox, "session_id", "") or "").strip() or None,
+            reason=reason,
+        )
+    except Exception:
+        pass
+
+
+def _create_mailbox_with_business_policy(*, create_fn: Any, business_key: str | None = None) -> Mailbox:
+    max_attempts = _resolve_mailbox_business_retry_attempts()
+    last_violation: dict[str, Any] | None = None
+    for attempt_index in range(1, max_attempts + 1):
+        mailbox = create_fn()
+        violation = _mailbox_domain_policy_violation(mailbox, business_key=business_key)
+        if violation is None:
+            return mailbox
+        last_violation = violation
+        json_log(
+            {
+                "event": "register_mailbox_business_domain_rejected",
+                "attempt": attempt_index,
+                "maxAttempts": max_attempts,
+                "reason": str(violation.get("reason") or ""),
+                "businessKey": str(violation.get("business_key") or ""),
+                "provider": str(violation.get("provider") or ""),
+                "domain": str(violation.get("domain") or ""),
+                "email": str(violation.get("email") or ""),
+            }
+        )
+        _release_mailbox_quiet(mailbox, reason="business_domain_rejected")
+    raise RuntimeError(
+        "mailbox_business_policy_retries_exhausted:"
+        f"{json.dumps(last_violation or {}, ensure_ascii=False)}"
+    )
 
 
 def _resolve_mailbox_strategy_kwargs() -> dict[str, Any]:
@@ -233,24 +367,29 @@ def resolve_mailbox(
     preallocated_session_id: str | None,
     preallocated_mailbox_ref: str | None,
     recreate_preallocated_email: bool = False,
+    business_key: str | None = None,
 ) -> Mailbox:
     ensure_easy_email_env_defaults()
     mailbox_config = _mailbox_runtime_config()
+    resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
     normalized_preallocated_email = _normalize_requested_email_address(preallocated_email)
     if normalized_preallocated_email and recreate_preallocated_email:
         ttl_seconds = mailbox_config.ttl_seconds
         requested_local_part, _, requested_domain = normalized_preallocated_email.partition("@")
         preferred_provider = _provider_from_mailbox_ref(preallocated_mailbox_ref or "")
         try:
-            return create_mailbox(
-                provider=preferred_provider or "auto",
-                default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
-                prefer_raw_self_hosted_ref=True,
-                ttl_seconds=ttl_seconds,
-                requested_email_address=normalized_preallocated_email,
-                requested_local_part=requested_local_part,
-                mailcreate_domain=requested_domain,
-                **_resolve_mailbox_strategy_kwargs(),
+            return _create_mailbox_with_business_policy(
+                create_fn=lambda: create_mailbox(
+                    provider=preferred_provider or "auto",
+                    default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
+                    prefer_raw_self_hosted_ref=True,
+                    ttl_seconds=ttl_seconds,
+                    requested_email_address=normalized_preallocated_email,
+                    requested_local_part=requested_local_part,
+                    mailcreate_domain=requested_domain,
+                    **_resolve_mailbox_strategy_kwargs(),
+                ),
+                business_key=resolved_business_key,
             )
         except Exception as exc:
             raise ensure_protocol_runtime_error(
@@ -289,7 +428,9 @@ def resolve_mailbox(
     )
     try:
         if planned_provider == "moemail":
-            selected_domain, domain_selection = _select_business_mailbox_domain()
+            selected_domain, domain_selection = _select_business_mailbox_domain(
+                business_key=resolved_business_key,
+            )
             if selected_domain:
                 json_log(
                     {
@@ -298,22 +439,30 @@ def resolve_mailbox(
                         "domain": selected_domain,
                         "reason": str(domain_selection.get("reason") or ""),
                         "eligibleCount": int(domain_selection.get("eligible_count") or 0),
-                        "blacklistedCount": len(domain_selection.get("blacklisted") or []),
+                        "dynamicBlacklistedCount": len(domain_selection.get("dynamic_blacklisted") or []),
+                        "explicitBlacklistedCount": len(domain_selection.get("explicit_blacklisted") or []),
+                        "businessKey": str(domain_selection.get("business_key") or ""),
                     }
                 )
-                return create_mailbox(
-                    provider="moemail",
-                    default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
-                    prefer_raw_self_hosted_ref=True,
-                    ttl_seconds=ttl_seconds,
-                    mailcreate_domain=selected_domain,
+                return _create_mailbox_with_business_policy(
+                    create_fn=lambda: create_mailbox(
+                        provider="moemail",
+                        default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
+                        prefer_raw_self_hosted_ref=True,
+                        ttl_seconds=ttl_seconds,
+                        mailcreate_domain=selected_domain,
+                    ),
+                    business_key=resolved_business_key,
                 )
-        return create_mailbox(
-            provider="auto",
-            default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
-            prefer_raw_self_hosted_ref=True,
-            ttl_seconds=ttl_seconds,
-            **strategy_kwargs,
+        return _create_mailbox_with_business_policy(
+            create_fn=lambda: create_mailbox(
+                provider="auto",
+                default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
+                prefer_raw_self_hosted_ref=True,
+                ttl_seconds=ttl_seconds,
+                **strategy_kwargs,
+            ),
+            business_key=resolved_business_key,
         )
     except Exception as exc:
         raise ensure_protocol_runtime_error(

@@ -11,6 +11,7 @@ from dashboard_server import ServiceRuntimeState, start_dashboard_server_if_enab
 from others.common import ensure_directory as _ensure_directory
 from others.common import json_log as _json_log
 from others.config import RunnerMainConfig
+from others.runner_flow_scheduler import flow_spec_summary
 from others.preflight import validate_runtime_preflight as _validate_runtime_preflight
 from others.runner_worker_loop import worker_loop
 
@@ -52,11 +53,9 @@ def start_worker(
     delay_seconds: float,
     max_runs: int,
     task_max_attempts: int,
-    team_auth_path: str,
-    flow_path: str,
+    flow_specs: tuple[Any, ...],
     stop_event: Any,
     task_counter: Any,
-    small_success_pool_dir_text: str,
     free_oauth_pool_dir_text: str,
 ) -> Any:
     process = ctx.Process(
@@ -69,11 +68,9 @@ def start_worker(
             "delay_seconds": delay_seconds,
             "max_runs": max_runs,
             "task_max_attempts": task_max_attempts,
-            "team_auth_path": team_auth_path,
-            "flow_path": flow_path,
+            "flow_specs": flow_specs,
             "stop_event": stop_event,
             "task_counter": task_counter,
-            "small_success_pool_dir_text": small_success_pool_dir_text,
             "free_oauth_pool_dir_text": free_oauth_pool_dir_text,
         },
         name=f"register-worker-{worker_id:02d}",
@@ -122,6 +119,7 @@ def main() -> int:
         delay_seconds=config.delay_seconds,
         worker_stagger_seconds=config.worker_stagger_seconds,
         small_success_pool_dir=str(config.small_success_pool_dir),
+        flow_specs=[flow_spec_summary(spec) for spec in config.flow_specs],
     )
 
     install_signal_handlers(stop_event=stop_event)
@@ -143,6 +141,7 @@ def main() -> int:
             "workerStaggerSeconds": config.worker_stagger_seconds,
             "maxRuns": config.max_runs,
             "outputRoot": str(output_root),
+            "flowSpecs": [flow_spec_summary(spec) for spec in config.flow_specs],
             "smallSuccessPoolDir": str(config.small_success_pool_dir),
             "freeOauthPoolDir": str(config.free_oauth_pool_dir),
         }
@@ -161,11 +160,9 @@ def main() -> int:
                 delay_seconds=config.delay_seconds,
                 max_runs=config.max_runs,
                 task_max_attempts=config.task_max_attempts,
-                team_auth_path=config.team_auth_path,
-                flow_path=config.flow_path,
+                flow_specs=config.flow_specs,
                 stop_event=stop_event,
                 task_counter=task_counter,
-                small_success_pool_dir_text=str(config.small_success_pool_dir),
                 free_oauth_pool_dir_text=str(config.free_oauth_pool_dir),
             )
             if config.worker_stagger_seconds > 0 and worker_id < config.worker_count:
@@ -206,11 +203,9 @@ def main() -> int:
                     delay_seconds=config.delay_seconds,
                     max_runs=config.max_runs,
                     task_max_attempts=config.task_max_attempts,
-                    team_auth_path=config.team_auth_path,
-                    flow_path=config.flow_path,
+                    flow_specs=config.flow_specs,
                     stop_event=stop_event,
                     task_counter=task_counter,
-                    small_success_pool_dir_text=str(config.small_success_pool_dir),
                     free_oauth_pool_dir_text=str(config.free_oauth_pool_dir),
                 )
                 if config.worker_stagger_seconds > 0:

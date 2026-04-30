@@ -78,6 +78,12 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
     "step-team-auth-refresh": (
         ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED,
     ),
+    "step-invite-recover": (
+        ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED,
+        ErrorCodes.PROXY_CONNECT_FAILED,
+        ErrorCodes.TRANSPORT_ERROR,
+        ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR,
+    ),
     "step-upload-artifact": (
         ErrorCodes.TRANSPORT_ERROR,
         ErrorCodes.UPLOAD_FILE_TO_R2_FAILED,

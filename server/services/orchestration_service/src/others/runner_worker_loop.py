@@ -18,6 +18,10 @@ from others.runner_artifacts import (
     select_local_split as _select_local_split,
     team_live_local_sync_loop as _team_live_local_sync_loop,
 )
+from others.runner_flow_scheduler import (
+    choose_runnable_flow_spec as _choose_runnable_flow_spec,
+    configured_flow_roles as _configured_flow_roles,
+)
 from others.runner_team_auth import (
     release_team_auth_seat_reservations as _team_auth_release_seat_reservations,
 )
@@ -68,25 +72,22 @@ def worker_loop(
     delay_seconds: float,
     max_runs: int,
     task_max_attempts: int,
-    team_auth_path: str,
-    flow_path: str,
+    flow_specs: tuple[Any, ...],
     stop_event: Any,
     task_counter: Any,
-    small_success_pool_dir_text: str,
     free_oauth_pool_dir_text: str,
 ) -> None:
     output_root = Path(output_root_text).resolve()
     shared_root = _shared_root_from_output_root(output_root)
     worker_output_root = build_worker_output_root(output_root=output_root, worker_id=worker_id)
     _ensure_directory(worker_output_root)
-    small_success_pool_dir = Path(small_success_pool_dir_text).resolve()
-    _ensure_directory(small_success_pool_dir)
     free_oauth_pool_dir = Path(free_oauth_pool_dir_text).resolve()
     _ensure_directory(free_oauth_pool_dir)
     worker_label = f"worker-{worker_id:02d}"
     os.environ["REGISTER_WORKER_ID"] = worker_label
     local_run_index = 0
-    normalized_role = str(instance_role or "").strip().lower()
+    configured_roles = _configured_flow_roles(flow_specs) or {str(instance_role or "").strip().lower()}
+    any_team_auth_pinned = any(bool(str(getattr(spec, "team_auth_path", "") or "").strip()) for spec in flow_specs)
 
     worker_state = WorkerRuntimeState(
         shared_root=shared_root,
@@ -97,7 +98,7 @@ def worker_loop(
     worker_state.started(
         pid=os.getpid(),
         output_root=str(worker_output_root),
-        team_auth_pinned=bool(str(team_auth_path or "").strip()),
+        team_auth_pinned=any_team_auth_pinned,
     )
     _json_log(
         {
@@ -105,11 +106,12 @@ def worker_loop(
             "workerId": worker_label,
             "pid": os.getpid(),
             "outputRoot": str(worker_output_root),
-            "teamAuthPinned": bool(str(team_auth_path or "").strip()),
+            "teamAuthPinned": any_team_auth_pinned,
+            "configuredRoles": sorted(configured_roles),
         }
     )
 
-    if normalized_role == "team":
+    if "team" in configured_roles:
         threading.Thread(
             target=_team_live_local_sync_loop,
             kwargs={
@@ -123,15 +125,38 @@ def worker_loop(
 
     while not stop_event.is_set():
         _process_worker_maintenance(
-            normalized_role=normalized_role,
+            active_roles=configured_roles,
             output_root=output_root,
             free_oauth_pool_dir=free_oauth_pool_dir,
             worker_label=worker_label,
         )
+        selected_flow_spec, flow_selection = _choose_runnable_flow_spec(
+            flow_specs=flow_specs,
+            output_root=output_root,
+            shared_root=shared_root,
+        )
+        if selected_flow_spec is None:
+            sleep_seconds = max(float(delay_seconds or 0.0), 1.0)
+            _json_log(
+                {
+                    "event": "register_flow_selection_idle",
+                    "workerId": worker_label,
+                    "pid": os.getpid(),
+                    "configuredRoles": sorted(configured_roles),
+                    "selection": flow_selection,
+                    "seconds": sleep_seconds,
+                }
+            )
+            worker_state.sleeping(task_index=int(task_counter.value or 0), seconds=sleep_seconds)
+            time.sleep(sleep_seconds)
+            continue
         task_index = claim_task_index(task_counter=task_counter, max_runs=max_runs)
         if task_index is None:
             break
 
+        normalized_role = str(selected_flow_spec.instance_role or "").strip().lower()
+        small_success_pool_dir = Path(selected_flow_spec.small_success_pool_dir).resolve()
+        _ensure_directory(small_success_pool_dir)
         free_local_selected = False
         if normalized_role in {"main", "continue"}:
             artifact_config = _artifact_routing_config(output_root=output_root)
@@ -145,7 +170,7 @@ def worker_loop(
             output_root=output_root,
             worker_label=worker_label,
             task_index=task_index,
-            pinned_team_auth_path=str(team_auth_path or "").strip(),
+            pinned_team_auth_path=str(selected_flow_spec.team_auth_path or "").strip(),
         )
         team_auth_pool = team_auth_selection.team_auth_pool
         selected_team_auth_path = team_auth_selection.selected_team_auth_path
@@ -182,8 +207,12 @@ def worker_loop(
                 "localRunIndex": local_run_index,
                 "startedAt": started_at,
                 "outputDir": str(run_output_dir),
+                "flowName": str(selected_flow_spec.name or "").strip(),
+                "flowPath": str(selected_flow_spec.flow_path or "").strip(),
+                "taskRole": normalized_role,
                 "teamAuthPath": selected_team_auth_path,
                 "teamAuthPoolSize": len(team_auth_pool),
+                "smallSuccessPoolDir": str(small_success_pool_dir),
                 "freeLocalSelected": free_local_selected,
             }
         )
@@ -194,6 +223,9 @@ def worker_loop(
             output_dir=str(run_output_dir),
             team_auth_path=selected_team_auth_path,
             team_auth_pool_size=len(team_auth_pool),
+            flow_name=str(selected_flow_spec.name or "").strip(),
+            flow_path=str(selected_flow_spec.flow_path or "").strip(),
+            task_role=normalized_role,
         )
 
         try:
@@ -201,8 +233,9 @@ def worker_loop(
                 output_dir=str(run_output_dir),
                 team_auth_path=selected_team_auth_path or None,
                 small_success_pool_dir=str(small_success_pool_dir),
-                flow_path=flow_path or None,
-                task_max_attempts=task_max_attempts or None,
+                flow_path=str(selected_flow_spec.flow_path or "").strip() or None,
+                task_max_attempts=selected_flow_spec.task_max_attempts or task_max_attempts or None,
+                mailbox_business_key=str(selected_flow_spec.mailbox_business_key or "").strip() or None,
                 r2_upload_enabled=(not free_local_selected)
                 if normalized_role in {"main", "continue"}
                 else None,

@@ -49,6 +49,17 @@ class ErrorProfilesTests(unittest.TestCase):
             resolve_retry_codes({"retryProfile": "step-upload-artifact"}),
         )
 
+    def test_resolve_retry_codes_uses_invite_recover_profile(self) -> None:
+        self.assertEqual(
+            {
+                ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED,
+                ErrorCodes.PROXY_CONNECT_FAILED,
+                ErrorCodes.TRANSPORT_ERROR,
+                ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR,
+            },
+            resolve_retry_codes({"retryProfile": "step-invite-recover"}),
+        )
+
     def test_protocol_runtime_error_carries_inferred_code(self) -> None:
         exc = ensure_protocol_runtime_error(
             RuntimeError("mailbox capacity unavailable"),
@@ -147,6 +158,16 @@ class ErrorProfilesTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(RuntimeError, "missing metadata.owner"):
                 dst_flow.load_dst_flow(flow_path)
+
+    def test_load_dst_flow_accepts_utf8_bom(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "bom-flow.json"
+            flow_path.write_text(
+                '\ufeff{"definition":{"steps":[{"id":"acquire-mailbox","type":"acquire_mailbox","metadata":{"owner":"easyemail"}}]}}',
+                encoding="utf-8",
+            )
+            plan = dst_flow.load_dst_flow(flow_path)
+        self.assertEqual("acquire-mailbox", plan.steps[0].step_id)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ from others.config_runtime_sections import DstTaskEnvConfig
 from others.config_runtime_sections import MailboxRuntimeConfig
 from others.config_runtime_sections import ProxyRuntimeConfig
 from others.config_runtime_sections import RunnerMainConfig
+from others.config_runtime_sections import RunnerFlowSpec
 from others.config_runtime_sections import TeamAuthRuntimeConfig
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "MailboxRuntimeConfig",
     "ProxyRuntimeConfig",
     "RunnerMainConfig",
+    "RunnerFlowSpec",
     "TeamAuthRuntimeConfig",
     "_resolve_output_root",
     "_resolve_output_root_text",

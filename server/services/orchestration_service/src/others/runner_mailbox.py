@@ -198,6 +198,18 @@ def mailbox_domain_blacklist_failure_rate(*, shared_root: Path) -> float:
     return _mailbox_runtime_config(shared_root=shared_root).blacklist_failure_rate_percent
 
 
+def mailbox_domain_blacklist_reason(*, result_payload_value: dict[str, Any]) -> str:
+    step_errors = result_payload_value.get("stepErrors") if isinstance(result_payload_value, dict) else {}
+    if not isinstance(step_errors, dict):
+        return ""
+    create_error = step_errors.get("create-openai-account")
+    create_error = create_error if isinstance(create_error, dict) else {}
+    message = str(create_error.get("message") or result_payload_value.get("error") or "").strip().lower()
+    if "unsupported_email" in message or "the email you provided is not supported" in message:
+        return "unsupported_email"
+    return ""
+
+
 def mailbox_provider_from_ref(mailbox_ref: str) -> str:
     value = str(mailbox_ref or "").strip()
     if not value:
@@ -234,16 +246,23 @@ def extract_mailbox_business_outcome_context(*, result_payload_value: dict[str, 
         or mailbox_output.get("providerTypeKey")
         or ""
     ).strip().lower()
+    business_key = str(
+        mailbox_output.get("business_key")
+        or mailbox_output.get("businessKey")
+        or ""
+    ).strip().lower()
     if not provider and mailbox_ref:
         provider = mailbox_provider_from_ref(mailbox_ref)
     if "@" not in email:
         return {
+            "business_key": business_key,
             "provider": provider,
             "mailbox_ref": mailbox_ref,
             "email": email,
             "domain": "",
         }
     return {
+        "business_key": business_key,
         "provider": provider,
         "mailbox_ref": mailbox_ref,
         "email": email,
@@ -268,7 +287,14 @@ def record_business_mailbox_domain_outcome(
         return None
 
     payload = load_mailbox_domain_stats_state(shared_root=shared_root)
-    domains_payload = payload.get("domains")
+    config = _mailbox_runtime_config(shared_root=shared_root)
+    business_key = config.resolve_business_key(context.get("business_key"))
+    business_policy = config.resolve_business_policy(business_key)
+    businesses_payload = payload.get("businesses")
+    businesses = dict(businesses_payload) if isinstance(businesses_payload, dict) else {}
+    business_payload = businesses.get(business_key)
+    business_payload = dict(business_payload) if isinstance(business_payload, dict) else {}
+    domains_payload = business_payload.get("domains")
     domains = dict(domains_payload) if isinstance(domains_payload, dict) else {}
     current = domains.get(domain)
     current = dict(current) if isinstance(current, dict) else {}
@@ -282,10 +308,10 @@ def record_business_mailbox_domain_outcome(
     else:
         failures += 1
     failure_rate = (float(failures) / float(attempts)) * 100.0 if attempts > 0 else 0.0
-    blacklisted = (
-        attempts >= mailbox_domain_blacklist_min_attempts(shared_root=shared_root)
-        and failure_rate >= mailbox_domain_blacklist_failure_rate(shared_root=shared_root)
-    )
+    blacklist_reason = mailbox_domain_blacklist_reason(result_payload_value=result_payload_value)
+    prior_blacklisted = bool(current.get("blacklisted"))
+    prior_blacklist_reason = str(current.get("blacklistReason") or "").strip()
+    blacklisted = prior_blacklisted or bool(blacklist_reason)
     domains[domain] = {
         "provider": provider,
         "attempts": attempts,
@@ -297,11 +323,18 @@ def record_business_mailbox_domain_outcome(
         "lastSuccessAt": now if ok else str(current.get("lastSuccessAt") or "").strip(),
         "lastFailureAt": now if not ok else str(current.get("lastFailureAt") or "").strip(),
         "blacklisted": blacklisted,
+        "blacklistReason": blacklist_reason or prior_blacklist_reason,
     }
+    business_payload["businessKey"] = business_key
+    business_payload["updatedAt"] = now
+    business_payload["explicitBlacklistDomains"] = list(business_policy.explicit_blacklist_domains)
+    business_payload["domains"] = domains
+    businesses[business_key] = business_payload
     payload["updatedAt"] = now
-    payload["domains"] = domains
+    payload["businesses"] = businesses
     write_mailbox_domain_stats_state(shared_root=shared_root, payload=payload)
     return {
+        "businessKey": business_key,
         "provider": provider,
         "domain": domain,
         "email": email,
@@ -310,6 +343,7 @@ def record_business_mailbox_domain_outcome(
         "failures": failures,
         "failureRate": round(failure_rate, 3),
         "blacklisted": blacklisted,
+        "blacklistReason": blacklist_reason or prior_blacklist_reason,
         "minAttempts": mailbox_domain_blacklist_min_attempts(shared_root=shared_root),
         "failureRateThreshold": mailbox_domain_blacklist_failure_rate(shared_root=shared_root),
         "statePath": str(mailbox_domain_stats_path(shared_root=shared_root)),

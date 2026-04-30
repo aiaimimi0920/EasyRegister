@@ -16,7 +16,7 @@ DEFAULT_DST_FLOW_PATH = (
 
 def load_dst_flow(path: str | Path | None = None) -> DstPlan:
     resolved_path = Path(path or DEFAULT_DST_FLOW_PATH).resolve()
-    payload = json.loads(resolved_path.read_text(encoding="utf-8"))
+    payload = json.loads(resolved_path.read_text(encoding="utf-8-sig"))
     definition = payload.get("definition") if isinstance(payload.get("definition"), dict) else payload
     steps = definition.get("steps")
     if not isinstance(steps, list) or not steps:
@@ -46,6 +46,7 @@ def load_dst_flow(path: str | Path | None = None) -> DstPlan:
         )
     return DstPlan(
         steps=result_steps,
+        flow_id=str(definition.get("id") or "").strip(),
         platform=str(definition.get("platform") or "").strip(),
         metadata=definition.get("metadata") if isinstance(definition.get("metadata"), dict) else {},
     )

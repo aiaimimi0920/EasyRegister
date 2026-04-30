@@ -184,6 +184,22 @@ def task_retry_backoff_seconds(plan: DstPlan) -> float:
         return 0.0
 
 
+def resolve_task_mailbox_business_key(plan: DstPlan, override: str | None = None) -> str:
+    normalized_override = str(override or "").strip().lower()
+    if normalized_override:
+        return normalized_override
+    metadata = plan.metadata if isinstance(plan.metadata, dict) else {}
+    mailbox_metadata = metadata.get("mailbox") if isinstance(metadata.get("mailbox"), dict) else {}
+    candidate = (
+        mailbox_metadata.get("businessKey")
+        or mailbox_metadata.get("business_key")
+        or metadata.get("mailboxBusinessKey")
+        or metadata.get("businessKey")
+        or ""
+    )
+    return str(candidate or "").strip().lower()
+
+
 def should_retry_task(
     *,
     plan: DstPlan,
@@ -226,13 +242,29 @@ def run_dst_flow_once(
     small_success_pool_dir: str | None = None,
     flow_path: str | Path | None = None,
     task_max_attempts: int | None = None,
+    mailbox_business_key: str | None = None,
     failed_task_proxy_urls: list[str] | None = None,
 ) -> DstExecutionResult:
     plan = load_dst_flow(flow_path)
     env_config = DstTaskEnvConfig.from_env()
     free_stop_after_validate = bool(env_config.free_stop_after_validate)
     failed_task_proxy_urls = list(failed_task_proxy_urls or [])
-    last_result = DstExecutionResult(ok=False, task_attempts=1)
+    resolved_flow_path = str(Path(flow_path).resolve()) if flow_path else ""
+    resolved_mailbox_business_key = resolve_task_mailbox_business_key(
+        plan,
+        override=mailbox_business_key,
+    )
+    base_task_context = {
+        "flowId": str(plan.flow_id or "").strip(),
+        "flowPath": resolved_flow_path,
+        "platform": str(plan.platform or "").strip(),
+        "mailboxBusinessKey": resolved_mailbox_business_key,
+    }
+    last_result = DstExecutionResult(
+        ok=False,
+        task_attempts=1,
+        task_context=dict(base_task_context),
+    )
     save_as_index = {
         str(statement.save_as or "").strip(): statement
         for statement in plan.steps
@@ -267,13 +299,23 @@ def run_dst_flow_once(
                 "free_stop_after_validate": free_stop_after_validate,
                 "free_stop_after_validate_cleanup_enabled": not free_stop_after_validate,
                 "platform": str(plan.platform or "").strip(),
+                "flow_id": str(plan.flow_id or "").strip(),
+                "flow_path": resolved_flow_path,
+                "mailbox_business_key": resolved_mailbox_business_key,
                 "taskAttempt": task_attempt,
                 "errorCode": "",
                 "errorStep": "",
                 "avoidProxyUrls": list(failed_task_proxy_urls),
             }
         }
-        result = DstExecutionResult(ok=False, task_attempts=task_attempt)
+        result = DstExecutionResult(
+            ok=False,
+            task_attempts=task_attempt,
+            task_context={
+                **base_task_context,
+                "taskAttempt": task_attempt,
+            },
+        )
         flow_failed = False
 
         for statement in plan.steps:

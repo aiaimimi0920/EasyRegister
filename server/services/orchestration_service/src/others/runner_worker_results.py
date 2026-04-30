@@ -139,13 +139,13 @@ def process_worker_run_result(
     _record_team_auth_recent_invite_result(
         shared_root=shared_root,
         team_auth_path=effective_team_auth_path,
-        result_payload=result_payload,
+        result_payload_value=result_payload,
         identity=team_result_identity,
     )
     _record_team_auth_recent_team_expand_result(
         shared_root=shared_root,
         team_auth_path=effective_team_auth_path,
-        result_payload=result_payload,
+        result_payload_value=result_payload,
         instance_role=normalized_role,
         identity=team_result_identity,
     )
@@ -158,7 +158,7 @@ def process_worker_run_result(
         task_index=task_index,
     )
     synced_credentials = _sync_refreshed_credentials_back_to_sources(
-        result_payload=result_payload,
+        result_payload_value=result_payload,
         worker_label=worker_label,
         task_index=task_index,
     )

@@ -4,6 +4,8 @@ import os
 import sys
 import tempfile
 import unittest
+import json
+from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 
@@ -13,7 +15,8 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from errors import ErrorCodes  # noqa: E402
-from others import runner_artifacts, runner_failures, runner_mailbox, runner_team_auth, runner_team_cleanup, runner_worker_maintenance  # noqa: E402
+from others.config import RunnerFlowSpec  # noqa: E402
+from others import runner_artifacts, runner_credential_sync, runner_failures, runner_flow_scheduler, runner_mailbox, runner_team_auth, runner_team_cleanup, runner_worker_loop, runner_worker_maintenance, runner_worker_results  # noqa: E402
 
 
 class RunnerArtifactsTests(unittest.TestCase):
@@ -50,6 +53,57 @@ class RunnerArtifactsTests(unittest.TestCase):
                     result_payload_value={"errorCode": "token_invalidated"},
                 )
         self.assertEqual((output_root / "others" / "free-manual-oauth-pool").resolve(), target)
+
+
+class RunnerFlowSchedulerTests(unittest.TestCase):
+    def test_choose_runnable_flow_spec_skips_empty_continue_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            shared_root = output_root / "shared"
+            continue_pool_dir = shared_root / "others" / "small-success-continue-pool"
+            spec = RunnerFlowSpec(
+                name="continue-openai",
+                flow_path="continue-flow.json",
+                instance_role="continue",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=0,
+                small_success_pool_dir=continue_pool_dir,
+                mailbox_business_key="openai",
+            )
+            selected, selection = runner_flow_scheduler.choose_runnable_flow_spec(
+                flow_specs=(spec,),
+                output_root=output_root,
+                shared_root=shared_root,
+            )
+        self.assertIsNone(selected)
+        self.assertEqual("small_success_pool_empty", selection["skipped"][0]["reason"])
+
+    def test_choose_runnable_flow_spec_selects_ready_continue_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            shared_root = output_root / "shared"
+            continue_pool_dir = shared_root / "others" / "small-success-continue-pool"
+            continue_pool_dir.mkdir(parents=True, exist_ok=True)
+            (continue_pool_dir / "seed.json").write_text("{}", encoding="utf-8")
+            spec = RunnerFlowSpec(
+                name="continue-openai",
+                flow_path="continue-flow.json",
+                instance_role="continue",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=0,
+                small_success_pool_dir=continue_pool_dir,
+                mailbox_business_key="openai",
+            )
+            selected, selection = runner_flow_scheduler.choose_runnable_flow_spec(
+                flow_specs=(spec,),
+                output_root=output_root,
+                shared_root=shared_root,
+            )
+        self.assertIsNotNone(selected)
+        self.assertEqual("continue-openai", selected.name)
+        self.assertEqual("pool_ready", selection["selected"]["reason"])
 
 
 class RunnerFailuresTests(unittest.TestCase):
@@ -132,18 +186,62 @@ class RunnerMailboxTests(unittest.TestCase):
                     "acquire-mailbox": {
                         "email": "user@sall.cc",
                         "provider": "moemail",
+                        "business_key": "openai",
                     }
                 },
             }
-            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
-                shared_root=shared_root,
-                result_payload_value=payload,
-                instance_role="main",
-            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST": "fallback.test",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"explicitBlacklistDomains":["coolkid.icu"]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
             self.assertIsNotNone(outcome)
+            self.assertEqual("openai", outcome["businessKey"])
             self.assertEqual("sall.cc", outcome["domain"])
             state_path = Path(outcome["statePath"])
             self.assertTrue(state_path.is_file())
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertIn("businesses", state_payload)
+            self.assertIn("openai", state_payload["businesses"])
+            self.assertEqual(
+                ["coolkid.icu"],
+                state_payload["businesses"]["openai"]["explicitBlacklistDomains"],
+            )
+
+    def test_mailbox_domain_blacklist_reason_requires_unsupported_email(self) -> None:
+        unsupported_payload = {
+            "stepErrors": {
+                "create-openai-account": {
+                    "message": "create_account status=400 body={\"error\":{\"code\":\"unsupported_email\"}}",
+                }
+            }
+        }
+        generic_payload = {
+            "stepErrors": {
+                "create-openai-account": {
+                    "message": "Failed to create account. Please try again.",
+                }
+            }
+        }
+        self.assertEqual(
+            "unsupported_email",
+            runner_mailbox.mailbox_domain_blacklist_reason(result_payload_value=unsupported_payload),
+        )
+        self.assertEqual(
+            "",
+            runner_mailbox.mailbox_domain_blacklist_reason(result_payload_value=generic_payload),
+        )
 
     def test_mark_mailbox_capacity_failure_respects_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -316,6 +414,201 @@ class RunnerWorkerMaintenanceTests(unittest.TestCase):
             [str(pinned_path), "fallback.json"],
             select_team_auth_path.call_args.kwargs["team_auth_pool"],
         )
+
+
+class RunnerWorkerLoopTests(unittest.TestCase):
+    def test_worker_loop_runs_selected_flow_spec(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            free_oauth_pool_dir = output_root / "free-oauth-pool"
+            flow_pool_dir = output_root / "others" / "small-success-continue-pool"
+            spec = RunnerFlowSpec(
+                name="continue-openai",
+                flow_path="continue-flow.json",
+                instance_role="continue",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=3,
+                small_success_pool_dir=flow_pool_dir,
+                mailbox_business_key="openai",
+            )
+            dummy_result = SimpleNamespace(
+                ok=True,
+                to_dict=lambda: {"ok": True, "steps": {}, "outputs": {}},
+            )
+            worker_state = mock.Mock()
+            with mock.patch.object(runner_worker_loop, "WorkerRuntimeState", return_value=worker_state):
+                with mock.patch.object(runner_worker_loop, "_process_worker_maintenance"):
+                    with mock.patch.object(
+                        runner_worker_loop,
+                        "_choose_runnable_flow_spec",
+                        return_value=(spec, {"selected": {"name": "continue-openai"}}),
+                    ):
+                        with mock.patch.object(runner_worker_loop, "claim_task_index", side_effect=[1, None]):
+                            with mock.patch.object(
+                                runner_worker_loop,
+                                "_resolve_worker_team_auth",
+                                return_value=SimpleNamespace(
+                                    team_auth_pool=[],
+                                    selected_team_auth_path="",
+                                    seat_reservation=None,
+                                ),
+                            ):
+                                with mock.patch.object(runner_worker_loop, "run_dst_flow_once", return_value=dummy_result) as run_once:
+                                    with mock.patch.object(runner_worker_loop, "_process_worker_run_result", return_value=0.0):
+                                        with mock.patch("others.runner_worker_loop.time.sleep"):
+                                            runner_worker_loop.worker_loop(
+                                                worker_id=1,
+                                                instance_id="mixed",
+                                                instance_role="mixed",
+                                                output_root_text=str(output_root),
+                                                delay_seconds=0.0,
+                                                max_runs=1,
+                                                task_max_attempts=0,
+                                                flow_specs=(spec,),
+                                                stop_event=SimpleNamespace(is_set=lambda: False),
+                                                task_counter=SimpleNamespace(value=0),
+                                                free_oauth_pool_dir_text=str(free_oauth_pool_dir),
+                                            )
+        run_once.assert_called_once()
+        self.assertEqual("continue-flow.json", run_once.call_args.kwargs["flow_path"])
+        self.assertEqual(str(flow_pool_dir.resolve()), run_once.call_args.kwargs["small_success_pool_dir"])
+        self.assertEqual(3, run_once.call_args.kwargs["task_max_attempts"])
+        self.assertEqual("openai", run_once.call_args.kwargs["mailbox_business_key"])
+
+
+class RunnerWorkerResultsTests(unittest.TestCase):
+    def test_process_worker_run_result_passes_result_payload_value_to_team_auth_history(self) -> None:
+        result = SimpleNamespace(
+            ok=True,
+            to_dict=lambda: {"ok": True, "steps": {}, "outputs": {}},
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            shared_root = output_root
+            run_output_dir = output_root / "worker-01" / "run-1"
+            small_success_pool_dir = output_root / "small-success-pool"
+            worker_state = mock.Mock()
+            with mock.patch.object(runner_worker_results, "_json_log"), mock.patch.object(
+                runner_worker_results,
+                "_team_auth_path_from_result_payload",
+                return_value="",
+            ), mock.patch.object(
+                runner_worker_results,
+                "_output_dict",
+                return_value={},
+            ), mock.patch.object(
+                runner_worker_results,
+                "_record_business_mailbox_domain_outcome",
+                return_value=None,
+            ), mock.patch.object(
+                runner_worker_results,
+                "_record_team_auth_recent_invite_result",
+            ) as record_invite, mock.patch.object(
+                runner_worker_results,
+                "_record_team_auth_recent_team_expand_result",
+            ) as record_expand, mock.patch.object(
+                runner_worker_results,
+                "_team_auth_reconcile_seat_state_from_result",
+            ), mock.patch.object(
+                runner_worker_results,
+                "_sync_refreshed_credentials_back_to_sources",
+                return_value=[],
+            ) as sync_credentials, mock.patch.object(
+                runner_worker_results,
+                "_free_stop_after_validate_mode",
+                return_value=False,
+            ), mock.patch.object(
+                runner_worker_results,
+                "_mailbox_capacity_failure_detail",
+                return_value="",
+            ), mock.patch.object(
+                runner_worker_results,
+                "_team_capacity_failure_detail",
+                return_value="",
+            ), mock.patch.object(
+                runner_worker_results,
+                "_team_auth_blacklist_reason",
+                return_value="",
+            ), mock.patch.object(
+                runner_worker_results,
+                "_postprocess_free_success_artifact",
+                return_value={"ok": True, "cleanup_run_output": False},
+            ), mock.patch.object(
+                runner_worker_results,
+                "_extra_failure_cooldown_seconds",
+                return_value=0.0,
+            ):
+                cooldown = runner_worker_results.process_worker_run_result(
+                    result=result,
+                    started_at="2026-01-01T00:00:00+00:00",
+                    run_output_dir=run_output_dir,
+                    output_root=output_root,
+                    shared_root=shared_root,
+                    small_success_pool_dir=small_success_pool_dir,
+                    normalized_role="main",
+                    worker_label="worker-01",
+                    task_index=1,
+                    local_run_index=1,
+                    worker_state=worker_state,
+                    selected_team_auth_path="",
+                    free_local_selected=True,
+                    team_auth_pool=[],
+                )
+        self.assertEqual(0.0, cooldown)
+        self.assertIn("result_payload_value", record_invite.call_args.kwargs)
+        self.assertIn("result_payload_value", record_expand.call_args.kwargs)
+        self.assertIn("result_payload_value", sync_credentials.call_args.kwargs)
+
+
+class RunnerCredentialSyncTests(unittest.TestCase):
+    def test_sync_refreshed_credentials_back_to_sources_forwards_payload_to_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            refreshed_path = tmp_path / "refreshed.json"
+            restored_source_path = tmp_path / "restored-source.json"
+            refreshed_path.write_text("{}", encoding="utf-8")
+            restored_source_path.write_text("{}", encoding="utf-8")
+            payload = {"outputs": {"obtain-codex-oauth": {"successPath": str(refreshed_path)}}}
+            actions = [
+                {
+                    "kind": "generic_oauth_refresh",
+                    "source_path": str(tmp_path / "missing-source.json"),
+                    "refreshed_path": str(refreshed_path),
+                    "force": True,
+                }
+            ]
+            with mock.patch.object(
+                runner_credential_sync,
+                "credential_backwrite_actions",
+                return_value=actions,
+            ) as build_actions, mock.patch.object(
+                runner_credential_sync,
+                "restored_path_for_source",
+                return_value=restored_source_path,
+            ) as restored_path, mock.patch.object(
+                runner_credential_sync,
+                "_load_json_dict",
+                side_effect=[{"email": "before@example.com"}, {"email": "after@example.com"}],
+            ), mock.patch.object(
+                runner_credential_sync,
+                "_merge_refreshed_credential",
+                return_value={"email": "after@example.com"},
+            ), mock.patch.object(
+                runner_credential_sync,
+                "write_json_atomic",
+            ), mock.patch.object(
+                runner_credential_sync,
+                "json_log",
+            ):
+                synced = runner_credential_sync.sync_refreshed_credentials_back_to_sources(
+                    result_payload_value=payload,
+                    worker_label="worker-01",
+                    task_index=1,
+                )
+        self.assertEqual(1, len(synced))
+        self.assertIs(build_actions.call_args.args[0], payload)
+        self.assertIs(restored_path.call_args.args[0], payload)
 
 
 if __name__ == "__main__":

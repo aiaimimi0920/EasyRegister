@@ -44,7 +44,7 @@ def sync_refreshed_credentials_back_to_sources(
     worker_label: str,
     task_index: int,
 ) -> list[dict[str, str]]:
-    actions = credential_backwrite_actions(result_payload=result_payload_value)
+    actions = credential_backwrite_actions(result_payload_value)
     if not actions:
         return []
 
@@ -55,7 +55,7 @@ def sync_refreshed_credentials_back_to_sources(
             continue
         source_path = Path(str(action.get("source_path") or "")).resolve()
         live_source_path = source_path if source_path.exists() else restored_path_for_source(
-            result_payload=result_payload_value,
+            result_payload_value,
             source_path=source_path,
         )
         if live_source_path is None or not live_source_path.exists():

@@ -97,9 +97,23 @@ def validate_runtime_preflight() -> dict[str, Any]:
     mailbox_config = _mailbox_runtime_config()
 
     errors: list[str] = []
-    flow_path = Path(runner_config.flow_path).expanduser().resolve() if str(runner_config.flow_path or "").strip() else None
-    if flow_path is not None and not flow_path.is_file():
-        errors.append(f"missing_flow_path:{flow_path}")
+    flow_summaries: list[dict[str, str]] = []
+    for flow_spec in runner_config.flow_specs:
+        flow_path = Path(flow_spec.flow_path).expanduser().resolve() if str(flow_spec.flow_path or "").strip() else None
+        if flow_path is not None and not flow_path.is_file():
+            errors.append(f"missing_flow_path:{flow_path}")
+        team_auth_override = Path(flow_spec.team_auth_path).expanduser().resolve() if str(flow_spec.team_auth_path or "").strip() else None
+        if team_auth_override is not None and not team_auth_override.exists():
+            errors.append(f"missing_team_auth_path:{team_auth_override}")
+        flow_summaries.append(
+            {
+                "name": str(flow_spec.name or "").strip(),
+                "flowPath": str(flow_path or ""),
+                "instanceRole": str(flow_spec.instance_role or "").strip().lower(),
+                "teamAuthPath": str(team_auth_override or ""),
+                "smallSuccessPoolDir": str(flow_spec.small_success_pool_dir),
+            }
+        )
     team_auth_path = Path(runner_config.team_auth_path).expanduser().resolve() if str(runner_config.team_auth_path or "").strip() else None
     if team_auth_path is not None and not team_auth_path.exists():
         errors.append(f"missing_team_auth_path:{team_auth_path}")
@@ -113,7 +127,8 @@ def validate_runtime_preflight() -> dict[str, Any]:
     return {
         "outputRoot": str(runner_config.output_root),
         "sharedRoot": str(runner_config.shared_root),
-        "flowPath": str(flow_path or ""),
+        "flowPath": flow_summaries[0]["flowPath"] if flow_summaries else "",
+        "flowSpecs": flow_summaries,
         "instanceId": runner_config.instance_id,
         "instanceRole": runner_config.instance_role,
         "proxy": {

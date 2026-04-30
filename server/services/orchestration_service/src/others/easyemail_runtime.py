@@ -8,6 +8,7 @@ from typing import Any
 from others.bootstrap import ensure_local_bundle_imports
 from others.runtime import resolve_mailbox
 from others.runtime_mailbox import ensure_easy_email_env_defaults as ensure_easyemail_runtime_defaults
+from others.runtime_mailbox import resolve_mailbox_business_key
 from others.storage import load_json_payload
 
 ensure_local_bundle_imports()
@@ -84,16 +85,21 @@ def dispatch_easyemail_step(*, step_type: str, step_input: dict[str, Any]) -> di
     normalized_step_type = str(step_type or "").strip()
     if normalized_step_type == "acquire_mailbox":
         ensure_easyemail_runtime_defaults()
+        requested_business_key = (
+            str(step_input.get("business_key") or step_input.get("businessKey") or "").strip() or None
+        )
         mailbox = resolve_mailbox(
             preallocated_email=str(step_input.get("preallocated_email") or "").strip() or None,
             preallocated_session_id=str(step_input.get("preallocated_session_id") or "").strip() or None,
             preallocated_mailbox_ref=str(step_input.get("preallocated_mailbox_ref") or "").strip() or None,
+            business_key=requested_business_key,
         )
         return {
             "provider": str(getattr(mailbox, "provider", "") or "").strip(),
             "email": str(getattr(mailbox, "email", "") or "").strip(),
             "mailbox_ref": str(getattr(mailbox, "ref", "") or "").strip(),
             "session_id": str(getattr(mailbox, "session_id", "") or "").strip(),
+            "business_key": resolve_mailbox_business_key(business_key=requested_business_key),
         }
 
     if normalized_step_type == "release_mailbox":

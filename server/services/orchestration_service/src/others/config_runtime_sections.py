@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from others.config_env import env_bool
 from others.config_env import env_first_text
@@ -76,6 +78,123 @@ class DstTaskEnvConfig:
 
 
 @dataclass(frozen=True)
+class RunnerFlowSpec:
+    name: str
+    flow_path: str
+    instance_role: str
+    weight: float
+    team_auth_path: str
+    task_max_attempts: int
+    small_success_pool_dir: Path
+    mailbox_business_key: str
+
+
+def _normalize_instance_role(value: Any, *, default: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized or str(default or "main").strip().lower() or "main"
+
+
+def _default_small_success_pool_dir_for_role(
+    *,
+    output_root: Path,
+    shared_root: Path,
+    instance_role: str,
+) -> Path:
+    normalized_role = _normalize_instance_role(instance_role, default="main")
+    if normalized_role == "continue":
+        return (shared_root / "others" / "small-success-continue-pool").resolve()
+    return Path(resolve_small_success_pool_dir(str(output_root))).resolve()
+
+
+def _parse_runner_flow_specs(
+    raw: str,
+    *,
+    output_root: Path,
+    shared_root: Path,
+    default_instance_role: str,
+    default_team_auth_path: str,
+    default_task_max_attempts: int,
+) -> tuple[RunnerFlowSpec, ...]:
+    text = str(raw or "").strip()
+    if not text:
+        return ()
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return ()
+    items = payload.get("flows") if isinstance(payload, dict) and isinstance(payload.get("flows"), list) else payload
+    if not isinstance(items, list):
+        return ()
+
+    specs: list[RunnerFlowSpec] = []
+    for index, item in enumerate(items, start=1):
+        if isinstance(item, str):
+            item = {"path": item}
+        if not isinstance(item, dict):
+            continue
+        flow_path = str(
+            item.get("flowPath")
+            or item.get("flow_path")
+            or item.get("path")
+            or ""
+        ).strip()
+        instance_role = _normalize_instance_role(
+            item.get("instanceRole") or item.get("instance_role") or item.get("role"),
+            default=default_instance_role,
+        )
+        try:
+            weight = max(0.0, float(item.get("weight") or 1.0))
+        except Exception:
+            weight = 1.0
+        try:
+            task_max_attempts = max(0, int(item.get("taskMaxAttempts") or item.get("task_max_attempts") or default_task_max_attempts))
+        except Exception:
+            task_max_attempts = max(0, int(default_task_max_attempts or 0))
+        small_success_pool_dir_text = str(
+            item.get("smallSuccessPoolDir")
+            or item.get("small_success_pool_dir")
+            or ""
+        ).strip()
+        small_success_pool_dir = (
+            Path(small_success_pool_dir_text).expanduser().resolve()
+            if small_success_pool_dir_text
+            else _default_small_success_pool_dir_for_role(
+                output_root=output_root,
+                shared_root=shared_root,
+                instance_role=instance_role,
+            )
+        )
+        name = str(item.get("name") or item.get("id") or "").strip()
+        if not name:
+            if flow_path:
+                name = Path(flow_path).stem
+            else:
+                name = f"flow-{index}"
+        specs.append(
+            RunnerFlowSpec(
+                name=name,
+                flow_path=flow_path,
+                instance_role=instance_role,
+                weight=weight,
+                team_auth_path=str(
+                    item.get("teamAuthPath")
+                    or item.get("team_auth_path")
+                    or default_team_auth_path
+                    or ""
+                ).strip(),
+                task_max_attempts=task_max_attempts,
+                small_success_pool_dir=small_success_pool_dir,
+                mailbox_business_key=str(
+                    item.get("mailboxBusinessKey")
+                    or item.get("mailbox_business_key")
+                    or ""
+                ).strip().lower(),
+            )
+        )
+    return tuple(spec for spec in specs if spec.weight > 0.0)
+
+
+@dataclass(frozen=True)
 class RunnerMainConfig:
     output_root: Path
     shared_root: Path
@@ -86,6 +205,7 @@ class RunnerMainConfig:
     task_max_attempts: int
     team_auth_path: str
     flow_path: str
+    flow_specs: tuple[RunnerFlowSpec, ...]
     small_success_pool_dir: Path
     free_oauth_pool_dir: Path
     instance_id: str
@@ -100,6 +220,36 @@ class RunnerMainConfig:
         shared_root = resolve_shared_root_from_env()
         instance_id = env_text("REGISTER_INSTANCE_ID", "main") or "main"
         instance_role = env_text("REGISTER_INSTANCE_ROLE", instance_id) or instance_id
+        team_auth_path = env_text("REGISTER_TEAM_AUTH_PATH")
+        flow_path = env_text("REGISTER_FLOW_PATH")
+        task_max_attempts = env_int("REGISTER_TASK_MAX_ATTEMPTS", 0)
+        flow_specs = _parse_runner_flow_specs(
+            env_text("REGISTER_FLOW_SPECS_JSON"),
+            output_root=output_root,
+            shared_root=shared_root,
+            default_instance_role=instance_role,
+            default_team_auth_path=team_auth_path,
+            default_task_max_attempts=task_max_attempts,
+        )
+        if not flow_specs:
+            flow_specs = (
+                RunnerFlowSpec(
+                    name=str(instance_role or instance_id or "main").strip().lower() or "main",
+                    flow_path=str(flow_path or "").strip(),
+                    instance_role=_normalize_instance_role(instance_role, default=instance_id),
+                    weight=1.0,
+                    team_auth_path=str(team_auth_path or "").strip(),
+                    task_max_attempts=max(0, int(task_max_attempts or 0)),
+                    small_success_pool_dir=_default_small_success_pool_dir_for_role(
+                        output_root=output_root,
+                        shared_root=shared_root,
+                        instance_role=instance_role,
+                    ),
+                    mailbox_business_key="",
+                ),
+            )
+        effective_flow_path = str(flow_path or "").strip() or str(flow_specs[0].flow_path or "").strip()
+        effective_team_auth_path = str(team_auth_path or "").strip() or str(flow_specs[0].team_auth_path or "").strip()
         return cls(
             output_root=output_root,
             shared_root=shared_root,
@@ -107,9 +257,10 @@ class RunnerMainConfig:
             worker_count=max(1, env_int("REGISTER_WORKER_COUNT", 10)),
             worker_stagger_seconds=max(0.0, env_float("REGISTER_WORKER_STAGGER_SECONDS", 2.0)),
             max_runs=max(0, env_int("REGISTER_INFINITE_MAX_RUNS", 0)),
-            task_max_attempts=env_int("REGISTER_TASK_MAX_ATTEMPTS", 0),
-            team_auth_path=env_text("REGISTER_TEAM_AUTH_PATH"),
-            flow_path=env_text("REGISTER_FLOW_PATH"),
+            task_max_attempts=task_max_attempts,
+            team_auth_path=effective_team_auth_path,
+            flow_path=effective_flow_path,
+            flow_specs=flow_specs,
             small_success_pool_dir=Path(resolve_small_success_pool_dir(str(output_root))).resolve(),
             free_oauth_pool_dir=Path(resolve_free_oauth_pool_dir(str(output_root))).resolve(),
             instance_id=instance_id,
@@ -171,13 +322,77 @@ class ProxyRuntimeConfig:
 
 
 @dataclass(frozen=True)
+class MailboxBusinessPolicy:
+    business_key: str
+    domain_pool: tuple[str, ...]
+    explicit_blacklist_domains: tuple[str, ...]
+
+
+def _normalize_mailbox_business_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _split_mailbox_domains(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return tuple(item.lower() for item in split_csv(value))
+    if isinstance(value, (list, tuple, set)):
+        normalized: list[str] = []
+        for item in value:
+            text = str(item or "").strip().lower()
+            if text:
+                normalized.append(text)
+        return tuple(normalized)
+    return ()
+
+
+def _parse_mailbox_business_policies(raw: str) -> tuple[MailboxBusinessPolicy, ...]:
+    text = str(raw or "").strip()
+    if not text:
+        return ()
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return ()
+    if not isinstance(payload, dict):
+        return ()
+    policies: list[MailboxBusinessPolicy] = []
+    for raw_business_key, raw_policy in payload.items():
+        business_key = _normalize_mailbox_business_key(raw_business_key)
+        if not business_key or not isinstance(raw_policy, dict):
+            continue
+        domain_pool = _split_mailbox_domains(
+            raw_policy.get("domainPool")
+            or raw_policy.get("domain_pool")
+            or raw_policy.get("domains")
+        )
+        explicit_blacklist_domains = _split_mailbox_domains(
+            raw_policy.get("explicitBlacklistDomains")
+            or raw_policy.get("explicit_blacklist_domains")
+            or raw_policy.get("domainBlacklist")
+            or raw_policy.get("domain_blacklist")
+            or raw_policy.get("blacklist")
+        )
+        policies.append(
+            MailboxBusinessPolicy(
+                business_key=business_key,
+                domain_pool=domain_pool,
+                explicit_blacklist_domains=explicit_blacklist_domains,
+            )
+        )
+    return tuple(policies)
+
+
+@dataclass(frozen=True)
 class MailboxRuntimeConfig:
     ttl_seconds: int
     providers: tuple[str, ...]
     strategy_mode_id: str
     routing_profile_id: str
+    business_key: str
     domain_state_path: Path
     business_domain_pool: tuple[str, ...]
+    explicit_blacklist_domains: tuple[str, ...]
+    business_policies: tuple[MailboxBusinessPolicy, ...]
     blacklist_min_attempts: int
     blacklist_failure_rate_percent: float
 
@@ -195,6 +410,8 @@ class MailboxRuntimeConfig:
         explicit_state_path = env_text("REGISTER_MAILBOX_DOMAIN_STATE_PATH")
         domain_state_path = Path(explicit_state_path).expanduser().resolve() if explicit_state_path else default_state_path
         business_domain_pool = tuple(item.lower() for item in split_csv(env_text("REGISTER_MAILBOX_DOMAIN_POOL"))) or default_business_domain_pool
+        explicit_blacklist_domains = tuple(item.lower() for item in split_csv(env_text("REGISTER_MAILBOX_DOMAIN_BLACKLIST")))
+        business_policies = _parse_mailbox_business_policies(env_text("REGISTER_MAILBOX_BUSINESS_POLICIES_JSON"))
         return cls(
             ttl_seconds=max(1, int(float(env_text("REGISTER_MAILBOX_TTL_SECONDS", str(default_ttl_seconds)) or default_ttl_seconds))),
             providers=providers,
@@ -204,13 +421,34 @@ class MailboxRuntimeConfig:
                 "MAILBOX_PROVIDER_ROUTING_PROFILE_ID",
                 default="high-availability",
             ),
+            business_key=_normalize_mailbox_business_key(env_text("REGISTER_MAILBOX_BUSINESS_KEY", "openai")) or "openai",
             domain_state_path=domain_state_path,
             business_domain_pool=business_domain_pool,
+            explicit_blacklist_domains=explicit_blacklist_domains,
+            business_policies=business_policies,
             blacklist_min_attempts=max(1, env_int("REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS", default_blacklist_min_attempts)),
             blacklist_failure_rate_percent=env_percent_value(
                 "REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE",
                 default_blacklist_failure_rate,
             ),
+        )
+
+    def resolve_business_key(self, business_key: str | None = None) -> str:
+        normalized = _normalize_mailbox_business_key(business_key)
+        if normalized:
+            return normalized
+        fallback = _normalize_mailbox_business_key(self.business_key)
+        return fallback or "default"
+
+    def resolve_business_policy(self, business_key: str | None = None) -> MailboxBusinessPolicy:
+        resolved_business_key = self.resolve_business_key(business_key)
+        for policy in self.business_policies:
+            if policy.business_key == resolved_business_key:
+                return policy
+        return MailboxBusinessPolicy(
+            business_key=resolved_business_key,
+            domain_pool=self.business_domain_pool,
+            explicit_blacklist_domains=self.explicit_blacklist_domains,
         )
 
 

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import urllib.error
 import urllib.request
 import uuid
+from pathlib import Path
 from typing import Any
 
 
@@ -70,6 +72,33 @@ def normalize_preserve_codes(value: Any) -> set[str]:
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
+def maybe_bridge_step_artifact(*, step_type: str, step_result: dict[str, Any]) -> dict[str, Any]:
+    bridge_root_text = str(os.environ.get("REGISTER_PROTOCOL_BRIDGE_DIR") or "").strip()
+    storage_path_text = str(step_result.get("storage_path") or "").strip()
+    if (
+        str(step_type or "").strip() != "create_openai_account"
+        or not bridge_root_text
+        or not storage_path_text
+    ):
+        return step_result
+
+    source_path = Path(storage_path_text).expanduser()
+    if not source_path.is_file():
+        return step_result
+
+    bridge_root = Path(bridge_root_text).expanduser()
+    bridge_root.mkdir(parents=True, exist_ok=True)
+    target_path = (bridge_root / source_path.name).resolve()
+    if source_path.resolve() != target_path:
+        shutil.copy2(source_path, target_path)
+
+    bridged = dict(step_result)
+    bridged.setdefault("original_storage_path", storage_path_text)
+    bridged["storage_path"] = str(target_path)
+    bridged["bridged_storage_path"] = str(target_path)
+    return bridged
+
+
 def invoke_easyprotocol(*, step_type: str, step_input: dict[str, Any]) -> dict[str, Any]:
     base_url = str(os.environ.get("EASY_PROTOCOL_BASE_URL") or "").strip() or DEFAULT_EASY_PROTOCOL_BASE_URL
     request_url = normalize_easyprotocol_request_url(base_url)
@@ -121,6 +150,20 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
     if not isinstance(step_input, dict):
         raise RuntimeError("easyprotocol_step_input_invalid")
     if normalized_step_type == "revoke_codex_member":
+        invite_email = str(step_input.get("invite_email") or "").strip()
+        invite_id = str(step_input.get("invite_id") or step_input.get("inviteId") or "").strip()
+        member_user_id = str(step_input.get("member_user_id") or step_input.get("memberUserId") or "").strip()
+        if not invite_email and not invite_id and not member_user_id:
+            return {
+                "ok": True,
+                "status": "skipped_missing_revoke_target",
+                "detail": "missing_revoke_target",
+                "invite_email": "",
+                "team_account_id": "",
+                "team_email": "",
+                "status_code": 0,
+                "response": None,
+            }
         error_code = str(step_input.get("error_code") or "").strip()
         preserve_enabled = is_truthy(step_input.get("preserve_enabled"))
         preserve_codes = normalize_preserve_codes(step_input.get("preserve_on_error_codes"))
@@ -135,4 +178,10 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
                 "status_code": 0,
                 "response": None,
             }
-    return invoke_easyprotocol(step_type=normalized_step_type, step_input=step_input)
+    result = invoke_easyprotocol(step_type=normalized_step_type, step_input=step_input)
+    if isinstance(result, dict):
+        return maybe_bridge_step_artifact(
+            step_type=normalized_step_type,
+            step_result=result,
+        )
+    return result
