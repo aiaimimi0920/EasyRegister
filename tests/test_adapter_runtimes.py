@@ -92,6 +92,30 @@ class EasyEmailRuntimeTests(unittest.TestCase):
         self.assertIn('"mailboxRelease"', updated)
         self.assertIn("skipped_preserved_for_manual_oauth", updated)
 
+    def test_release_mailbox_skips_team_flow_update_when_source_missing(self) -> None:
+        missing_path = Path(tempfile.gettempdir()) / f"missing-{os.getpid()}-{id(self)}.json"
+        if missing_path.exists():
+            missing_path.unlink()
+
+        with mock.patch.object(
+            easyemail_runtime,
+            "release_mailbox",
+            return_value={"released": True, "detail": "deleted", "provider": "moemail"},
+        ) as release_mailbox:
+            result = easyemail_runtime.dispatch_easyemail_step(
+                step_type="release_mailbox",
+                step_input={
+                    "provider": "moemail",
+                    "source_path": str(missing_path),
+                    "mailbox_ref": "moemail:test",
+                    "mailbox_session_id": "session-test",
+                },
+            )
+
+        release_mailbox.assert_called_once()
+        self.assertTrue(result["released"])
+        self.assertEqual("deleted", result["detail"])
+
 
 class RuntimeProxySupportTests(unittest.TestCase):
     def test_runtime_reachable_proxy_url_rewrites_localhost_when_runtime_host_is_set(self) -> None:

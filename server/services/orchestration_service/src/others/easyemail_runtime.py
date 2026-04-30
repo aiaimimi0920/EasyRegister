@@ -25,6 +25,16 @@ def write_team_flow_update(*, source_path: Path, updater: Any) -> dict[str, Any]
     return updated
 
 
+def maybe_write_team_flow_update(*, source_path_text: str, updater: Any) -> dict[str, Any] | None:
+    resolved_text = str(source_path_text or "").strip()
+    if not resolved_text:
+        return None
+    source_path = Path(resolved_text).resolve()
+    if not source_path.is_file():
+        return None
+    return write_team_flow_update(source_path=source_path, updater=updater)
+
+
 def normalize_release_error(exc: BaseException, *, provider: str) -> dict[str, Any]:
     message = str(exc or "").strip()
     lowered = message.lower()
@@ -117,18 +127,16 @@ def dispatch_easyemail_step(*, step_type: str, step_input: dict[str, Any]) -> di
                 "detail": "skipped_preserved_for_manual_oauth",
                 "provider": provider,
             }
-            if source_path_text:
-                source_path = Path(source_path_text).resolve()
-                write_team_flow_update(
-                    source_path=source_path,
-                    updater=lambda payload: {
-                        **payload,
-                        "teamFlow": {
-                            **dict(payload.get("teamFlow") or {}),
-                            "mailboxRelease": result,
-                        },
+            maybe_write_team_flow_update(
+                source_path_text=source_path_text,
+                updater=lambda payload: {
+                    **payload,
+                    "teamFlow": {
+                        **dict(payload.get("teamFlow") or {}),
+                        "mailboxRelease": result,
                     },
-                )
+                },
+            )
             return result
         last_exc: BaseException | None = None
         result = None
@@ -161,18 +169,16 @@ def dispatch_easyemail_step(*, step_type: str, step_input: dict[str, Any]) -> di
         if str(result.get("detail") or "").strip().lower() == "skipped_non_moemail":
             result["detail"] = "provider_does_not_support_release"
 
-        if source_path_text:
-            source_path = Path(source_path_text).resolve()
-            write_team_flow_update(
-                source_path=source_path,
-                updater=lambda payload: {
-                    **payload,
-                    "teamFlow": {
-                        **dict(payload.get("teamFlow") or {}),
-                        "mailboxRelease": result,
-                    },
+        maybe_write_team_flow_update(
+            source_path_text=source_path_text,
+            updater=lambda payload: {
+                **payload,
+                "teamFlow": {
+                    **dict(payload.get("teamFlow") or {}),
+                    "mailboxRelease": result,
                 },
-            )
+            },
+        )
         return result
 
     if normalized_step_type == "recover_mailbox_capacity":
