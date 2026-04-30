@@ -79,6 +79,7 @@ class ErrorProfilesTests(unittest.TestCase):
                 ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
                 ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
                 ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+                ErrorCodes.OTP_TIMEOUT,
                 ErrorCodes.PROXY_CONNECT_FAILED,
                 ErrorCodes.TRANSPORT_ERROR,
             },
@@ -107,6 +108,13 @@ class ErrorProfilesTests(unittest.TestCase):
             message='chatgpt_login_authorize_init_failed status=403 body=<!DOCTYPE html><title>Just a moment...</title>',
         )
         self.assertEqual(ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, details["code"])
+
+    def test_build_error_details_classifies_chatgpt_login_wrong_email_otp_code(self) -> None:
+        details = build_error_details(
+            step_type="initialize_chatgpt_login_session",
+            message='chatgpt_login_otp_validate_failed status=401 body={"error":{"code":"wrong_email_otp_code"}}',
+        )
+        self.assertEqual(ErrorCodes.OTP_TIMEOUT, details["code"])
 
     def test_protocol_runtime_error_carries_inferred_code(self) -> None:
         exc = ensure_protocol_runtime_error(
