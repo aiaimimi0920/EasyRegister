@@ -63,6 +63,33 @@ class ArtifactPoolCommonTests(unittest.TestCase):
 
 
 class ArtifactPoolClaimsTests(unittest.TestCase):
+    def test_fill_team_pre_pool_defaults_target_dir_under_others(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "mixed-runs" / "worker-01" / "run-20260430-task000001"
+            source_pool_dir = output_root / "small-success-pool"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            seed_path = source_pool_dir / "seed.json"
+            seed_path.write_text("{}", encoding="utf-8")
+
+            with mock.patch.object(
+                artifact_pool_claims,
+                "load_small_success_seed_validation",
+                return_value=(True, "", {"email": "seed@example.com"}),
+            ):
+                result = artifact_pool_claims.fill_team_pre_pool(
+                    step_input={
+                        "output_dir": str(run_output_dir),
+                        "pool_dir": str(source_pool_dir),
+                    }
+                )
+
+            expected_team_pre_pool_dir = output_root / "others" / "team-pre-pool"
+            self.assertEqual("moved", result["status"])
+            self.assertEqual(str(expected_team_pre_pool_dir.resolve()), result["team_pre_pool_dir"])
+            self.assertFalse(seed_path.exists())
+            self.assertTrue((expected_team_pre_pool_dir / "seed.json").exists())
+
     def test_finalize_small_success_artifact_preserves_manual_oauth(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             claims_dir = Path(tmp_dir) / "claims"
@@ -213,3 +240,36 @@ class ArtifactPoolTeamBatchTests(unittest.TestCase):
             self.assertTrue((team_pre_pool_dir / "retry.json").exists())
             self.assertEqual(1, len(result["restored"]))
             self.assertEqual(1, len(result["deleted"]))
+
+    def test_finalize_team_batch_restores_mother_after_soft_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            team_mother_pool_dir = Path(tmp_dir) / "team-mother-pool"
+            team_mother_claims_dir = Path(tmp_dir) / "team-mother-claims"
+            team_mother_pool_dir.mkdir(parents=True, exist_ok=True)
+            team_mother_claims_dir.mkdir(parents=True, exist_ok=True)
+
+            mother_claimed = team_mother_claims_dir / "deadbeef-mother.json"
+            mother_claimed.write_text('{"email":"mother@example.com"}', encoding="utf-8")
+
+            result = artifact_pool_team_batch.finalize_team_batch(
+                step_input={
+                    "invite_result": {
+                        "allInviteAttemptsFailed": True,
+                        "memberOauthRequired": False,
+                        "status": "mother_only_all_invites_failed",
+                    },
+                    "mother_artifact": {
+                        "claimed_path": str(mother_claimed),
+                        "source_path": str(mother_claimed),
+                        "original_name": "mother.json",
+                        "pool_dir": str(team_mother_pool_dir),
+                    },
+                    "team_mother_pool_dir": str(team_mother_pool_dir),
+                }
+            )
+
+            self.assertEqual("restored", result["status"])
+            self.assertFalse(mother_claimed.exists())
+            self.assertTrue((team_mother_pool_dir / "mother.json").exists())
+            self.assertEqual(1, len(result["restored"]))
+            self.assertEqual([], result["deleted"])

@@ -24,7 +24,7 @@ from others.storage import load_json_payload
 
 
 def team_has_collectable_artifacts(*, result: Any) -> bool:
-    return len(normalized_team_pool_artifacts(result=result)) > 0
+    return len(normalized_team_pool_artifacts(result)) > 0
 
 
 def postprocess_team_success_artifacts(
@@ -32,7 +32,7 @@ def postprocess_team_success_artifacts(
     result: Any,
     output_root: Path,
 ) -> dict[str, Any]:
-    artifacts = normalized_team_pool_artifacts(result=result)
+    artifacts = normalized_team_pool_artifacts(result)
     if not artifacts:
         return {"ok": True, "status": "idle", "cleanup_run_output": True, "artifacts": []}
 

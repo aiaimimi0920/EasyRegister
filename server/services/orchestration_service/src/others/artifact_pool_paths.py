@@ -77,7 +77,7 @@ def resolve_free_manual_oauth_pool(step_input: dict[str, Any]) -> Path:
 
 
 def resolve_team_pre_pool(step_input: dict[str, Any]) -> Path:
-    explicit = str(step_input.get("team_pre_pool_dir") or step_input.get("pool_dir") or "").strip()
+    explicit = str(step_input.get("team_pre_pool_dir") or "").strip()
     if explicit:
         return Path(explicit).resolve()
     return resolve_team_pre_pool_dir(str(derive_output_root_from_run_dir(step_input.get("output_dir"))))

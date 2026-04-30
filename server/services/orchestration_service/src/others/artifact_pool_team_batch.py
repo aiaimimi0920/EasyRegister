@@ -286,13 +286,12 @@ def finalize_team_batch(*, step_input: dict[str, Any]) -> dict[str, Any]:
     )
     mother_success_count = int(mother_progress.get("successCount") or 0)
     mother_ready_for_collection = bool(mother_progress.get("readyForMotherCollection"))
-    preserve_mother_on_failure = collect_result_has_mother(step_input.get("collect_result")) or preserve_mother_after_invite_result(
-        invite_result
-    )
+    preserve_mother_after_invite = preserve_mother_after_invite_result(invite_result)
+    preserve_mother_on_failure = collect_result_has_mother(step_input.get("collect_result")) or preserve_mother_after_invite
     restore_mother_for_iteration = (
         not bool(task_error_code)
         and not mother_ready_for_collection
-        and mother_success_count > 0
+        and (mother_success_count > 0 or preserve_mother_after_invite)
     )
     successful_member_emails = team_member_success_emails(invite_result, oauth_result)
     discarded_member_emails = team_member_discard_emails(invite_result)

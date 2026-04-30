@@ -17,7 +17,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from errors import ErrorCodes  # noqa: E402
 from others.config import RunnerFlowSpec  # noqa: E402
-from others import runner_artifacts, runner_credential_sync, runner_failures, runner_flow_scheduler, runner_mailbox, runner_team_auth, runner_team_cleanup, runner_worker_loop, runner_worker_maintenance, runner_worker_results  # noqa: E402
+from others import runner_artifacts, runner_credential_sync, runner_failures, runner_flow_scheduler, runner_mailbox, runner_process_supervisor, runner_team_artifacts, runner_team_auth, runner_team_cleanup, runner_worker_loop, runner_worker_maintenance, runner_worker_results  # noqa: E402
 
 
 class RunnerArtifactsTests(unittest.TestCase):
@@ -54,6 +54,30 @@ class RunnerArtifactsTests(unittest.TestCase):
                     result_payload_value={"errorCode": "token_invalidated"},
                 )
         self.assertEqual((output_root / "others" / "free-manual-oauth-pool").resolve(), target)
+
+
+class RunnerTeamArtifactsTests(unittest.TestCase):
+    def test_team_has_collectable_artifacts_accepts_result_object(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            team_path = Path(tmp_dir) / "member.json"
+            team_path.write_text("{}", encoding="utf-8")
+            result = SimpleNamespace(
+                to_dict=lambda: {
+                    "outputs": {
+                        "collect-team-pool-artifacts": {
+                            "artifacts": [
+                                {
+                                    "kind": "member",
+                                    "email": "member@example.com",
+                                    "preferred_name": "member.json",
+                                    "team_pool_path": str(team_path),
+                                }
+                            ]
+                        }
+                    }
+                }
+            )
+            self.assertTrue(runner_team_artifacts.team_has_collectable_artifacts(result=result))
 
 
 class RunnerFlowSchedulerTests(unittest.TestCase):
@@ -105,6 +129,20 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
         self.assertIsNotNone(selected)
         self.assertEqual("continue-openai", selected.name)
         self.assertEqual("pool_ready", selection["selected"]["reason"])
+
+
+class RunnerProcessSupervisorTests(unittest.TestCase):
+    def test_task_slots_exhausted_reads_counter_without_lock(self) -> None:
+        class _Counter:
+            @property
+            def value(self) -> int:
+                raise AssertionError("synchronized value getter should not be used")
+
+            def get_obj(self) -> Any:
+                return SimpleNamespace(value=1)
+
+        counter = _Counter()
+        self.assertTrue(runner_process_supervisor.task_slots_exhausted(task_counter=counter, max_runs=1))
 
 
 class RunnerFailuresTests(unittest.TestCase):

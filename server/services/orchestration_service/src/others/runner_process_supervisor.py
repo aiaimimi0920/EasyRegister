@@ -89,8 +89,17 @@ def start_worker(
 def task_slots_exhausted(*, task_counter: Any, max_runs: int) -> bool:
     if max_runs <= 0:
         return False
-    with task_counter.get_lock():
-        return int(task_counter.value or 0) >= max_runs
+    return task_counter_value(task_counter) >= max_runs
+
+
+def task_counter_value(task_counter: Any) -> int:
+    get_obj = getattr(task_counter, "get_obj", None)
+    if callable(get_obj):
+        try:
+            return int(getattr(get_obj(), "value", 0) or 0)
+        except Exception:
+            pass
+    return int(getattr(task_counter, "value", 0) or 0)
 
 
 def main() -> int:
@@ -230,10 +239,10 @@ def main() -> int:
                 "event": "register_supervisor_stopped",
                 "pid": os.getpid(),
                 "instanceId": config.instance_id,
-                "taskCount": int(task_counter.value or 0),
+                "taskCount": task_counter_value(task_counter),
             }
         )
-        service_state.stopped(pid=os.getpid(), task_count=int(task_counter.value or 0))
+        service_state.stopped(pid=os.getpid(), task_count=task_counter_value(task_counter))
         if dashboard_server is not None:
             dashboard_server.stop()
     return 0
