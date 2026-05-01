@@ -20,6 +20,7 @@ class ErrorCodes:
     TEAM_AUTH_TOKEN_INVALIDATED = "team_auth_token_invalidated"
     TEAM_INVITE_UPSTREAM_ERROR = "team_invite_upstream_error"
     TEAM_MOTHER_TOKEN_VALIDATION_FAILED = "team_mother_token_validation_failed"
+    TEAM_WORKSPACE_DEACTIVATED = "deactivated_workspace"
     TEAM_SEATS_FULL = "team_seats_full"
     TRANSPORT_ERROR = "transport_error"
     UPLOAD_FILE_TO_R2_FAILED = "upload_file_to_r2_failed"
@@ -43,6 +44,7 @@ CODE_CATEGORY_MAP: dict[str, str] = {
     ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED: "auth_error",
     ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR: "flow_error",
     ErrorCodes.TEAM_MOTHER_TOKEN_VALIDATION_FAILED: "auth_error",
+    ErrorCodes.TEAM_WORKSPACE_DEACTIVATED: "flow_error",
     ErrorCodes.TEAM_SEATS_FULL: "flow_error",
     ErrorCodes.TRANSPORT_ERROR: "proxy_error",
     ErrorCodes.UPLOAD_FILE_TO_R2_FAILED: "flow_error",
@@ -217,6 +219,8 @@ def classify_error_code(
         or ErrorCodes.TEAM_SEATS_FULL in lowered
     ):
         return ErrorCodes.TEAM_SEATS_FULL
+    if ErrorCodes.TEAM_WORKSPACE_DEACTIVATED in lowered:
+        return ErrorCodes.TEAM_WORKSPACE_DEACTIVATED
     if normalized_detail == "user_register" or "user_register" in lowered:
         return ErrorCodes.USER_REGISTER_400
     if "chat_requirements_failed" in lowered and ("status=401" in lowered or '"detail":"unauthorized"' in lowered):

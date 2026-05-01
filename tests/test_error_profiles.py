@@ -173,6 +173,25 @@ class ErrorProfilesTests(unittest.TestCase):
         )
         self.assertIn("maximum number of seats", result_error_message(payload, "invite-codex-member").lower())
 
+    def test_result_error_helpers_detect_deactivated_workspace(self) -> None:
+        payload = {
+            "errorStep": "invite-codex-member",
+            "error": "{'detail': {'code': 'deactivated_workspace'}, 'status_code': 402}",
+            "stepErrors": {
+                "invite-codex-member": {
+                    "code": "invite_codex_member_failed",
+                    "message": "{'detail': {'code': 'deactivated_workspace'}, 'status_code': 402}",
+                }
+            },
+        }
+        self.assertEqual(
+            ErrorCodes.TEAM_WORKSPACE_DEACTIVATED,
+            result_error_code(payload, "invite-codex-member"),
+        )
+        self.assertTrue(
+            result_error_matches(payload, ErrorCodes.TEAM_WORKSPACE_DEACTIVATED, step_id="invite-codex-member")
+        )
+
     def test_dst_flow_step_retry_uses_retry_profile(self) -> None:
         statement = dst_flow.DstStatement(
             step_id="upload-oauth-artifact",

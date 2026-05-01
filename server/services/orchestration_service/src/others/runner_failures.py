@@ -31,6 +31,13 @@ def team_auth_blacklist_reason(*, result_payload_value: dict[str, Any]) -> str:
     }:
         return ""
 
+    if error_step in {"invite-codex-member", "invite-team-members"} and result_error_matches(
+        result_payload_value,
+        ErrorCodes.TEAM_WORKSPACE_DEACTIVATED,
+        step_id=error_step,
+    ):
+        return result_error_message(result_payload_value, error_step)
+
     if not result_error_matches(result_payload_value, ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED, step_id=error_step):
         return ""
 

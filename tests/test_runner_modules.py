@@ -290,6 +290,22 @@ class RunnerFailuresTests(unittest.TestCase):
         self.assertIn("token expired", reason)
         self.assertIn(ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED, reason)
 
+    def test_team_auth_blacklist_reason_marks_deactivated_workspace_immediately(self) -> None:
+        payload = {
+            "errorStep": "invite-codex-member",
+            "stepAttempts": {
+                "invite-codex-member": 1,
+            },
+            "stepErrors": {
+                "invite-codex-member": {
+                    "code": ErrorCodes.TEAM_WORKSPACE_DEACTIVATED,
+                    "message": "{'detail': {'code': 'deactivated_workspace'}, 'status_code': 402}",
+                }
+            },
+        }
+        reason = runner_failures.team_auth_blacklist_reason(result_payload_value=payload)
+        self.assertIn("deactivated_workspace", reason)
+
     def test_extra_failure_cooldown_seconds_uses_typed_cleanup_config(self) -> None:
         payload = {
             "errorStep": "create-openai-account",

@@ -88,7 +88,20 @@ def result_error_code(result_payload: dict[str, Any], step_id: str | None = None
     top_level_code = normalize_error_code(result_payload.get("errorCode") if isinstance(result_payload, dict) else "")
     if top_level_code and (step_id is None or str(step_id or "").strip() == result_error_step(result_payload)):
         return top_level_code
-    return normalize_error_code(result_step_error(result_payload, step_id).get("code"))
+    target_step = str(step_id or result_error_step(result_payload) or "").strip()
+    step_error = result_step_error(result_payload, step_id)
+    stored_code = normalize_error_code(step_error.get("code"))
+    if stored_code and not stored_code.endswith("_failed"):
+        return stored_code
+    classified_code = classify_error_code(
+        step_type=target_step,
+        message=result_error_message(result_payload, step_id),
+        detail=str(step_error.get("detail") or "").strip(),
+        code="",
+    )
+    if classified_code:
+        return classified_code
+    return stored_code
 
 
 def result_error_message(result_payload: dict[str, Any], step_id: str | None = None) -> str:
