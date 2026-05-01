@@ -39,6 +39,10 @@ class ErrorProfilesTests(unittest.TestCase):
             by_id["initialize-chatgpt-login-session"]["metadata"]["retry"]["retryProfile"],
         )
         self.assertEqual(
+            3,
+            by_id["initialize-chatgpt-login-session"]["metadata"]["retry"]["maxAttempts"],
+        )
+        self.assertEqual(
             "step-proxy-refresh",
             by_id["initialize-platform-organization"]["metadata"]["retry"]["retryProfile"],
         )

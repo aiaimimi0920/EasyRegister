@@ -128,7 +128,7 @@
           "owner": "easyprotocol",
           "stage": "chatgpt-login-init",
           "retry": {
-            "maxAttempts": 2,
+            "maxAttempts": 3,
             "backoffSeconds": 2,
             "retryProfile": "step-login-init-recover",
             "refreshSavedStates": [
