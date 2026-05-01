@@ -17,9 +17,10 @@ x-easyregister-test-env: &easyregister-test-env
   REGISTER_TEAM_CAPACITY_COOLDOWN_SECONDS: ${EASYREGISTER_TEST_TEAM_CAPACITY_COOLDOWN_SECONDS:-180}
   REGISTER_CRASH_COOLDOWN_SECONDS: ${EASYREGISTER_TEST_CRASH_COOLDOWN_SECONDS:-20}
   REGISTER_TASK_MAX_ATTEMPTS: ${EASYREGISTER_TEST_TASK_MAX_ATTEMPTS:-0}
-  REGISTER_TEAM_AUTH_LOCAL_DIR: /shared/easyregister-test-team
-  REGISTER_TEAM_AUTH_DEFAULT_DIR: /shared/easyregister-test-team-auth
-  REGISTER_TEAM_AUTH_DIR: /shared/easyregister-test-team-auth
+  REGISTER_SMALL_SUCCESS_SEED_MAX_AGE_SECONDS: ${EASYREGISTER_TEST_SMALL_SUCCESS_SEED_MAX_AGE_SECONDS:-900}
+  REGISTER_TEAM_AUTH_LOCAL_DIR: /shared/local-team-store
+  REGISTER_TEAM_AUTH_DEFAULT_DIR: /shared/team-auth
+  REGISTER_TEAM_AUTH_DIR: /shared/team-auth
   REGISTER_TEAM_AUTH_GLOB: ${EASYREGISTER_TEST_TEAM_AUTH_GLOB:-*-team.json}
   REGISTER_TEAM_AUTH_PATHS: ${EASYREGISTER_TEST_TEAM_AUTH_PATHS:-}
 
@@ -32,10 +33,10 @@ x-easyregister-test-common: &easyregister-test-common
   image: easyregister/easyregister-test:local
   restart: unless-stopped
   volumes:
-    - ${EASYREGISTER_TEST_OUTPUT_DIR_HOST:-../tmp/easyregister-test-output}:/shared/easyregister-test-output
-    - ${EASYREGISTER_TEST_TEAM_AUTH_DIR_HOST:-../tmp/easyregister-test-team-auth}:/shared/easyregister-test-team-auth:ro
-    - ${EASYREGISTER_TEST_FREE_LOCAL_DIR_HOST:-../tmp/easyregister-test-free}:/shared/easyregister-test-free
-    - ${EASYREGISTER_TEST_TEAM_LOCAL_DIR_HOST:-../tmp/easyregister-test-team}:/shared/easyregister-test-team
+    - ${EASYREGISTER_TEST_OUTPUT_DIR_HOST:-../tmp/easyregister-test-output}:/shared/register-output
+    - ${EASYREGISTER_TEST_TEAM_AUTH_DIR_HOST:-../tmp/easyregister-test-team-auth}:/shared/team-auth:ro
+    - ${EASYREGISTER_TEST_FREE_LOCAL_DIR_HOST:-../tmp/easyregister-test-free}:/shared/local-free-store
+    - ${EASYREGISTER_TEST_TEAM_LOCAL_DIR_HOST:-../tmp/easyregister-test-team}:/shared/local-team-store
     - ../server:/app/server
     - ../README.md:/app/README.md:ro
   networks:
@@ -52,14 +53,14 @@ services:
       REGISTER_MAILBOX_ROUTING_PROFILE_ID: ${EASYREGISTER_TEST_MAIN_MAILBOX_ROUTING_PROFILE_ID:-}
       REGISTER_MAILBOX_STRATEGY_MODE_ID: ${EASYREGISTER_TEST_MAIN_MAILBOX_STRATEGY_MODE_ID:-}
       REGISTER_MAILBOX_PROVIDERS: ${EASYREGISTER_TEST_MAIN_MAILBOX_PROVIDERS:-}
-      REGISTER_OUTPUT_ROOT: /shared/easyregister-test-output/others/main-runs
-      REGISTER_SMALL_SUCCESS_POOL_DIR: /shared/easyregister-test-output/small-success-pool
-      REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR: /shared/easyregister-test-output/others/small-success-wait-pool
-      REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR: /shared/easyregister-test-output/others/small-success-continue-pool
+      REGISTER_OUTPUT_ROOT: /shared/register-output/others/main-runs
+      REGISTER_SMALL_SUCCESS_POOL_DIR: /shared/register-output/small-success-pool
+      REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR: /shared/register-output/others/small-success-wait-pool
+      REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR: /shared/register-output/others/small-success-continue-pool
       REGISTER_SMALL_SUCCESS_WAIT_SECONDS: ${EASYREGISTER_TEST_SMALL_SUCCESS_WAIT_SECONDS:-600}
-      REGISTER_FREE_OAUTH_POOL_DIR: /shared/easyregister-test-output/free-oauth-pool
+      REGISTER_FREE_OAUTH_POOL_DIR: /shared/register-output/free-oauth-pool
       REGISTER_FREE_LOCAL_SPLIT_PERCENT: ${EASYREGISTER_TEST_FREE_LOCAL_SPLIT_PERCENT:-100}
-      REGISTER_FREE_LOCAL_DIR: /shared/easyregister-test-free
+      REGISTER_FREE_LOCAL_DIR: /shared/local-free-store
       REGISTER_FREE_WORKSPACE_SELECTOR: ${EASYREGISTER_TEST_FREE_WORKSPACE_SELECTOR:-personal}
       REGISTER_FREE_OAUTH_DELAY_SECONDS: ${EASYREGISTER_TEST_FREE_OAUTH_DELAY_SECONDS:-0}
       REGISTER_FREE_STOP_AFTER_VALIDATE: ${EASYREGISTER_TEST_FREE_STOP_AFTER_VALIDATE:-false}
@@ -84,14 +85,14 @@ services:
       REGISTER_MAILBOX_ROUTING_PROFILE_ID: ${EASYREGISTER_TEST_CONTINUE_MAILBOX_ROUTING_PROFILE_ID:-}
       REGISTER_MAILBOX_STRATEGY_MODE_ID: ${EASYREGISTER_TEST_CONTINUE_MAILBOX_STRATEGY_MODE_ID:-}
       REGISTER_MAILBOX_PROVIDERS: ${EASYREGISTER_TEST_CONTINUE_MAILBOX_PROVIDERS:-}
-      REGISTER_OUTPUT_ROOT: /shared/easyregister-test-output/others/continue-runs
-      REGISTER_SMALL_SUCCESS_POOL_DIR: /shared/easyregister-test-output/others/small-success-continue-pool
-      REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR: /shared/easyregister-test-output/others/small-success-wait-pool
-      REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR: /shared/easyregister-test-output/others/small-success-continue-pool
+      REGISTER_OUTPUT_ROOT: /shared/register-output/others/continue-runs
+      REGISTER_SMALL_SUCCESS_POOL_DIR: /shared/register-output/others/small-success-continue-pool
+      REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR: /shared/register-output/others/small-success-wait-pool
+      REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR: /shared/register-output/others/small-success-continue-pool
       REGISTER_SMALL_SUCCESS_WAIT_SECONDS: ${EASYREGISTER_TEST_SMALL_SUCCESS_WAIT_SECONDS:-600}
-      REGISTER_FREE_OAUTH_POOL_DIR: /shared/easyregister-test-output/free-oauth-pool
+      REGISTER_FREE_OAUTH_POOL_DIR: /shared/register-output/free-oauth-pool
       REGISTER_FREE_LOCAL_SPLIT_PERCENT: ${EASYREGISTER_TEST_FREE_LOCAL_SPLIT_PERCENT:-100}
-      REGISTER_FREE_LOCAL_DIR: /shared/easyregister-test-free
+      REGISTER_FREE_LOCAL_DIR: /shared/local-free-store
       REGISTER_FREE_WORKSPACE_SELECTOR: ${EASYREGISTER_TEST_FREE_WORKSPACE_SELECTOR:-personal}
       REGISTER_FREE_OAUTH_DELAY_SECONDS: ${EASYREGISTER_TEST_FREE_OAUTH_DELAY_SECONDS:-0}
       REGISTER_LOOP_DELAY_SECONDS: ${EASYREGISTER_TEST_CONTINUE_LOOP_DELAY_SECONDS:-15}
@@ -111,16 +112,16 @@ services:
       REGISTER_MAILBOX_ROUTING_PROFILE_ID: ${EASYREGISTER_TEST_TEAM_MAILBOX_ROUTING_PROFILE_ID:-}
       REGISTER_MAILBOX_STRATEGY_MODE_ID: ${EASYREGISTER_TEST_TEAM_MAILBOX_STRATEGY_MODE_ID:-}
       REGISTER_MAILBOX_PROVIDERS: ${EASYREGISTER_TEST_TEAM_MAILBOX_PROVIDERS:-}
-      REGISTER_OUTPUT_ROOT: /shared/easyregister-test-output/others/team-runs
-      REGISTER_SMALL_SUCCESS_POOL_DIR: /shared/easyregister-test-output/small-success-pool
-      REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR: /shared/easyregister-test-output/others/small-success-wait-pool
-      REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR: /shared/easyregister-test-output/others/small-success-continue-pool
+      REGISTER_OUTPUT_ROOT: /shared/register-output/others/team-runs
+      REGISTER_SMALL_SUCCESS_POOL_DIR: /shared/register-output/small-success-pool
+      REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR: /shared/register-output/others/small-success-wait-pool
+      REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR: /shared/register-output/others/small-success-continue-pool
       REGISTER_SMALL_SUCCESS_WAIT_SECONDS: ${EASYREGISTER_TEST_SMALL_SUCCESS_WAIT_SECONDS:-600}
-      REGISTER_FREE_OAUTH_POOL_DIR: /shared/easyregister-test-output/free-oauth-pool
+      REGISTER_FREE_OAUTH_POOL_DIR: /shared/register-output/free-oauth-pool
       REGISTER_FREE_LOCAL_SPLIT_PERCENT: ${EASYREGISTER_TEST_FREE_LOCAL_SPLIT_PERCENT:-100}
-      REGISTER_FREE_LOCAL_DIR: /shared/easyregister-test-free
+      REGISTER_FREE_LOCAL_DIR: /shared/local-free-store
       REGISTER_TEAM_LOCAL_SPLIT_PERCENT: ${EASYREGISTER_TEST_TEAM_LOCAL_SPLIT_PERCENT:-100}
-      REGISTER_TEAM_LOCAL_DIR: /shared/easyregister-test-team
+      REGISTER_TEAM_LOCAL_DIR: /shared/local-team-store
       REGISTER_LOOP_DELAY_SECONDS: ${EASYREGISTER_TEST_TEAM_LOOP_DELAY_SECONDS:-20}
       REGISTER_WORKER_COUNT: ${EASYREGISTER_TEST_TEAM_WORKER_COUNT:-1}
       REGISTER_WORKER_STAGGER_SECONDS: ${EASYREGISTER_TEST_TEAM_WORKER_STAGGER_SECONDS:-5}
@@ -130,12 +131,12 @@ services:
       REGISTER_INFINITE_MAX_RUNS: ${EASYREGISTER_TEST_TEAM_INFINITE_MAX_RUNS:-0}
       REGISTER_FLOW_PATH: /app/server/services/orchestration_service/flows/codex-team-expand-v1.semantic-flow.json
       REGISTER_DASHBOARD_ENABLED: "false"
-      REGISTER_TEAM_PRE_POOL_DIR: /shared/easyregister-test-output/others/team-pre-pool
-      REGISTER_TEAM_MOTHER_POOL_DIR: /shared/easyregister-test-output/team-mother-pool
-      REGISTER_TEAM_MOTHER_CLAIMS_DIR: /shared/easyregister-test-output/others/team-mother-claims
-      REGISTER_TEAM_MEMBER_CLAIMS_DIR: /shared/easyregister-test-output/others/team-member-claims
-      REGISTER_TEAM_POST_POOL_DIR: /shared/easyregister-test-output/others/team-post-pool
-      REGISTER_TEAM_POOL_DIR: /shared/easyregister-test-output/team-oauth-pool
+      REGISTER_TEAM_PRE_POOL_DIR: /shared/register-output/others/team-pre-pool
+      REGISTER_TEAM_MOTHER_POOL_DIR: /shared/register-output/team-mother-pool
+      REGISTER_TEAM_MOTHER_CLAIMS_DIR: /shared/register-output/others/team-mother-claims
+      REGISTER_TEAM_MEMBER_CLAIMS_DIR: /shared/register-output/others/team-member-claims
+      REGISTER_TEAM_POST_POOL_DIR: /shared/register-output/others/team-post-pool
+      REGISTER_TEAM_POOL_DIR: /shared/register-output/team-oauth-pool
       REGISTER_TEAM_PRE_FILL_COUNT: ${EASYREGISTER_TEST_TEAM_PRE_FILL_COUNT:-1}
       REGISTER_TEAM_MEMBER_COUNT: ${EASYREGISTER_TEST_TEAM_MEMBER_COUNT:-4}
       REGISTER_TEAM_WORKSPACE_SELECTOR: ${EASYREGISTER_TEST_TEAM_WORKSPACE_SELECTOR:-first_team}
