@@ -17,7 +17,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from errors import ErrorCodes  # noqa: E402
 from others.config import RunnerFlowSpec  # noqa: E402
-from others import runner_artifacts, runner_credential_sync, runner_failures, runner_flow_scheduler, runner_mailbox, runner_process_supervisor, runner_team_artifacts, runner_team_auth, runner_team_cleanup, runner_worker_loop, runner_worker_maintenance, runner_worker_results  # noqa: E402
+from others import runner_artifacts, runner_credential_sync, runner_failures, runner_flow_scheduler, runner_mailbox, runner_process_supervisor, runner_team_artifacts, runner_team_auth, runner_team_auth_pool, runner_team_cleanup, runner_worker_loop, runner_worker_maintenance, runner_worker_results  # noqa: E402
 
 
 class RunnerArtifactsTests(unittest.TestCase):
@@ -467,6 +467,28 @@ class RunnerTeamCleanupTests(unittest.TestCase):
 
 
 class RunnerTeamAuthTests(unittest.TestCase):
+    def test_team_auth_pool_candidates_dedupes_same_identity_and_prefers_first_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            local_dir = tmp_path / "local"
+            readonly_dir = tmp_path / "readonly"
+            local_dir.mkdir(parents=True, exist_ok=True)
+            readonly_dir.mkdir(parents=True, exist_ok=True)
+            local_path = local_dir / "codex-team-mother-demo@example.com.json"
+            readonly_path = readonly_dir / "codex-team-mother-demo@example.com.json"
+            payload = {"email": "demo@example.com", "account_id": "acct_123"}
+            local_path.write_text(json.dumps(payload), encoding="utf-8")
+            readonly_path.write_text(json.dumps(payload), encoding="utf-8")
+            with mock.patch.object(
+                runner_team_auth_pool,
+                "team_auth_payload_is_mother",
+                return_value=True,
+            ):
+                candidates = runner_team_auth_pool.team_auth_pool_candidates(
+                    candidate_dirs=[str(local_dir), str(readonly_dir)]
+                )
+        self.assertEqual([str(local_path.resolve())], candidates)
+
     def test_temp_blacklist_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"

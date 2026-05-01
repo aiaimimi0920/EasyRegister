@@ -83,11 +83,27 @@ def team_auth_payload_is_mother(payload: Any) -> bool:
     return any(value == "otp" or "otp_email" in value for value in amr_values)
 
 
+def team_auth_candidate_identity_key(path: Path, payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    auth_claims = extract_auth_claims(payload)
+    return team_mother_identity_key(
+        original_name=str(path.name or "").strip(),
+        email=str(payload.get("email") or "").strip(),
+        account_id=str(
+            payload.get("account_id")
+            or auth_claims.get("chatgpt_account_id")
+            or ""
+        ).strip(),
+    )
+
+
 def team_auth_pool_candidates(*, candidate_dirs: list[str]) -> list[str]:
     glob_pattern = team_auth_runtime_config().auth_glob or "*-team.json"
     explicit: list[str] = []
     inferred: list[str] = []
-    seen: set[str] = set()
+    seen_paths: set[str] = set()
+    seen_identities: set[str] = set()
     for raw_dir in candidate_dirs:
         candidate = Path(raw_dir).expanduser()
         if candidate.is_file():
@@ -103,15 +119,20 @@ def team_auth_pool_candidates(*, candidate_dirs: list[str]) -> list[str]:
         for path in directory_paths:
             resolved = str(path.resolve())
             lowered = resolved.lower()
-            if lowered in seen:
+            if lowered in seen_paths:
                 continue
-            seen.add(lowered)
+            seen_paths.add(lowered)
             try:
                 payload = load_json_payload(path)
             except Exception:
                 continue
             if not team_auth_payload_is_mother(payload):
                 continue
+            identity_key = team_auth_candidate_identity_key(path, payload)
+            if identity_key and identity_key in seen_identities:
+                continue
+            if identity_key:
+                seen_identities.add(identity_key)
             if team_auth_path_is_explicit_mother(path):
                 explicit.append(resolved)
             else:
