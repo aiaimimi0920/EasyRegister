@@ -253,6 +253,8 @@ def classify_error_code(
         or "could not connect to server" in lowered
         or "tls connect error" in lowered
         or "connection closed abruptly" in lowered
+        or "unexpected_eof_while_reading" in lowered
+        or "eof occurred in violation of protocol" in lowered
     ):
         return ErrorCodes.PROXY_CONNECT_FAILED
     if (

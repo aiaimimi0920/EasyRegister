@@ -142,6 +142,14 @@ class ErrorProfilesTests(unittest.TestCase):
         )
         self.assertEqual(ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, details["code"])
 
+    def test_build_error_details_classifies_unexpected_eof_as_proxy_connect_failed(self) -> None:
+        details = build_error_details(
+            step_type="create_openai_account",
+            message="<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1017)>",
+        )
+        self.assertEqual(ErrorCodes.PROXY_CONNECT_FAILED, details["code"])
+        self.assertEqual("proxy_error", details["category"])
+
     def test_protocol_runtime_error_carries_inferred_code(self) -> None:
         exc = ensure_protocol_runtime_error(
             RuntimeError("mailbox capacity unavailable"),
