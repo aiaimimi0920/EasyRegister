@@ -210,6 +210,7 @@
         "input": {
           "source_path": "{{small_success_artifact.source_path}}",
           "team_auth_path": "{{task.team_auth_path}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}",
           "invite_email": "{{small_success_artifact.email}}",
           "member_user_id": "{{obtain_codex_oauth.userId}}"
         },
