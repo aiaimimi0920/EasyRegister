@@ -92,8 +92,8 @@
 - `EasyAiMi`
 
 当前 `compose/docker-compose.yaml` 和 `compose/docker-compose.test.yaml` 都会直接挂到这个外部网络，
-这样 `EasyRegister` 才能通过容器名访问 `easy-email-service`、`easy-proxy-service`、
-`easy-protocol-service` 以及其他 EZ 系服务实例。
+这样 `EasyRegister` 才能通过容器名访问 `easy-email`、`easy-proxy`、
+`easy-protocol` 以及其他 EZ 系服务实例。
 
 并且需要提供：
 
@@ -223,7 +223,7 @@ python -m infinite_runner
 
 即使操作者只单独下载这一份脚本，它也可以先自举拉取本仓所需文件，再继续完成部署。
 在 blank-host 路径下，脚本还会自动补齐：
-- `EASY_PROXY_BASE_URL=http://easy-proxy-service:29888`
+- `EASY_PROXY_BASE_URL=http://easy-proxy:29888`
 - 一个本地安全的 `EASY_PROTOCOL_CONTROL_TOKEN`
 - `REGISTER_DASHBOARD_LISTEN=0.0.0.0:9790`
 - `REGISTER_DASHBOARD_ALLOW_REMOTE=true`
@@ -347,7 +347,7 @@ powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor
   -Build
 ```
 
-本地迭代时，compose 默认会用已有的 `registerservice/register-service:local`
+本地迭代时，compose 默认会用已有的 `easy-register/easy-register:local`
 作为构建基底，只覆盖当前代码层，避免每次代码更新都重新拉取基础镜像和 PyPI
 依赖。如果是全新机器首次构建，可以显式设置：
 
@@ -404,29 +404,16 @@ GHCR 登录也支持和参考仓同样的双路径：
   - `EASYREGISTER_PUBLISH_GHCR_TOKEN`
 - 如果不提供，则回退到 GitHub Actions 默认的 `GITHUB_TOKEN`
 
-当前 compose 会拉起三类 `EasyRegister` 实例：
+当前默认 compose 会拉起一个 `EasyRegister` 混跑实例：
 
-- `register-service`
-  - 主注册 flow
-  - 负责持续产出新的 `openai_oauth`
+- `easy-register`
+  - 主调度容器
+  - 默认以 `REGISTER_INSTANCE_ROLE=mixed` 运行
+  - 通过 `REGISTER_FLOW_SPECS_JSON` 同时挂载 `main`、`continue`、`team` 三条 flow
   - 暴露运行态面板
-  - 默认 `7` 个 worker
-- `register-continue-service`
-  - `openai_oauth` 续跑 flow
-  - 负责从 `openai/failed-once` 中 claim 一个 `openai_oauth`，继续跑后半段
-  - 默认按 `free` 本地分流比例写入 `free` 本地存储目录，不再上传
-  - 只有把 `REGISTER_FREE_LOCAL_SPLIT_PERCENT` 调低后，未命中本地分流的 free 成品才会上传
-  - 默认 `2` 个 worker
-- `register-team-service`
-  - team 扩容 flow
-  - 负责把 `openai/pending` 和 `openai/failed-twice` 中的文件随机补充到 `others/team-pre-pool`
-  - 监控你手动放入 `codex/team-mother-input` 的 mother 凭证
-  - 自动完成 mother 二次登录、team workspace 选择、4 个成员邀请、4 个成员 OAuth
-  - 最终 team 成品默认会上传到 `codex-team/<文件名>` 并删除 `codex/team` 中的本地文件
-  - 如果命中 `team` 本地分流比例，则改为写入 `team` 本地存储目录，不再上传
-  - 默认 `1` 个 worker
+  - 默认 `10` 个 worker
 
-两个实例都采用“单实例 supervisor + 多 worker 进程”模型：
+这个实例采用“单实例 supervisor + 多 worker 进程”模型：
 
 - 容器内只有一个中心控制端
 - supervisor 负责拉起多个独立 worker 进程
@@ -445,7 +432,7 @@ GHCR 登录也支持和参考仓同样的双路径：
 - `REGISTER_INFINITE_MAX_RUNS`
   - 整个 supervisor 总共允许启动的任务数；`0` 表示无限
 - `REGISTER_FLOW_PATH`
-  - 兼容旧模式的单 flow 入口；不配置时仍回退到默认 `codex-openai-account-v1`
+  - 兼容旧模式的单 flow 入口；混跑部署下默认留空
 - `REGISTER_FLOW_SPECS_JSON`
   - 新的混跑入口；可以在同一个实例里声明多条 flow spec，每条 spec 自带 `path`、`role`、`weight`，worker 每轮会从可运行 flow 中按权重选择一条
 - `REGISTER_INSTANCE_ID`
@@ -571,7 +558,7 @@ supervisor 还内置了两类容量兜底：
 这条链路分为人工阶段和自动阶段：
 
 - 人工阶段
-  - `register-team-service` 会把随机挑出的预备账号移动到 `others/team-pre-pool`
+  - `easy-register` 中的 `team` flow 会把随机挑出的预备账号移动到 `others/team-pre-pool`
   - 你手动从 `others/team-pre-pool` 选一个账号，登录并开通 team 套餐
   - 完成后你把这个 mother 凭证移动到 `codex/team-mother-input`
 - 自动阶段
@@ -624,7 +611,7 @@ supervisor 还内置了两类容量兜底：
   - 读取 `EasyProtocol` internal stats 的控制面 token
   - `deploy-host.ps1` 在 blank-host 路径下会自动注入本地安全 token，避免 dashboard 因空值或 `123456` 被静默禁用
 - `EASY_PROXY_BASE_URL`
-  - 默认 `http://easy-proxy-service:29888`
+  - 默认 `http://easy-proxy:29888`
 
 当一轮任务最终完成并且 `upload_file_to_r2` 已成功上传 auth JSON 后，
 对应的整轮输出目录会自动删除，避免 `docker-output` 持续膨胀。

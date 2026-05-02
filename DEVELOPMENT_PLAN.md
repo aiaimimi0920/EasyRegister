@@ -21,7 +21,7 @@
 - cleanup 锁具备 stale lock recovery 能力
 - 已建立新仓首个导入提交，并创建恢复基线 tag `easyregister-import-baseline`
 - 已新增隔离测试 compose：`compose/docker-compose.test.yaml`
-  - 默认容器名前缀为 `easyregister-test-*`
+  - 默认测试容器名为 `easy-register-test`
   - 默认 dashboard 宿主机端口为 `29790`
   - 默认测试输出目录位于仓库内 `tmp/easyregister-test-*`
 - 已完成第一轮结构化错误码与 retry profile 收口
@@ -170,10 +170,8 @@
 - 本仓测试必须使用新的镜像、新的容器名、新的端口、新的共享输出目录。
 - 测试 compose 必须与生产 compose 分离。
 - 测试环境允许访问同类外部依赖服务，但不能覆盖生产实例的 bind mount 或状态目录。
-- 若需要运行新的 `register-*` 测试容器，必须使用独立前缀，例如：
-  - `easyregister-test-main`
-  - `easyregister-test-continue`
-  - `easyregister-test-team`
+- 若需要运行新的测试容器，必须使用与默认部署实例可区分的独立名字，例如：
+  - `easy-register-test`
 
 ### 5.5 变更范围控制约束
 

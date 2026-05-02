@@ -35,6 +35,14 @@ This repo must keep the short slug `easy-register` as the operator-facing
 default. Preserve:
 
 - Docker Compose project name `easy-register`
-- role container names `easy-register-main`, `easy-register-continue`,
-  `easy-register-team`
+- primary runtime container name `easy-register`
 - default local image name `easy-register/easy-register:local`
+
+The default deployment shape must remain:
+
+- one Docker runtime container
+- one mixed scheduler instance
+- multiple flow specs supplied through `REGISTER_FLOW_SPECS_JSON`
+
+Do not regress the default operator path back to three role-specific runtime
+containers unless the user explicitly asks for that split.
