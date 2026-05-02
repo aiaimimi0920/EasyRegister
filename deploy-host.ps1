@@ -31,6 +31,7 @@ $ErrorActionPreference = "Stop"
 
 $defaultEasyProxyBaseUrl = "http://easy-proxy-service:29888"
 $defaultDashboardControlToken = "easyregister-dashboard-local-token"
+$defaultDashboardListen = "0.0.0.0:9790"
 
 function Resolve-AbsolutePath {
     param(
@@ -217,6 +218,18 @@ if ([string]::IsNullOrWhiteSpace($env:EASY_PROTOCOL_CONTROL_TOKEN)) {
 }
 if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_EASY_PROTOCOL_CONTROL_TOKEN)) {
     $env:EASYREGISTER_TEST_EASY_PROTOCOL_CONTROL_TOKEN = $defaultDashboardControlToken
+}
+if ([string]::IsNullOrWhiteSpace($env:REGISTER_DASHBOARD_LISTEN)) {
+    $env:REGISTER_DASHBOARD_LISTEN = $defaultDashboardListen
+}
+if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_DASHBOARD_LISTEN)) {
+    $env:EASYREGISTER_TEST_DASHBOARD_LISTEN = $defaultDashboardListen
+}
+if ([string]::IsNullOrWhiteSpace($env:REGISTER_DASHBOARD_ALLOW_REMOTE)) {
+    $env:REGISTER_DASHBOARD_ALLOW_REMOTE = "true"
+}
+if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_DASHBOARD_ALLOW_REMOTE)) {
+    $env:EASYREGISTER_TEST_DASHBOARD_ALLOW_REMOTE = "true"
 }
 
 if (-not [string]::IsNullOrWhiteSpace($CodexFreeDirHost)) {

@@ -222,6 +222,13 @@ python -m infinite_runner
 - `deploy-host.ps1`
 
 即使操作者只单独下载这一份脚本，它也可以先自举拉取本仓所需文件，再继续完成部署。
+在 blank-host 路径下，脚本还会自动补齐：
+- `EASY_PROXY_BASE_URL=http://easy-proxy-service:29888`
+- 一个本地安全的 `EASY_PROTOCOL_CONTROL_TOKEN`
+- `REGISTER_DASHBOARD_LISTEN=0.0.0.0:9790`
+- `REGISTER_DASHBOARD_ALLOW_REMOTE=true`
+
+这样宿主机发布的 dashboard 端口可以直接从 host 访问，不会因为容器内默认绑定 `127.0.0.1` 而失效。
 
 它默认会：
 
