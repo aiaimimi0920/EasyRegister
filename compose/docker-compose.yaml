@@ -5,7 +5,7 @@ services:
       dockerfile: deploy/Dockerfile
       args:
         REGISTER_SERVICE_BASE_IMAGE: ${REGISTER_SERVICE_BASE_IMAGE:-registerservice/register-service:local}
-    image: registerservice/register-service:local
+    image: ${REGISTER_SERVICE_IMAGE:-registerservice/register-service:local}
     container_name: register-service
     restart: unless-stopped
     environment:
@@ -69,7 +69,7 @@ services:
       - EasyAiMi
 
   register-continue-service:
-    image: registerservice/register-service:local
+    image: ${REGISTER_SERVICE_IMAGE:-registerservice/register-service:local}
     container_name: register-continue-service
     restart: unless-stopped
     environment:
@@ -125,7 +125,7 @@ services:
       - EasyAiMi
 
   register-team-service:
-    image: registerservice/register-service:local
+    image: ${REGISTER_SERVICE_IMAGE:-registerservice/register-service:local}
     container_name: register-team-service
     restart: unless-stopped
     environment:

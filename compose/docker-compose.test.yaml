@@ -30,7 +30,7 @@ x-easyregister-test-common: &easyregister-test-common
     dockerfile: deploy/Dockerfile
     args:
       REGISTER_SERVICE_BASE_IMAGE: ${EASYREGISTER_TEST_BASE_IMAGE:-python:3.10-bookworm}
-  image: easyregister/easyregister-test:local
+  image: ${EASYREGISTER_TEST_IMAGE:-easyregister/easyregister-test:local}
   restart: unless-stopped
   volumes:
     - ${EASYREGISTER_TEST_OUTPUT_DIR_HOST:-../tmp/easyregister-test-output}:/shared/register-output

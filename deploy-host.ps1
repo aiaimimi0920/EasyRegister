@@ -11,6 +11,8 @@ param(
     [string]$LinkType = "Auto",
     [switch]$ForceLinks,
     [switch]$NoBuild,
+    [string]$Image = "",
+    [switch]$Pull,
     [switch]$NoDetach,
     [switch]$MaterializeOnly,
     [string]$RepoOwner = "aiaimimi0920",
@@ -232,6 +234,18 @@ if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_DASHBOARD_ALLOW_REMOTE))
     $env:EASYREGISTER_TEST_DASHBOARD_ALLOW_REMOTE = "true"
 }
 
+if (-not [string]::IsNullOrWhiteSpace($Image)) {
+    $env:REGISTER_SERVICE_IMAGE = $Image
+    $env:EASYREGISTER_TEST_IMAGE = $Image
+    if ($Pull) {
+        Write-Host "[deploy-host] pulling image: $Image" -ForegroundColor Cyan
+        & docker pull $Image
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to pull docker image: $Image"
+        }
+    }
+}
+
 if (-not [string]::IsNullOrWhiteSpace($CodexFreeDirHost)) {
     $env:REGISTER_CODEX_FREE_DIR_HOST = $CodexFreeDirHost
 }
@@ -272,7 +286,7 @@ $deployArgs = @(
 if ($ForceLinks) {
     $deployArgs += "-ForceLinks"
 }
-if (-not $NoBuild) {
+if ((-not $NoBuild) -and [string]::IsNullOrWhiteSpace($Image)) {
     $deployArgs += "-Build"
 }
 if ($NoDetach) {
