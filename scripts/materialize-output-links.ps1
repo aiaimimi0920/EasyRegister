@@ -56,7 +56,14 @@ function Get-LinkTargetPath {
     }
 
     $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
-    foreach ($candidate in @($item.LinkTarget, $item.Target)) {
+    $candidates = @()
+    if ($item.PSObject.Properties.Name -contains "LinkTarget") {
+        $candidates += $item.LinkTarget
+    }
+    if ($item.PSObject.Properties.Name -contains "Target") {
+        $candidates += $item.Target
+    }
+    foreach ($candidate in $candidates) {
         if ($null -eq $candidate) {
             continue
         }

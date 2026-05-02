@@ -191,6 +191,10 @@ $resolvedOutputDirHost = if ([string]::IsNullOrWhiteSpace($OutputDirHost)) {
 }
 $resolvedComposeFile = if ([string]::IsNullOrWhiteSpace($ComposeFile)) {
     Resolve-AbsolutePath -Path "compose\docker-compose.yaml" -BaseDir $repoRoot
+} elseif ([System.IO.Path]::IsPathRooted($ComposeFile)) {
+    Resolve-AbsolutePath -Path $ComposeFile -BaseDir $launcherRoot
+} elseif (Test-Path -LiteralPath (Join-Path $repoRoot $ComposeFile)) {
+    Resolve-AbsolutePath -Path $ComposeFile -BaseDir $repoRoot
 } else {
     Resolve-AbsolutePath -Path $ComposeFile -BaseDir $launcherRoot
 }
