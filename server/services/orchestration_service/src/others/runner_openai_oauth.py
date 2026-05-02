@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from others.common import (
     free_manual_oauth_preserve_enabled,
     json_log,
     validate_openai_oauth_seed_payload,
+    write_json_atomic,
 )
 from others.prepared_artifacts import (
     delete_artifact_quiet,
@@ -80,7 +82,94 @@ def _iter_openai_oauth_artifacts(*, run_output_dir: Path, result_or_payload: Any
                 continue
             candidates[str(candidate).lower()] = candidate
 
+    if not candidates and result_or_payload is not None:
+        materialized_path = _materialize_openai_oauth_artifact_from_output(
+            result_or_payload=result_or_payload,
+            run_output_dir=run_output_dir,
+        )
+        if materialized_path is not None and materialized_path.is_file():
+            candidates[str(materialized_path).lower()] = materialized_path
+
     return _sort_file_paths_newest_first(list(candidates.values()))
+
+
+def _materialize_openai_oauth_artifact_from_output(
+    *,
+    result_or_payload: Any,
+    run_output_dir: Path,
+) -> Path | None:
+    create_output = output_dict(result_or_payload, "create-openai-account")
+    if not create_output:
+        create_output = output_dict(result_or_payload, "create_openai_account")
+    platform_output = output_dict(result_or_payload, "initialize-platform-organization")
+    login_output = output_dict(result_or_payload, "initialize-chatgpt-login-session")
+    if not create_output or not platform_output or not login_output:
+        return None
+
+    email = str(create_output.get("email") or "").strip()
+    mailbox_ref = str(
+        create_output.get("mailbox_ref")
+        or create_output.get("mailboxRef")
+        or login_output.get("mailboxRef")
+        or ""
+    ).strip()
+    mailbox_session_id = str(
+        create_output.get("mailbox_session_id")
+        or create_output.get("mailboxSessionId")
+        or login_output.get("mailboxSessionId")
+        or ""
+    ).strip()
+    if not email or not mailbox_ref or not mailbox_session_id:
+        return None
+
+    login_status = str(login_output.get("status") or "").strip() or ("completed" if bool(login_output.get("ok")) else "")
+    platform_status = str(platform_output.get("status") or "").strip() or ("completed" if bool(platform_output.get("ok")) else "")
+    if not login_status or not platform_status:
+        return None
+
+    payload = {
+        "outcome": str(create_output.get("outcome") or "").strip() or "openai_oauth",
+        "site": "platform.openai.com",
+        "registrationMode": "protocol-platform-first",
+        "source": "easyprotocol_flow",
+        "email": email,
+        "password": str(create_output.get("password") or "").strip(),
+        "emailServiceProvider": str(create_output.get("email_service_provider") or "EasyEmail").strip() or "EasyEmail",
+        "mailboxProvider": str(create_output.get("mailbox_provider") or "").strip(),
+        "mailboxAccessKey": str(create_output.get("mailbox_access_key") or "").strip(),
+        "mailboxRef": mailbox_ref,
+        "mailboxSessionId": mailbox_session_id,
+        "firstName": str(create_output.get("first_name") or "").strip(),
+        "lastName": str(create_output.get("last_name") or "").strip(),
+        "birthdate": str(create_output.get("birthdate") or "").strip(),
+        "pageType": str(create_output.get("page_type") or "").strip(),
+        "finalUrl": str(create_output.get("final_url") or "").strip(),
+        "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "platformOrganization": {
+            **platform_output,
+            "status": platform_status,
+        },
+        "chatgptLogin": {
+            **login_output,
+            "status": login_status,
+        },
+        "chatgptLoginDetails": dict(login_output),
+    }
+
+    valid, _ = validate_openai_oauth_seed_payload(payload)
+    if not valid:
+        return None
+
+    materialized_dir = run_output_dir / "openai_oauth"
+    ensure_directory(materialized_dir)
+    source_name = ""
+    source_path = first_existing_output_path(result_or_payload, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES)
+    if source_path is not None:
+        source_name = source_path.name
+    artifact_name = source_name or f"materialized-{uuid.uuid4().hex[:12]}.json"
+    materialized_path = materialized_dir / artifact_name
+    write_json_atomic(materialized_path, payload, include_pid=True, cleanup_temp=True)
+    return materialized_path
 
 
 def copy_openai_oauth_artifacts_to_pool(

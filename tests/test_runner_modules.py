@@ -177,6 +177,63 @@ class RunnerArtifactsTests(unittest.TestCase):
             self.assertTrue(copied_path.is_file())
             self.assertEqual("small-legacy.json", copied_path.name)
 
+    def test_copy_openai_oauth_artifacts_to_pool_materializes_from_step_outputs_when_source_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_output_dir = Path(tmp_dir) / "run-1"
+            pool_dir = Path(tmp_dir) / "openai" / "failed-once"
+            result_payload = {
+                "outputs": {
+                    "create-openai-account": {
+                        "email": "materialized@example.com",
+                        "password": "pw",
+                        "mailbox_provider": "moemail",
+                        "mailbox_access_key": "mailbox-key",
+                        "mailbox_ref": "mailbox-ref",
+                        "mailbox_session_id": "session-id",
+                        "first_name": "John",
+                        "last_name": "Doe",
+                        "birthdate": "1990-01-01",
+                        "page_type": "platform_callback",
+                        "final_url": "https://platform.openai.com/auth/callback",
+                        "storage_path": str(run_output_dir / "small_success" / "missing.json"),
+                    },
+                    "initialize-platform-organization": {
+                        "status": "completed",
+                        "organizationId": "org_123",
+                    },
+                    "initialize-chatgpt-login-session": {
+                        "status": "completed",
+                        "workspaceId": "ws_123",
+                        "personalWorkspaceId": "ws_123",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                    },
+                }
+            }
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0",
+                },
+                clear=False,
+            ):
+                copied_paths = runner_artifacts.copy_openai_oauth_artifacts_to_pool(
+                    run_output_dir=run_output_dir,
+                    pool_dir=pool_dir,
+                    worker_label="worker-01",
+                    task_index=1,
+                    result_or_payload=result_payload,
+                )
+
+            self.assertEqual(1, len(copied_paths))
+            copied_path = Path(copied_paths[0])
+            self.assertTrue(copied_path.is_file())
+            payload = json.loads(copied_path.read_text(encoding="utf-8"))
+            self.assertEqual("materialized@example.com", payload["email"])
+            self.assertEqual("completed", payload["platformOrganization"]["status"])
+            self.assertEqual("completed", payload["chatgptLogin"]["status"])
+
 
 class RunnerTeamArtifactsTests(unittest.TestCase):
     def test_team_has_collectable_artifacts_accepts_result_object(self) -> None:
