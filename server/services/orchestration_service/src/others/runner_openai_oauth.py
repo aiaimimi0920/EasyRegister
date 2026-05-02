@@ -416,7 +416,10 @@ def backfill_openai_oauth_continue_pool(
             source_path.unlink(missing_ok=True)
             discarded.append({"source_path": str(source_path), "reason": f"load_failed:{exc}"})
             continue
-        valid, reason = validate_openai_oauth_seed_payload(payload)
+        valid, reason = validate_openai_oauth_seed_payload(
+            payload,
+            enforce_max_age=False,
+        )
         if not valid:
             source_path.unlink(missing_ok=True)
             discarded.append({"source_path": str(source_path), "reason": reason})

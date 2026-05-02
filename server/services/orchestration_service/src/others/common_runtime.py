@@ -73,7 +73,11 @@ def free_manual_oauth_preserve_codes(step_input: dict[str, Any] | None = None) -
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
-def validate_openai_oauth_seed_payload(payload: dict[str, Any]) -> tuple[bool, str]:
+def validate_openai_oauth_seed_payload(
+    payload: dict[str, Any],
+    *,
+    enforce_max_age: bool = True,
+) -> tuple[bool, str]:
     if not isinstance(payload, dict):
         return False, "payload_not_object"
     platform_org = payload.get("platformOrganization")
@@ -126,19 +130,20 @@ def validate_openai_oauth_seed_payload(payload: dict[str, Any]) -> tuple[bool, s
     except Exception:
         return False, "invalid_created_at"
 
-    max_age_raw = str(
-        os.environ.get("REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS")
-        or os.environ.get("REGISTER_SMALL_SUCCESS_SEED_MAX_AGE_SECONDS")
-        or os.environ.get("REGISTER_TEAM_MEMBER_SEED_MAX_AGE_SECONDS")
-        or "900"
-    ).strip()
-    try:
-        max_age_seconds = max(0, int(float(max_age_raw)))
-    except Exception:
-        max_age_seconds = 900
-    if max_age_seconds > 0:
-        age_seconds = max(0.0, (datetime.now(timezone.utc) - parsed_created_at).total_seconds())
-        if age_seconds > max_age_seconds:
-            return False, f"openai_oauth_seed_too_old:{int(age_seconds)}"
+    if enforce_max_age:
+        max_age_raw = str(
+            os.environ.get("REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS")
+            or os.environ.get("REGISTER_SMALL_SUCCESS_SEED_MAX_AGE_SECONDS")
+            or os.environ.get("REGISTER_TEAM_MEMBER_SEED_MAX_AGE_SECONDS")
+            or "900"
+        ).strip()
+        try:
+            max_age_seconds = max(0, int(float(max_age_raw)))
+        except Exception:
+            max_age_seconds = 900
+        if max_age_seconds > 0:
+            age_seconds = max(0.0, (datetime.now(timezone.utc) - parsed_created_at).total_seconds())
+            if age_seconds > max_age_seconds:
+                return False, f"openai_oauth_seed_too_old:{int(age_seconds)}"
 
     return True, ""

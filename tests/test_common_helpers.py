@@ -114,6 +114,22 @@ class CommonHelpersTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(reason.startswith("openai_oauth_seed_too_old:"))
 
+    def test_validate_openai_oauth_seed_payload_can_ignore_age(self) -> None:
+        payload = _valid_openai_oauth_payload(
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=20)
+        )
+        with mock.patch.dict(
+            "os.environ",
+            {"REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "5"},
+            clear=True,
+        ):
+            ok, reason = validate_openai_oauth_seed_payload(
+                payload,
+                enforce_max_age=False,
+            )
+        self.assertTrue(ok)
+        self.assertEqual("", reason)
+
     def test_extract_account_id_supports_top_level_auth_claims(self) -> None:
         payload = {
             "https://api.openai.com/auth": {

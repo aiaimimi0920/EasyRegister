@@ -10,12 +10,19 @@ from others.common import validate_openai_oauth_seed_payload
 from others.storage import load_json_payload
 
 
-def load_openai_oauth_seed_validation(path: Path) -> tuple[bool, str, dict[str, Any]]:
+def load_openai_oauth_seed_validation(
+    path: Path,
+    *,
+    enforce_max_age: bool = False,
+) -> tuple[bool, str, dict[str, Any]]:
     try:
         payload = load_json_payload(path)
     except Exception as exc:
         return False, f"load_failed:{exc}", {}
-    ok, reason = validate_openai_oauth_seed_payload(payload)
+    ok, reason = validate_openai_oauth_seed_payload(
+        payload,
+        enforce_max_age=enforce_max_age,
+    )
     return ok, reason, payload
 
 
