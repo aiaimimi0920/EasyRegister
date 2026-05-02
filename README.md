@@ -31,6 +31,7 @@
 当前统一的跨仓开发规范已经落在：
 
 - `docs/development-workflow.md`
+- `docs/root-host-deploy-standard.md`
 
 后续请按这份文档执行新仓开发、本地优先验证、临时测试资产归档到 `linshi`、
 以及最终 GHCR 验收流程。
@@ -219,6 +220,8 @@ python -m infinite_runner
 当前推荐的宿主机一键部署入口是仓库根目录下的：
 
 - `deploy-host.ps1`
+
+即使操作者只单独下载这一份脚本，它也可以先自举拉取本仓所需文件，再继续完成部署。
 
 它默认会：
 
