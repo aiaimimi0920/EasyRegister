@@ -182,10 +182,10 @@ $mappings = @(
     @{ Relative = "openai/converted"; EnvName = "REGISTER_OPENAI_CONVERTED_DIR_HOST" },
     @{ Relative = "openai/failed-once"; EnvName = "REGISTER_OPENAI_FAILED_ONCE_DIR_HOST" },
     @{ Relative = "openai/failed-twice"; EnvName = "REGISTER_OPENAI_FAILED_TWICE_DIR_HOST" },
-    @{ Relative = "codex/free"; EnvName = "REGISTER_CODEX_FREE_DIR_HOST"; DefaultTarget = "C:\Users\vmjcv\.cli-proxy-api" },
-    @{ Relative = "codex/team"; EnvName = "REGISTER_CODEX_TEAM_DIR_HOST"; DefaultTarget = "C:\Users\vmjcv\.cli-proxy-api\team" },
+    @{ Relative = "codex/free"; EnvName = "REGISTER_CODEX_FREE_DIR_HOST" },
+    @{ Relative = "codex/team"; EnvName = "REGISTER_CODEX_TEAM_DIR_HOST" },
     @{ Relative = "codex/plus"; EnvName = "REGISTER_CODEX_PLUS_DIR_HOST" },
-    @{ Relative = "codex/team-input"; EnvName = "REGISTER_CODEX_TEAM_INPUT_DIR_HOST"; DefaultTarget = "C:\Users\vmjcv\.cli-proxy-api\team" },
+    @{ Relative = "codex/team-input"; EnvName = "REGISTER_CODEX_TEAM_INPUT_DIR_HOST" },
     @{ Relative = "codex/team-mother-input"; EnvName = "REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST" }
 )
 
@@ -198,9 +198,6 @@ foreach ($mapping in $mappings) {
     $linkPath = Resolve-AbsolutePath -Path $relative -BaseDir $resolvedOutputDirHost
     $envEntry = Get-Item -Path "Env:$envName" -ErrorAction SilentlyContinue
     $explicitTargetValue = if ($null -ne $envEntry) { [string]$envEntry.Value } else { $null }
-    if ([string]::IsNullOrWhiteSpace($explicitTargetValue) -and $mapping.ContainsKey("DefaultTarget")) {
-        $explicitTargetValue = [string]$mapping.DefaultTarget
-    }
     $explicitTarget = Resolve-OptionalAbsolutePath -Path $explicitTargetValue -BaseDir $resolvedBaseDir
     $targetPath = $explicitTarget
     if (-not $targetPath -and $resolvedAliasRootHost) {

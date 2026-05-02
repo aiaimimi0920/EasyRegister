@@ -216,7 +216,49 @@ python -m infinite_runner
 
 这份 compose 会把所有 `EasyRegister` 容器直接加入外部网络 `EasyAiMi`。
 
+当前推荐的宿主机一键部署入口是仓库根目录下的：
+
+- `deploy-host.ps1`
+
+它默认会：
+
+- 使用仓库内 `runtime/register-output` 作为统一输出根
+- 把 `main` / `continue` 的 `team` 输入挂到：
+  - `C:\Users\vmjcv\.cli-proxy-api\team`
+- 把用户层输出目录默认映射为：
+  - `codex/free -> C:\Users\vmjcv\.cli-proxy-api`
+  - `codex/team -> C:\Users\vmjcv\.cli-proxy-api\team`
+  - `codex/team-input -> C:\Users\vmjcv\.cli-proxy-api\team`
+  - `codex/team-mother-input`
+    - 默认不做宿主别名映射
+- 自动物化目录联接
+- 然后执行 `docker compose up`
+
 典型启动命令：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\deploy-host.ps1"
+```
+
+如果你要在别的宿主机上改映射，可以直接覆盖脚本参数，例如：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\deploy-host.ps1" `
+  -OutputDirHost "D:\EasyRegister\runtime\register-output" `
+  -CodexFreeDirHost "D:\vault\cli-proxy-api" `
+  -CodexTeamDirHost "D:\vault\cli-proxy-api\team" `
+  -CodexTeamInputDirHost "D:\vault\cli-proxy-api\team"
+```
+
+底层通用 compose 包装入口仍然是：
+
+- `scripts/deploy-compose.ps1`
+
+而目录联接物化脚本是：
+
+- `scripts/materialize-output-links.ps1`
+
+如果你只想直接用通用入口，也可以这样调用：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\scripts\deploy-compose.ps1"
@@ -257,14 +299,6 @@ docker compose -f "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\compose\d
 - `REGISTER_CODEX_PLUS_DIR_HOST`
 - `REGISTER_CODEX_TEAM_INPUT_DIR_HOST`
 - `REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST`
-
-当前这台机器上的默认本地映射已经预置为：
-
-- `codex/free -> C:\Users\vmjcv\.cli-proxy-api`
-- `codex/team -> C:\Users\vmjcv\.cli-proxy-api\team`
-- `codex/team-input -> C:\Users\vmjcv\.cli-proxy-api\team`
-- `codex/team-mother-input`
-  - 默认不做宿主别名映射，仍留在统一输出根下
 
 推荐用法是：
 
