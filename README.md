@@ -614,7 +614,10 @@ supervisor 还内置了两类容量兜底：
 - `REGISTER_DASHBOARD_RECENT_WINDOW_SECONDS`
   - 最近上传统计窗口，默认 `900`
 - `EASY_PROTOCOL_CONTROL_TOKEN`
-  - 读取 `EasyProtocol` internal stats 的控制面 token，默认 `123456`
+  - 读取 `EasyProtocol` internal stats 的控制面 token
+  - `deploy-host.ps1` 在 blank-host 路径下会自动注入本地安全 token，避免 dashboard 因空值或 `123456` 被静默禁用
+- `EASY_PROXY_BASE_URL`
+  - 默认 `http://easy-proxy-service:29888`
 
 当一轮任务最终完成并且 `upload_file_to_r2` 已成功上传 auth JSON 后，
 对应的整轮输出目录会自动删除，避免 `docker-output` 持续膨胀。

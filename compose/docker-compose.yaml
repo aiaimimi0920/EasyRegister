@@ -17,7 +17,7 @@ services:
       EASY_PROTOCOL_TIMEOUT_SECONDS: "900"
       MAILBOX_SERVICE_BASE_URL: http://easy-email-service:8080
       MAILBOX_SERVICE_API_KEY: ${MAILBOX_SERVICE_API_KEY}
-      EASY_PROXY_BASE_URL: http://easy-proxy-service:9888
+  EASY_PROXY_BASE_URL: http://easy-proxy-service:29888
       EASY_PROXY_API_KEY: ${EASY_PROXY_API_KEY}
       REGISTER_ENABLE_EASY_PROXY: "true"
       REGISTER_REQUIRE_EASY_PROXY: "true"
@@ -78,7 +78,7 @@ services:
       EASY_PROTOCOL_TIMEOUT_SECONDS: "900"
       MAILBOX_SERVICE_BASE_URL: http://easy-email-service:8080
       MAILBOX_SERVICE_API_KEY: ${MAILBOX_SERVICE_API_KEY}
-      EASY_PROXY_BASE_URL: http://easy-proxy-service:9888
+  EASY_PROXY_BASE_URL: http://easy-proxy-service:29888
       EASY_PROXY_API_KEY: ${EASY_PROXY_API_KEY}
       REGISTER_ENABLE_EASY_PROXY: "true"
       REGISTER_REQUIRE_EASY_PROXY: "true"
@@ -134,7 +134,7 @@ services:
       EASY_PROTOCOL_TIMEOUT_SECONDS: "900"
       MAILBOX_SERVICE_BASE_URL: http://easy-email-service:8080
       MAILBOX_SERVICE_API_KEY: ${MAILBOX_SERVICE_API_KEY}
-      EASY_PROXY_BASE_URL: http://easy-proxy-service:9888
+  EASY_PROXY_BASE_URL: http://easy-proxy-service:29888
       EASY_PROXY_API_KEY: ${EASY_PROXY_API_KEY}
       REGISTER_ENABLE_EASY_PROXY: "true"
       REGISTER_REQUIRE_EASY_PROXY: "true"

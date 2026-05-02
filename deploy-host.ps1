@@ -29,6 +29,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$defaultEasyProxyBaseUrl = "http://easy-proxy-service:29888"
+$defaultDashboardControlToken = "easyregister-dashboard-local-token"
+
 function Resolve-AbsolutePath {
     param(
         [Parameter(Mandatory = $true)]
@@ -202,6 +205,19 @@ $resolvedComposeFile = if ([string]::IsNullOrWhiteSpace($ComposeFile)) {
 $env:REGISTER_OUTPUT_DIR_HOST = $resolvedOutputDirHost
 $env:REGISTER_TEAM_AUTH_DIR_HOST = $TeamAuthDirHost
 $env:REGISTER_DASHBOARD_PORT_HOST = $DashboardPortHost
+
+if ([string]::IsNullOrWhiteSpace($env:EASY_PROXY_BASE_URL)) {
+    $env:EASY_PROXY_BASE_URL = $defaultEasyProxyBaseUrl
+}
+if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_EASY_PROXY_BASE_URL)) {
+    $env:EASYREGISTER_TEST_EASY_PROXY_BASE_URL = $defaultEasyProxyBaseUrl
+}
+if ([string]::IsNullOrWhiteSpace($env:EASY_PROTOCOL_CONTROL_TOKEN)) {
+    $env:EASY_PROTOCOL_CONTROL_TOKEN = $defaultDashboardControlToken
+}
+if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_EASY_PROTOCOL_CONTROL_TOKEN)) {
+    $env:EASYREGISTER_TEST_EASY_PROTOCOL_CONTROL_TOKEN = $defaultDashboardControlToken
+}
 
 if (-not [string]::IsNullOrWhiteSpace($CodexFreeDirHost)) {
     $env:REGISTER_CODEX_FREE_DIR_HOST = $CodexFreeDirHost
