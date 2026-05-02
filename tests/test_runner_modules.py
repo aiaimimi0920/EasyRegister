@@ -309,6 +309,47 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
         self.assertEqual("continue-openai", selected.name)
         self.assertEqual("pool_ready", selection["selected"]["reason"])
 
+    def test_choose_runnable_flow_spec_prefers_continue_over_always_runnable_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            shared_root = output_root / "shared"
+            pending_dir = shared_root / "openai" / "pending"
+            continue_pool_dir = shared_root / "openai" / "failed-once"
+            continue_pool_dir.mkdir(parents=True, exist_ok=True)
+            pending_dir.mkdir(parents=True, exist_ok=True)
+            (continue_pool_dir / "seed.json").write_text("{}", encoding="utf-8")
+
+            main_spec = RunnerFlowSpec(
+                name="main-openai",
+                flow_path="main-flow.json",
+                instance_role="main",
+                weight=99.0,
+                team_auth_path="",
+                task_max_attempts=0,
+                openai_oauth_pool_dir=pending_dir,
+                mailbox_business_key="openai",
+            )
+            continue_spec = RunnerFlowSpec(
+                name="continue-openai",
+                flow_path="continue-flow.json",
+                instance_role="continue",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=0,
+                openai_oauth_pool_dir=continue_pool_dir,
+                mailbox_business_key="openai",
+            )
+
+            selected, selection = runner_flow_scheduler.choose_runnable_flow_spec(
+                flow_specs=(main_spec, continue_spec),
+                output_root=output_root,
+                shared_root=shared_root,
+            )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual("continue-openai", selected.name)
+        self.assertEqual("continue", selection["selected"]["instanceRole"])
+
 
 class RunnerProcessSupervisorTests(unittest.TestCase):
     def test_task_slots_exhausted_reads_counter_without_lock(self) -> None:

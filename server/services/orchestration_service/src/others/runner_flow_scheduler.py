@@ -103,6 +103,14 @@ def choose_runnable_flow_spec(
             "skipped": skipped,
         }
 
+    continue_ready_specs = [
+        (spec, state)
+        for spec, state in ready_specs
+        if normalize_flow_role(spec.instance_role) == "continue"
+    ]
+    if continue_ready_specs:
+        ready_specs = continue_ready_specs
+
     total_weight = sum(max(0.0, float(spec.weight or 0.0)) for spec, _ in ready_specs)
     if total_weight <= 0.0:
         selected_spec, selected_state = ready_specs[0]
