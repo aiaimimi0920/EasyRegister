@@ -25,6 +25,7 @@ from others.prepared_artifacts import (
 )
 from others.result_artifacts import (
     FREE_OPENAI_OAUTH_SOURCE_CANDIDATES,
+    all_output_texts,
     first_existing_output_path,
     output_dict,
     output_text,
@@ -58,14 +59,28 @@ def _sort_file_paths_newest_first(paths: list[Path]) -> list[Path]:
     return sorted(paths, key=_sort_key)
 
 
-def _iter_openai_oauth_artifacts(*, run_output_dir: Path) -> list[Path]:
-    openai_oauth_dir = run_output_dir / "openai_oauth"
-    if not openai_oauth_dir.is_dir():
-        return []
-    return sorted(
-        [path for path in openai_oauth_dir.glob("*.json") if path.is_file()],
-        key=lambda item: item.name.lower(),
-    )
+def _iter_openai_oauth_artifacts(*, run_output_dir: Path, result_or_payload: Any | None = None) -> list[Path]:
+    candidates: dict[str, Path] = {}
+    for directory_name in ("openai_oauth", "small_success"):
+        candidate_dir = run_output_dir / directory_name
+        if not candidate_dir.is_dir():
+            continue
+        for path in candidate_dir.glob("*.json"):
+            if not path.is_file():
+                continue
+            candidates[str(path.resolve()).lower()] = path.resolve()
+
+    if result_or_payload is not None:
+        for path_text in all_output_texts(result_or_payload, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES):
+            try:
+                candidate = Path(path_text).resolve()
+            except Exception:
+                continue
+            if not candidate.is_file():
+                continue
+            candidates[str(candidate).lower()] = candidate
+
+    return _sort_file_paths_newest_first(list(candidates.values()))
 
 
 def copy_openai_oauth_artifacts_to_pool(
@@ -74,8 +89,12 @@ def copy_openai_oauth_artifacts_to_pool(
     pool_dir: Path,
     worker_label: str,
     task_index: int,
+    result_or_payload: Any | None = None,
 ) -> list[str]:
-    source_paths = _iter_openai_oauth_artifacts(run_output_dir=run_output_dir)
+    source_paths = _iter_openai_oauth_artifacts(
+        run_output_dir=run_output_dir,
+        result_or_payload=result_or_payload,
+    )
     if not source_paths:
         return []
     ensure_directory(pool_dir)

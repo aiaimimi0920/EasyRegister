@@ -348,6 +348,7 @@ def process_worker_run_result(
             ),
             worker_label=worker_label,
             task_index=task_index,
+            result_or_payload=result_payload,
         )
         _cleanup_run_output_dir(
             run_output_dir=run_output_dir,
@@ -415,6 +416,7 @@ def process_worker_run_crash(
         ),
         worker_label=worker_label,
         task_index=task_index,
+        result_or_payload={"error": str(exc), "instanceRole": normalized_role},
     )
     _cleanup_run_output_dir(
         run_output_dir=run_output_dir,
