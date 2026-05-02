@@ -80,8 +80,8 @@ def step_output_ok(*, step_type: str, step_output: Any) -> tuple[bool, str]:
         "acquire_team_member_candidates",
         "collect_team_pool_artifacts",
         "finalize_team_batch",
-        "acquire_small_success_artifact",
-        "finalize_small_success_artifact",
+        "acquire_openai_oauth_artifact",
+        "finalize_openai_oauth_artifact",
         "validate_free_personal_oauth",
         "sleep_seconds",
     }:

@@ -20,6 +20,9 @@ env/
 # Local outputs and temporary state
 tmp/
 *.log
+openai/
+codex/
+others/
 
 # Local environment files
 .env

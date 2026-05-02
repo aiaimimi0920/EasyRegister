@@ -7,17 +7,19 @@ from typing import Any
 
 from others.common import json_log as _json_log
 from others.paths import resolve_shared_root as _shared_root_from_output_root
+from others.paths import resolve_team_pool_dir as _resolve_team_pool_dir
+from others.openai_oauth_conversion_guard import prune_stale_conversion_locks as _prune_stale_conversion_locks
 from others.runner_artifacts import (
     artifact_routing_config as _artifact_routing_config,
-    backfill_small_success_continue_pool as _backfill_small_success_continue_pool,
+    backfill_openai_oauth_continue_pool as _backfill_openai_oauth_continue_pool,
     drain_oauth_pool_backlog as _drain_oauth_pool_backlog,
-    drain_small_success_wait_pool as _drain_small_success_wait_pool,
-    resolve_small_success_continue_pool_dir as _resolve_small_success_continue_pool_dir,
-    resolve_small_success_wait_pool_dir as _resolve_small_success_wait_pool_dir,
-    small_success_continue_prefill_count as _small_success_continue_prefill_count,
-    small_success_continue_prefill_min_age_seconds as _small_success_continue_prefill_min_age_seconds,
-    small_success_continue_prefill_target_count as _small_success_continue_prefill_target_count,
-    small_success_wait_seconds as _small_success_wait_seconds,
+    drain_openai_oauth_wait_pool as _drain_openai_oauth_wait_pool,
+    resolve_openai_oauth_continue_pool_dir as _resolve_openai_oauth_continue_pool_dir,
+    resolve_openai_oauth_wait_pool_dir as _resolve_openai_oauth_wait_pool_dir,
+    openai_oauth_continue_prefill_count as _openai_oauth_continue_prefill_count,
+    openai_oauth_continue_prefill_min_age_seconds as _openai_oauth_continue_prefill_min_age_seconds,
+    openai_oauth_continue_prefill_target_count as _openai_oauth_continue_prefill_target_count,
+    openai_oauth_wait_seconds as _openai_oauth_wait_seconds,
 )
 from others.runner_team_auth import (
     prune_stale_team_auth_caches as _prune_stale_team_auth_caches,
@@ -42,17 +44,28 @@ def process_worker_maintenance(
     free_oauth_pool_dir: Path,
     worker_label: str,
 ) -> None:
+    stale_conversion_locks = _prune_stale_conversion_locks(shared_root=_shared_root_from_output_root(output_root))
+    if stale_conversion_locks:
+        _json_log(
+            {
+                "event": "register_openai_oauth_conversion_locks_pruned",
+                "workerId": worker_label,
+                "instanceRoles": sorted(active_roles),
+                "removedCount": len(stale_conversion_locks),
+                "removedStatePaths": stale_conversion_locks,
+            }
+        )
     wait_pool_result: dict[str, Any] | None = None
     if active_roles & {"main", "continue"}:
-        wait_pool_result = _drain_small_success_wait_pool(
-            wait_pool_dir=_resolve_small_success_wait_pool_dir(output_root=output_root),
-            continue_pool_dir=_resolve_small_success_continue_pool_dir(output_root=output_root),
-            min_age_seconds=_small_success_wait_seconds(),
+        wait_pool_result = _drain_openai_oauth_wait_pool(
+            wait_pool_dir=_resolve_openai_oauth_wait_pool_dir(output_root=output_root),
+            continue_pool_dir=_resolve_openai_oauth_continue_pool_dir(output_root=output_root),
+            min_age_seconds=_openai_oauth_wait_seconds(),
         )
     if isinstance(wait_pool_result, dict) and wait_pool_result.get("artifacts"):
         _json_log(
             {
-                "event": "register_small_success_wait_pool_processed",
+                "event": "register_openai_oauth_wait_pool_processed",
                 "workerId": worker_label,
                 "instanceRoles": sorted(active_roles),
                 "result": wait_pool_result,
@@ -61,19 +74,19 @@ def process_worker_maintenance(
 
     continue_prefill_result: dict[str, Any] | None = None
     if "continue" in active_roles:
-        continue_prefill_result = _backfill_small_success_continue_pool(
-            source_pool_dir=_shared_root_from_output_root(output_root) / "small-success-pool",
-            continue_pool_dir=_resolve_small_success_continue_pool_dir(output_root=output_root),
-            max_move_count=_small_success_continue_prefill_count(),
-            target_count=_small_success_continue_prefill_target_count(),
-            min_age_seconds=_small_success_continue_prefill_min_age_seconds(),
+        continue_prefill_result = _backfill_openai_oauth_continue_pool(
+            source_pool_dir=_resolve_openai_oauth_continue_pool_dir(output_root=output_root),
+            continue_pool_dir=_resolve_openai_oauth_continue_pool_dir(output_root=output_root),
+            max_move_count=_openai_oauth_continue_prefill_count(),
+            target_count=_openai_oauth_continue_prefill_target_count(),
+            min_age_seconds=_openai_oauth_continue_prefill_min_age_seconds(),
         )
     if isinstance(continue_prefill_result, dict) and (
         continue_prefill_result.get("artifacts") or continue_prefill_result.get("discarded")
     ):
         _json_log(
             {
-                "event": "register_small_success_continue_pool_prefilled",
+                "event": "register_openai_oauth_continue_pool_prefilled",
                 "workerId": worker_label,
                 "instanceRoles": sorted(active_roles),
                 "result": continue_prefill_result,
@@ -94,7 +107,7 @@ def process_worker_maintenance(
     if "team" in active_roles:
         backlog_jobs.append(
             (
-                _shared_root_from_output_root(output_root) / "team-oauth-pool",
+                _resolve_team_pool_dir(str(output_root)),
                 "codex-team",
                 artifact_config.team_local_split_percent,
                 artifact_config.team_local_dir,

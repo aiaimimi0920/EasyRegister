@@ -25,19 +25,20 @@ services:
       REGISTER_MAILBOX_STRATEGY_MODE_ID: ${REGISTER_MAILBOX_STRATEGY_MODE_ID:-}
       REGISTER_MAILBOX_PROVIDERS: ${REGISTER_MAILBOX_PROVIDERS:-}
       REGISTER_OUTPUT_ROOT: /shared/register-output/others/main-runs
-      REGISTER_SMALL_SUCCESS_POOL_DIR: ${REGISTER_SMALL_SUCCESS_POOL_DIR:-/shared/register-output/small-success-pool}
-      REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR: ${REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR:-/shared/register-output/others/small-success-wait-pool}
-      REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR: ${REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR:-/shared/register-output/others/small-success-continue-pool}
-      REGISTER_SMALL_SUCCESS_WAIT_SECONDS: ${REGISTER_SMALL_SUCCESS_WAIT_SECONDS:-600}
-      REGISTER_FREE_OAUTH_POOL_DIR: ${REGISTER_FREE_OAUTH_POOL_DIR:-/shared/register-output/free-oauth-pool}
+      REGISTER_OPENAI_OAUTH_POOL_DIR: ${REGISTER_OPENAI_OAUTH_POOL_DIR:-/shared/register-output/openai/pending}
+      REGISTER_OPENAI_OAUTH_SUCCESS_POOL_DIR: ${REGISTER_OPENAI_OAUTH_SUCCESS_POOL_DIR:-/shared/register-output/openai/converted}
+      REGISTER_OPENAI_OAUTH_WAIT_POOL_DIR: ${REGISTER_OPENAI_OAUTH_WAIT_POOL_DIR:-/shared/register-output/others/openai-oauth-wait-pool}
+      REGISTER_OPENAI_OAUTH_CONTINUE_POOL_DIR: ${REGISTER_OPENAI_OAUTH_CONTINUE_POOL_DIR:-/shared/register-output/openai/failed-once}
+      REGISTER_OPENAI_OAUTH_WAIT_SECONDS: ${REGISTER_OPENAI_OAUTH_WAIT_SECONDS:-600}
+      REGISTER_FREE_OAUTH_POOL_DIR: ${REGISTER_FREE_OAUTH_POOL_DIR:-/shared/register-output/codex/free}
       REGISTER_FREE_LOCAL_SPLIT_PERCENT: ${REGISTER_FREE_LOCAL_SPLIT_PERCENT:-100}
-      REGISTER_FREE_LOCAL_DIR: ${REGISTER_FREE_LOCAL_DIR:-/shared/local-free-store}
+      REGISTER_FREE_LOCAL_DIR: ${REGISTER_FREE_LOCAL_DIR:-/shared/register-output/codex/free}
       REGISTER_FREE_WORKSPACE_SELECTOR: ${REGISTER_FREE_WORKSPACE_SELECTOR:-personal}
       REGISTER_FREE_OAUTH_DELAY_SECONDS: ${REGISTER_FREE_OAUTH_DELAY_SECONDS:-0}
       REGISTER_FREE_STOP_AFTER_VALIDATE: ${REGISTER_FREE_STOP_AFTER_VALIDATE:-false}
-      REGISTER_TEAM_AUTH_LOCAL_DIR: ${REGISTER_TEAM_AUTH_LOCAL_DIR:-/shared/local-team-store}
-      REGISTER_TEAM_AUTH_DEFAULT_DIR: ${REGISTER_TEAM_AUTH_DEFAULT_DIR:-/shared/team-auth}
-      REGISTER_TEAM_AUTH_DIR: ${REGISTER_TEAM_AUTH_DIR:-/shared/team-auth}
+      REGISTER_TEAM_AUTH_LOCAL_DIR: ${REGISTER_TEAM_AUTH_LOCAL_DIR:-/shared/register-output/codex/team-input}
+      REGISTER_TEAM_AUTH_DEFAULT_DIR: ${REGISTER_TEAM_AUTH_DEFAULT_DIR:-/shared/register-output/codex/team-input}
+      REGISTER_TEAM_AUTH_DIR: ${REGISTER_TEAM_AUTH_DIR:-/shared/register-output/codex/team-input}
       REGISTER_TEAM_AUTH_GLOB: ${REGISTER_TEAM_AUTH_GLOB:-*-team.json}
       REGISTER_TEAM_AUTH_PATHS: ${REGISTER_TEAM_AUTH_PATHS:-}
       REGISTER_LOOP_DELAY_SECONDS: ${REGISTER_LOOP_DELAY_SECONDS:-30}
@@ -59,8 +60,6 @@ services:
     volumes:
       - ${REGISTER_OUTPUT_DIR_HOST}:/shared/register-output
       - ${REGISTER_TEAM_AUTH_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/team-auth:ro
-      - ${REGISTER_FREE_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/free}:/shared/local-free-store
-      - ${REGISTER_TEAM_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/local-team-store
       - ../server:/app/server
       - ../README.md:/app/README.md:ro
     ports:
@@ -87,18 +86,19 @@ services:
       REGISTER_MAILBOX_STRATEGY_MODE_ID: ${REGISTER_CONTINUE_MAILBOX_STRATEGY_MODE_ID:-}
       REGISTER_MAILBOX_PROVIDERS: ${REGISTER_CONTINUE_MAILBOX_PROVIDERS:-}
       REGISTER_OUTPUT_ROOT: /shared/register-output/others/continue-runs
-      REGISTER_SMALL_SUCCESS_POOL_DIR: ${REGISTER_CONTINUE_SMALL_SUCCESS_POOL_DIR:-/shared/register-output/others/small-success-continue-pool}
-      REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR: ${REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR:-/shared/register-output/others/small-success-wait-pool}
-      REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR: ${REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR:-/shared/register-output/others/small-success-continue-pool}
-      REGISTER_SMALL_SUCCESS_WAIT_SECONDS: ${REGISTER_SMALL_SUCCESS_WAIT_SECONDS:-600}
-      REGISTER_FREE_OAUTH_POOL_DIR: ${REGISTER_FREE_OAUTH_POOL_DIR:-/shared/register-output/free-oauth-pool}
+      REGISTER_OPENAI_OAUTH_POOL_DIR: ${REGISTER_CONTINUE_OPENAI_OAUTH_POOL_DIR:-/shared/register-output/openai/failed-once}
+      REGISTER_OPENAI_OAUTH_SUCCESS_POOL_DIR: ${REGISTER_OPENAI_OAUTH_SUCCESS_POOL_DIR:-/shared/register-output/openai/converted}
+      REGISTER_OPENAI_OAUTH_WAIT_POOL_DIR: ${REGISTER_OPENAI_OAUTH_WAIT_POOL_DIR:-/shared/register-output/others/openai-oauth-wait-pool}
+      REGISTER_OPENAI_OAUTH_CONTINUE_POOL_DIR: ${REGISTER_OPENAI_OAUTH_CONTINUE_POOL_DIR:-/shared/register-output/openai/failed-once}
+      REGISTER_OPENAI_OAUTH_WAIT_SECONDS: ${REGISTER_OPENAI_OAUTH_WAIT_SECONDS:-600}
+      REGISTER_FREE_OAUTH_POOL_DIR: ${REGISTER_FREE_OAUTH_POOL_DIR:-/shared/register-output/codex/free}
       REGISTER_FREE_LOCAL_SPLIT_PERCENT: ${REGISTER_FREE_LOCAL_SPLIT_PERCENT:-100}
-      REGISTER_FREE_LOCAL_DIR: ${REGISTER_FREE_LOCAL_DIR:-/shared/local-free-store}
+      REGISTER_FREE_LOCAL_DIR: ${REGISTER_FREE_LOCAL_DIR:-/shared/register-output/codex/free}
       REGISTER_FREE_WORKSPACE_SELECTOR: ${REGISTER_FREE_WORKSPACE_SELECTOR:-personal}
       REGISTER_FREE_OAUTH_DELAY_SECONDS: ${REGISTER_FREE_OAUTH_DELAY_SECONDS:-0}
-      REGISTER_TEAM_AUTH_LOCAL_DIR: ${REGISTER_TEAM_AUTH_LOCAL_DIR:-/shared/local-team-store}
-      REGISTER_TEAM_AUTH_DEFAULT_DIR: ${REGISTER_TEAM_AUTH_DEFAULT_DIR:-/shared/team-auth}
-      REGISTER_TEAM_AUTH_DIR: ${REGISTER_TEAM_AUTH_DIR:-/shared/team-auth}
+      REGISTER_TEAM_AUTH_LOCAL_DIR: ${REGISTER_TEAM_AUTH_LOCAL_DIR:-/shared/register-output/codex/team-input}
+      REGISTER_TEAM_AUTH_DEFAULT_DIR: ${REGISTER_TEAM_AUTH_DEFAULT_DIR:-/shared/register-output/codex/team-input}
+      REGISTER_TEAM_AUTH_DIR: ${REGISTER_TEAM_AUTH_DIR:-/shared/register-output/codex/team-input}
       REGISTER_TEAM_AUTH_GLOB: ${REGISTER_TEAM_AUTH_GLOB:-*-team.json}
       REGISTER_TEAM_AUTH_PATHS: ${REGISTER_TEAM_AUTH_PATHS:-}
       REGISTER_LOOP_DELAY_SECONDS: ${REGISTER_CONTINUE_LOOP_DELAY_SECONDS:-15}
@@ -113,13 +113,11 @@ services:
       REGISTER_CRASH_COOLDOWN_SECONDS: ${REGISTER_CRASH_COOLDOWN_SECONDS:-20}
       REGISTER_INFINITE_MAX_RUNS: ${REGISTER_CONTINUE_INFINITE_MAX_RUNS:-0}
       REGISTER_TASK_MAX_ATTEMPTS: ${REGISTER_CONTINUE_TASK_MAX_ATTEMPTS:-0}
-      REGISTER_FLOW_PATH: /app/server/services/orchestration_service/flows/codex-small-success-continue-v1.semantic-flow.json
+      REGISTER_FLOW_PATH: /app/server/services/orchestration_service/flows/codex-openai-oauth-continue-v1.semantic-flow.json
       REGISTER_DASHBOARD_ENABLED: "false"
     volumes:
       - ${REGISTER_OUTPUT_DIR_HOST}:/shared/register-output
       - ${REGISTER_TEAM_AUTH_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/team-auth:ro
-      - ${REGISTER_FREE_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/free}:/shared/local-free-store
-      - ${REGISTER_TEAM_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/local-team-store
       - ../server:/app/server
       - ../README.md:/app/README.md:ro
     networks:
@@ -144,15 +142,16 @@ services:
       REGISTER_MAILBOX_STRATEGY_MODE_ID: ${REGISTER_TEAM_MAILBOX_STRATEGY_MODE_ID:-}
       REGISTER_MAILBOX_PROVIDERS: ${REGISTER_TEAM_MAILBOX_PROVIDERS:-}
       REGISTER_OUTPUT_ROOT: /shared/register-output/others/team-runs
-      REGISTER_SMALL_SUCCESS_POOL_DIR: ${REGISTER_SMALL_SUCCESS_POOL_DIR:-/shared/register-output/small-success-pool}
-      REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR: ${REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR:-/shared/register-output/others/small-success-wait-pool}
-      REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR: ${REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR:-/shared/register-output/others/small-success-continue-pool}
-      REGISTER_SMALL_SUCCESS_WAIT_SECONDS: ${REGISTER_SMALL_SUCCESS_WAIT_SECONDS:-600}
-      REGISTER_FREE_OAUTH_POOL_DIR: ${REGISTER_FREE_OAUTH_POOL_DIR:-/shared/register-output/free-oauth-pool}
+      REGISTER_OPENAI_OAUTH_POOL_DIR: ${REGISTER_OPENAI_OAUTH_POOL_DIR:-/shared/register-output/openai/pending}
+      REGISTER_OPENAI_OAUTH_SUCCESS_POOL_DIR: ${REGISTER_OPENAI_OAUTH_SUCCESS_POOL_DIR:-/shared/register-output/openai/converted}
+      REGISTER_OPENAI_OAUTH_WAIT_POOL_DIR: ${REGISTER_OPENAI_OAUTH_WAIT_POOL_DIR:-/shared/register-output/others/openai-oauth-wait-pool}
+      REGISTER_OPENAI_OAUTH_CONTINUE_POOL_DIR: ${REGISTER_OPENAI_OAUTH_CONTINUE_POOL_DIR:-/shared/register-output/openai/failed-once}
+      REGISTER_OPENAI_OAUTH_WAIT_SECONDS: ${REGISTER_OPENAI_OAUTH_WAIT_SECONDS:-600}
+      REGISTER_FREE_OAUTH_POOL_DIR: ${REGISTER_FREE_OAUTH_POOL_DIR:-/shared/register-output/codex/free}
       REGISTER_FREE_LOCAL_SPLIT_PERCENT: ${REGISTER_FREE_LOCAL_SPLIT_PERCENT:-100}
-      REGISTER_FREE_LOCAL_DIR: ${REGISTER_FREE_LOCAL_DIR:-/shared/local-free-store}
+      REGISTER_FREE_LOCAL_DIR: ${REGISTER_FREE_LOCAL_DIR:-/shared/register-output/codex/free}
       REGISTER_TEAM_LOCAL_SPLIT_PERCENT: ${REGISTER_TEAM_LOCAL_SPLIT_PERCENT:-100}
-      REGISTER_TEAM_LOCAL_DIR: ${REGISTER_TEAM_LOCAL_DIR:-/shared/local-team-store}
+      REGISTER_TEAM_LOCAL_DIR: ${REGISTER_TEAM_LOCAL_DIR:-/shared/register-output/codex/team}
       REGISTER_LOOP_DELAY_SECONDS: ${REGISTER_TEAM_LOOP_DELAY_SECONDS:-20}
       REGISTER_WORKER_COUNT: "1"
       REGISTER_WORKER_STAGGER_SECONDS: ${REGISTER_TEAM_WORKER_STAGGER_SECONDS:-5}
@@ -169,19 +168,17 @@ services:
       REGISTER_FLOW_PATH: /app/server/services/orchestration_service/flows/codex-team-expand-v1.semantic-flow.json
       REGISTER_DASHBOARD_ENABLED: "false"
       REGISTER_TEAM_PRE_POOL_DIR: ${REGISTER_TEAM_PRE_POOL_DIR:-/shared/register-output/others/team-pre-pool}
-      REGISTER_TEAM_MOTHER_POOL_DIR: ${REGISTER_TEAM_MOTHER_POOL_DIR:-/shared/register-output/team-mother-pool}
+      REGISTER_TEAM_MOTHER_POOL_DIR: ${REGISTER_TEAM_MOTHER_POOL_DIR:-/shared/register-output/codex/team-mother-input}
       REGISTER_TEAM_MOTHER_CLAIMS_DIR: ${REGISTER_TEAM_MOTHER_CLAIMS_DIR:-/shared/register-output/others/team-mother-claims}
       REGISTER_TEAM_MEMBER_CLAIMS_DIR: ${REGISTER_TEAM_MEMBER_CLAIMS_DIR:-/shared/register-output/others/team-member-claims}
       REGISTER_TEAM_POST_POOL_DIR: ${REGISTER_TEAM_POST_POOL_DIR:-/shared/register-output/others/team-post-pool}
-      REGISTER_TEAM_POOL_DIR: ${REGISTER_TEAM_POOL_DIR:-/shared/register-output/team-oauth-pool}
+      REGISTER_TEAM_POOL_DIR: ${REGISTER_TEAM_POOL_DIR:-/shared/register-output/codex/team}
       REGISTER_TEAM_PRE_FILL_COUNT: ${REGISTER_TEAM_PRE_FILL_COUNT:-1}
       REGISTER_TEAM_MEMBER_COUNT: ${REGISTER_TEAM_MEMBER_COUNT:-4}
       REGISTER_TEAM_WORKSPACE_SELECTOR: ${REGISTER_TEAM_WORKSPACE_SELECTOR:-first_team}
     volumes:
       - ${REGISTER_OUTPUT_DIR_HOST}:/shared/register-output
       - ${REGISTER_TEAM_AUTH_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/team-auth:ro
-      - ${REGISTER_FREE_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/free}:/shared/local-free-store
-      - ${REGISTER_TEAM_LOCAL_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/local-team-store
       - ../server:/app/server
       - ../README.md:/app/README.md:ro
     networks:

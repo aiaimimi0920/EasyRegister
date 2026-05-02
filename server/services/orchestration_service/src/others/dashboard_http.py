@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from others.paths import resolve_openai_oauth_pool_dir
 from others.dashboard_state import dashboard_state_root
 from others.dashboard_state import json_default
 from others.dashboard_state import parse_iso8601
@@ -133,8 +134,8 @@ class DashboardHTTPServer:
                     "workers": workers,
                 }
 
-        small_success_pool_dir = self._shared_root / "small-success-pool"
-        small_success_pool_size = len(list(small_success_pool_dir.glob("*.json"))) if small_success_pool_dir.is_dir() else 0
+        openai_oauth_pool_dir = resolve_openai_oauth_pool_dir(str(self._shared_root))
+        openai_oauth_pool_size = len(list(openai_oauth_pool_dir.glob("*.json"))) if openai_oauth_pool_dir.is_dir() else 0
 
         easy_protocol_stats = self._fetch_easy_protocol_stats()
         executor_rows = []
@@ -159,13 +160,16 @@ class DashboardHTTPServer:
         executor_rows.sort(key=lambda row: row["service"])
         recent_uploads.sort(key=lambda item: str(item.get("finishedAt") or ""), reverse=True)
 
+        openai_oauth_pool_payload = {
+            "path": str(openai_oauth_pool_dir),
+            "size": openai_oauth_pool_size,
+        }
+
         return {
             "generatedAt": now.isoformat(),
             "pipelines": pipeline_payload,
-            "smallSuccessPool": {
-                "path": str(small_success_pool_dir),
-                "size": small_success_pool_size,
-            },
+            "openaiOauthPool": openai_oauth_pool_payload,
+            "smallSuccessPool": openai_oauth_pool_payload,
             "recentUploads": {
                 "windowSeconds": self._recent_window_seconds,
                 "count": len(recent_uploads),
@@ -368,7 +372,7 @@ class DashboardHTTPServer:
       const summary = [
         ['Main Active / Configured', `${{(pipelines.main?.activeWorkers ?? 0)}} / ${{(pipelines.main?.configuredWorkers ?? 0)}}`],
         ['Continue Active / Configured', `${{(pipelines.continue?.activeWorkers ?? 0)}} / ${{(pipelines.continue?.configuredWorkers ?? 0)}}`],
-        ['Small Success Pool Size', `${{data.smallSuccessPool?.size ?? 0}}`],
+        ['OpenAI OAuth Pool Size', `${{data.openaiOauthPool?.size ?? data.smallSuccessPool?.size ?? 0}}`],
         ['Recent Upload Successes', `${{data.recentUploads?.count ?? 0}}`],
       ];
       document.getElementById('summary').innerHTML = summary.map(([label, value]) => `

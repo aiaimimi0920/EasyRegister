@@ -6,16 +6,16 @@ from pathlib import Path
 from typing import Any
 
 from others.artifact_pool_paths import team_auth_runtime_config_for_step_input
-from others.common import validate_small_success_seed_payload
+from others.common import validate_openai_oauth_seed_payload
 from others.storage import load_json_payload
 
 
-def load_small_success_seed_validation(path: Path) -> tuple[bool, str, dict[str, Any]]:
+def load_openai_oauth_seed_validation(path: Path) -> tuple[bool, str, dict[str, Any]]:
     try:
         payload = load_json_payload(path)
     except Exception as exc:
         return False, f"load_failed:{exc}", {}
-    ok, reason = validate_small_success_seed_payload(payload)
+    ok, reason = validate_openai_oauth_seed_payload(payload)
     return ok, reason, payload
 
 

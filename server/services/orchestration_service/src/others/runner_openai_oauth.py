@@ -14,7 +14,7 @@ from others.common import (
     free_manual_oauth_preserve_codes,
     free_manual_oauth_preserve_enabled,
     json_log,
-    validate_small_success_seed_payload,
+    validate_openai_oauth_seed_payload,
 )
 from others.prepared_artifacts import (
     delete_artifact_quiet,
@@ -24,19 +24,23 @@ from others.prepared_artifacts import (
     write_prepared_artifact,
 )
 from others.result_artifacts import (
-    FREE_SMALL_SUCCESS_SOURCE_CANDIDATES,
+    FREE_OPENAI_OAUTH_SOURCE_CANDIDATES,
     first_existing_output_path,
     output_dict,
     output_text,
     result_payload,
 )
 from others.runner_artifact_settings import (
+    artifact_routing_config,
     resolve_free_local_dir,
     resolve_free_manual_oauth_pool_dir,
     resolve_free_oauth_pool_dir,
-    resolve_small_success_continue_pool_dir,
-    resolve_small_success_pool_dir,
-    resolve_small_success_wait_pool_dir,
+    resolve_openai_oauth_continue_pool_dir,
+    resolve_openai_oauth_need_phone_pool_dir,
+    resolve_openai_oauth_pool_dir,
+    resolve_openai_oauth_success_pool_dir,
+    resolve_openai_oauth_wait_pool_dir,
+    select_upload_split,
     should_cleanup_successful_run_output,
     upload_artifact_to_r2,
 )
@@ -54,24 +58,24 @@ def _sort_file_paths_newest_first(paths: list[Path]) -> list[Path]:
     return sorted(paths, key=_sort_key)
 
 
-def _iter_small_success_artifacts(*, run_output_dir: Path) -> list[Path]:
-    small_success_dir = run_output_dir / "small_success"
-    if not small_success_dir.is_dir():
+def _iter_openai_oauth_artifacts(*, run_output_dir: Path) -> list[Path]:
+    openai_oauth_dir = run_output_dir / "openai_oauth"
+    if not openai_oauth_dir.is_dir():
         return []
     return sorted(
-        [path for path in small_success_dir.glob("*.json") if path.is_file()],
+        [path for path in openai_oauth_dir.glob("*.json") if path.is_file()],
         key=lambda item: item.name.lower(),
     )
 
 
-def copy_small_success_artifacts_to_pool(
+def copy_openai_oauth_artifacts_to_pool(
     *,
     run_output_dir: Path,
     pool_dir: Path,
     worker_label: str,
     task_index: int,
 ) -> list[str]:
-    source_paths = _iter_small_success_artifacts(run_output_dir=run_output_dir)
+    source_paths = _iter_openai_oauth_artifacts(run_output_dir=run_output_dir)
     if not source_paths:
         return []
     ensure_directory(pool_dir)
@@ -83,7 +87,7 @@ def copy_small_success_artifacts_to_pool(
         except Exception as exc:
             discarded_paths.append({"source_path": str(source_path), "reason": f"load_failed:{exc}"})
             continue
-        valid, reason = validate_small_success_seed_payload(payload)
+        valid, reason = validate_openai_oauth_seed_payload(payload)
         if not valid:
             discarded_paths.append({"source_path": str(source_path), "reason": reason})
             continue
@@ -94,7 +98,7 @@ def copy_small_success_artifacts_to_pool(
         copied_paths.append(str(destination))
     json_log(
         {
-            "event": "register_small_success_collected",
+            "event": "register_openai_oauth_collected",
             "workerId": worker_label,
             "taskIndex": task_index,
             "outputDir": str(run_output_dir),
@@ -108,7 +112,71 @@ def copy_small_success_artifacts_to_pool(
     return copied_paths
 
 
-def small_success_failure_target_pool_dir(*, output_root: Path, result_payload_value: dict[str, Any]) -> Path:
+def route_openai_oauth_artifact(
+    *,
+    source_path: Path,
+    destination_dir: Path,
+    output_root: Path,
+    target_folder: str,
+    upload_percent: float,
+    preferred_name: str | None = None,
+    move_local: bool = False,
+) -> dict[str, Any]:
+    resolved_source = Path(source_path).resolve()
+    artifact_name = str(preferred_name or resolved_source.name).strip() or resolved_source.name
+    if select_upload_split(percent=upload_percent):
+        upload_result = upload_artifact_to_r2(
+            source_path=resolved_source,
+            target_folder=target_folder,
+            object_name=artifact_name,
+        )
+        if bool(upload_result.get("ok")):
+            if move_local:
+                delete_artifact_quiet(resolved_source)
+            return {
+                "ok": True,
+                "route": "uploaded",
+                "object_key": str(upload_result.get("object_key") or ""),
+                "stored_path": "",
+                "target_dir": str(destination_dir),
+            }
+        return {
+            "ok": False,
+            "route": "upload_failed",
+            "detail": str(upload_result.get("detail") or upload_result.get("status") or "upload_failed"),
+            "stored_path": "",
+            "target_dir": str(destination_dir),
+        }
+    ensure_directory(destination_dir)
+    if move_local:
+        destination = destination_dir / artifact_name
+        if destination.exists():
+            destination = destination_dir / f"{destination.stem}-{uuid.uuid4().hex[:6]}{destination.suffix}"
+        resolved_source.replace(destination)
+        return {
+            "ok": True,
+            "route": "local",
+            "object_key": "",
+            "stored_path": str(destination),
+            "target_dir": str(destination_dir),
+        }
+    stored_path = copy_artifact_to_dir(
+        source_path=resolved_source,
+        destination_dir=destination_dir,
+        preferred_name=artifact_name,
+        overwrite_existing=True,
+    )
+    return {
+        "ok": True,
+        "route": "local",
+        "object_key": "",
+        "stored_path": stored_path,
+        "target_dir": str(destination_dir),
+    }
+
+
+def openai_oauth_failure_target_pool_dir(*, output_root: Path, result_payload_value: dict[str, Any]) -> Path:
+    instance_role = str(result_payload_value.get("instanceRole") or "").strip().lower()
     error_code = str(result_payload_value.get("errorCode") or "").strip()
     if not error_code:
         error_code = str(
@@ -120,12 +188,12 @@ def small_success_failure_target_pool_dir(*, output_root: Path, result_payload_v
         ).strip()
     if free_manual_oauth_preserve_enabled() and error_code in free_manual_oauth_preserve_codes():
         return resolve_free_manual_oauth_pool_dir(output_root=output_root)
-    if error_code == ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING:
-        return resolve_small_success_wait_pool_dir(output_root=output_root)
-    return resolve_small_success_pool_dir(output_root=output_root)
+    if instance_role == "continue":
+        return resolve_openai_oauth_need_phone_pool_dir(output_root=output_root)
+    return resolve_openai_oauth_continue_pool_dir(output_root=output_root)
 
 
-def drain_small_success_wait_pool(
+def drain_openai_oauth_wait_pool(
     *,
     wait_pool_dir: Path,
     continue_pool_dir: Path,
@@ -170,7 +238,7 @@ def drain_small_success_wait_pool(
     }
 
 
-def backfill_small_success_continue_pool(
+def backfill_openai_oauth_continue_pool(
     *,
     source_pool_dir: Path,
     continue_pool_dir: Path,
@@ -240,7 +308,7 @@ def backfill_small_success_continue_pool(
             source_path.unlink(missing_ok=True)
             discarded.append({"source_path": str(source_path), "reason": f"load_failed:{exc}"})
             continue
-        valid, reason = validate_small_success_seed_payload(payload)
+        valid, reason = validate_openai_oauth_seed_payload(payload)
         if not valid:
             source_path.unlink(missing_ok=True)
             discarded.append({"source_path": str(source_path), "reason": reason})
@@ -272,6 +340,21 @@ def backfill_small_success_continue_pool(
         "artifacts": moved,
         "discarded": discarded,
     }
+
+
+def collect_openai_oauth_success_artifacts(
+    *,
+    run_output_dir: Path,
+    output_root: Path,
+    worker_label: str,
+    task_index: int,
+) -> list[str]:
+    return copy_openai_oauth_artifacts_to_pool(
+        run_output_dir=run_output_dir,
+        pool_dir=resolve_openai_oauth_success_pool_dir(output_root=output_root),
+        worker_label=worker_label,
+        task_index=task_index,
+    )
 
 
 def _iter_free_oauth_artifacts(*, result: Any) -> list[Path]:
@@ -332,8 +415,9 @@ def postprocess_free_success_artifact(
     free_local_selected: bool,
 ) -> dict[str, Any]:
     result_payload_value = result_payload(result)
+    routing_config = artifact_routing_config(output_root=output_root)
     if not _free_personal_oauth_confirmed(result_payload_value=result_payload_value):
-        seed_path = first_existing_output_path(result_payload_value, FREE_SMALL_SUCCESS_SOURCE_CANDIDATES)
+        seed_path = first_existing_output_path(result_payload_value, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES)
         if seed_path is None or not seed_path.is_file():
             return {
                 "ok": False,
@@ -352,7 +436,7 @@ def postprocess_free_success_artifact(
                 "target_dir": str(handoff_dir),
                 "email": str(seed_payload.get("email") or "").strip(),
             }
-        wait_pool_dir = resolve_small_success_wait_pool_dir(output_root=output_root)
+        wait_pool_dir = resolve_openai_oauth_wait_pool_dir(output_root=output_root)
         stored_path = copy_artifact_to_dir(source_path=seed_path, destination_dir=wait_pool_dir)
         return {
             "ok": True,
@@ -364,64 +448,83 @@ def postprocess_free_success_artifact(
 
     artifact_path = _free_success_artifact_path(result=result)
     materialized_artifact_path: Path | None = None
+    openai_source_path = first_existing_output_path(result_payload_value, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES)
     if artifact_path is None or not artifact_path.is_file():
         materialized_artifact_path = _materialize_free_success_artifact_from_output(
             result=result,
             output_root=output_root,
         )
         artifact_path = materialized_artifact_path
-    if artifact_path is None or not artifact_path.is_file():
+    if artifact_path is None or not artifact_path.is_file() or openai_source_path is None or not openai_source_path.is_file():
         return {"ok": False, "status": "missing_free_artifact", "cleanup_run_output": False}
     prepared_artifact = prepare_free_artifact(source_path=artifact_path)
+    openai_target_dir = resolve_openai_oauth_success_pool_dir(output_root=output_root)
+    openai_upload_selected = select_upload_split(percent=routing_config.openai_upload_percent)
+    codex_upload_selected = select_upload_split(percent=routing_config.codex_free_upload_percent)
+    openai_should_upload = openai_upload_selected or codex_upload_selected
 
-    if free_local_selected:
-        target_dir = resolve_free_local_dir(output_root=output_root)
+    openai_route_result = route_openai_oauth_artifact(
+        source_path=openai_source_path,
+        destination_dir=openai_target_dir,
+        output_root=output_root,
+        target_folder="openai/converted",
+        upload_percent=100.0 if openai_should_upload else 0.0,
+        preferred_name=openai_source_path.name,
+        move_local=False,
+    )
+    if not bool(openai_route_result.get("ok")):
+        return {
+            "ok": False,
+            "status": "openai_upload_failed",
+            "cleanup_run_output": False,
+            "detail": str(openai_route_result.get("detail") or "upload_failed"),
+        }
+
+    codex_target_dir = resolve_free_oauth_pool_dir(output_root=output_root)
+    if codex_upload_selected:
         route_result = route_prepared_artifact(
             prepared_artifact,
-            local_dir=target_dir,
+            local_dir=None,
             move_local=False,
             overwrite_existing=True,
-            target_folder="codex",
+            target_folder="codex/free",
             upload_fn=upload_artifact_to_r2,
+            staging_dir=(output_root / "others" / "codex-free-upload-staging"),
         )
+        if not bool(route_result.get("ok")):
+            return {
+                "ok": False,
+                "status": "free_upload_failed",
+                "cleanup_run_output": False,
+                "detail": str(route_result.get("detail") or "upload_failed"),
+                "transient_path": str(route_result.get("staged_path") or ""),
+            }
         if materialized_artifact_path is not None:
             delete_artifact_quiet(materialized_artifact_path)
         return {
             "ok": True,
-            "status": "stored_local",
+            "status": "uploaded_deleted",
             "cleanup_run_output": True,
-            "stored_path": str(route_result.get("stored_path") or ""),
-            "target_dir": str(target_dir),
-        }
-
-    if not should_cleanup_successful_run_output(result):
-        return {"ok": False, "status": "free_upload_not_confirmed", "cleanup_run_output": False}
-
-    pool_dir = resolve_free_oauth_pool_dir(output_root=output_root)
-    route_result = route_prepared_artifact(
-        prepared_artifact,
-        local_dir=None,
-        move_local=False,
-        overwrite_existing=True,
-        target_folder="codex",
-        upload_fn=upload_artifact_to_r2,
-        staging_dir=pool_dir,
-    )
-    if not bool(route_result.get("ok")):
-        return {
-            "ok": False,
-            "status": "free_upload_failed",
-            "cleanup_run_output": False,
-            "detail": str(route_result.get("detail") or "upload_failed"),
+            "pool_dir": str(codex_target_dir),
+            "openaiRoute": openai_route_result,
             "transient_path": str(route_result.get("staged_path") or ""),
         }
 
+    route_result = route_prepared_artifact(
+        prepared_artifact,
+        local_dir=codex_target_dir,
+        move_local=False,
+        overwrite_existing=True,
+        target_folder="codex/free",
+        upload_fn=upload_artifact_to_r2,
+    )
     if materialized_artifact_path is not None:
         delete_artifact_quiet(materialized_artifact_path)
     return {
         "ok": True,
-        "status": "uploaded_deleted",
+        "status": "stored_local",
         "cleanup_run_output": True,
-        "pool_dir": str(pool_dir),
-        "transient_path": str(route_result.get("staged_path") or ""),
+        "stored_path": str(route_result.get("stored_path") or ""),
+        "target_dir": str(codex_target_dir),
+        "openaiRoute": openai_route_result,
     }

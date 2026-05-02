@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from others.artifact_pool_claim_recovery import choose_random_files
 from others.artifact_pool_claim_recovery import derive_original_name_from_claim
-from others.artifact_pool_claim_recovery import load_small_success_seed_validation
+from others.artifact_pool_claim_recovery import load_openai_oauth_seed_validation
 from others.artifact_pool_claim_recovery import recover_stale_team_claims
 from others.artifact_pool_claim_recovery import restore_to_pool
 from others.artifact_pool_claim_recovery import safe_count
@@ -12,10 +12,12 @@ from others.artifact_pool_paths import artifact_routing_config_for_step_input
 from others.artifact_pool_paths import derive_output_root_from_run_dir
 from others.artifact_pool_paths import path_is_inside_directory
 from others.artifact_pool_paths import resolve_free_manual_oauth_pool
-from others.artifact_pool_paths import resolve_small_success_claims
-from others.artifact_pool_paths import resolve_small_success_continue_pool
-from others.artifact_pool_paths import resolve_small_success_pool
-from others.artifact_pool_paths import resolve_small_success_wait_pool
+from others.artifact_pool_paths import resolve_openai_oauth_claims
+from others.artifact_pool_paths import resolve_openai_oauth_continue_pool
+from others.artifact_pool_paths import resolve_openai_oauth_need_phone_pool
+from others.artifact_pool_paths import resolve_openai_oauth_pool
+from others.artifact_pool_paths import resolve_openai_oauth_success_pool
+from others.artifact_pool_paths import resolve_openai_oauth_wait_pool
 from others.artifact_pool_paths import resolve_team_member_claims
 from others.artifact_pool_paths import resolve_team_mother_claims
 from others.artifact_pool_paths import resolve_team_mother_cooldowns
@@ -47,16 +49,18 @@ __all__ = [
     "extract_free_oauth_organizations",
     "extract_free_oauth_plan_type",
     "has_free_personal_oauth_claims",
-    "load_small_success_seed_validation",
+    "load_openai_oauth_seed_validation",
     "load_team_expand_progress_from_artifact",
     "path_is_inside_directory",
     "recover_stale_team_claims",
     "reset_claimed_team_expand_cycle_payload",
     "resolve_free_manual_oauth_pool",
-    "resolve_small_success_claims",
-    "resolve_small_success_continue_pool",
-    "resolve_small_success_pool",
-    "resolve_small_success_wait_pool",
+    "resolve_openai_oauth_claims",
+    "resolve_openai_oauth_continue_pool",
+    "resolve_openai_oauth_need_phone_pool",
+    "resolve_openai_oauth_pool",
+    "resolve_openai_oauth_success_pool",
+    "resolve_openai_oauth_wait_pool",
     "resolve_team_member_claims",
     "resolve_team_mother_claims",
     "resolve_team_mother_cooldowns",

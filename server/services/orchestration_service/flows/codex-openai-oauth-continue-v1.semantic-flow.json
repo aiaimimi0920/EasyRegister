@@ -1,11 +1,11 @@
 {
   "definition": {
     "version": "1",
-    "id": "codex-small-success-continue-v1",
-    "name": "Codex Small Success Continue Flow",
+    "id": "codex-openai-oauth-continue-v1",
+    "name": "Codex OpenAI OAuth Continue Flow",
     "platform": "codex",
     "kind": "semantic-flow",
-    "description": "Continue the later registration stages from a pooled small_success artifact. A fresh mailbox is acquired because the original mailbox may have expired.",
+    "description": "Continue the later registration stages from a pooled openai_oauth artifact. A fresh mailbox is acquired because the original mailbox may have expired.",
     "resourcePolicies": [],
     "metadata": {
       "mailbox": {
@@ -45,7 +45,7 @@
         "id": "acquire-proxy-chain",
         "type": "acquire_proxy_chain",
         "input": {
-          "flow_name": "codex_small_success_continue_task",
+          "flow_name": "codex_openai_oauth_continue_task",
           "metadata": {
             "taskAttempt": "{{task.taskAttempt}}",
             "teamAuthPath": "{{task.team_auth_path}}"
@@ -65,13 +65,13 @@
         }
       },
       {
-        "id": "acquire-small-success-artifact",
-        "type": "acquire_small_success_artifact",
+        "id": "acquire-openai-oauth-artifact",
+        "type": "acquire_openai_oauth_artifact",
         "input": {
           "output_dir": "{{task.output_dir}}",
-          "pool_dir": "{{task.small_success_pool_dir}}"
+          "pool_dir": "{{task.openai_oauth_pool_dir}}"
         },
-        "saveAs": "small_success_artifact",
+        "saveAs": "openai_oauth_artifact",
         "metadata": {
           "owner": "orchestration",
           "stage": "artifact-acquire"
@@ -81,7 +81,7 @@
         "id": "initialize-platform-organization",
         "type": "initialize_platform_organization",
         "input": {
-          "source_path": "{{small_success_artifact.source_path}}",
+          "source_path": "{{openai_oauth_artifact.source_path}}",
           "proxy_url": "{{proxy_chain.proxy_url}}",
           "organization_name": "personal",
           "organization_title": "personal",
@@ -105,7 +105,7 @@
         "id": "initialize-chatgpt-login-session",
         "type": "initialize_chatgpt_login_session",
         "input": {
-          "source_path": "{{small_success_artifact.source_path}}",
+          "source_path": "{{openai_oauth_artifact.source_path}}",
           "proxy_url": "{{proxy_chain.proxy_url}}",
           "mailbox_ref": "{{mailbox.mailbox_ref}}",
           "mailbox_session_id": "{{mailbox.session_id}}"
@@ -137,14 +137,14 @@
         "metadata": {
           "owner": "easyprotocol",
           "stage": "team-auth-refresh",
-          "enabledWhen": "{{task.__disabled_team_auth_refresh__}}"
+          "enabledWhen": "{{task.team_invite_enabled}}"
         }
       },
       {
         "id": "invite-codex-member",
         "type": "invite_codex_member",
         "input": {
-          "source_path": "{{small_success_artifact.source_path}}",
+          "source_path": "{{openai_oauth_artifact.source_path}}",
           "team_auth_path": "{{task.team_auth_path}}",
           "proxy_url": "{{proxy_chain.proxy_url}}"
         },
@@ -152,6 +152,7 @@
         "metadata": {
           "owner": "easyprotocol",
           "stage": "invite",
+          "enabledWhen": "{{task.team_invite_enabled}}",
           "retry": {
             "maxAttempts": 2,
             "backoffSeconds": 2,
@@ -173,14 +174,15 @@
         "saveAs": "wait_free_oauth_after_invite",
         "metadata": {
           "owner": "orchestration",
-          "stage": "post-invite-wait"
+          "stage": "post-invite-wait",
+          "enabledWhen": "{{task.team_invite_enabled}}"
         }
       },
       {
         "id": "obtain-codex-oauth",
         "type": "obtain_codex_oauth",
         "input": {
-          "source_path": "{{small_success_artifact.source_path}}",
+          "source_path": "{{openai_oauth_artifact.source_path}}",
           "output_dir": "{{task.output_dir}}",
           "proxy_url": "{{proxy_chain.proxy_url}}",
           "workspace_selector": "{{task.free_workspace_selector}}"
@@ -208,10 +210,10 @@
         "id": "revoke-codex-member",
         "type": "revoke_codex_member",
         "input": {
-          "source_path": "{{small_success_artifact.source_path}}",
+          "source_path": "{{openai_oauth_artifact.source_path}}",
           "team_auth_path": "{{task.team_auth_path}}",
           "proxy_url": "{{proxy_chain.proxy_url}}",
-          "invite_email": "{{small_success_artifact.email}}",
+          "invite_email": "{{openai_oauth_artifact.email}}",
           "member_user_id": "{{obtain_codex_oauth.userId}}"
         },
         "saveAs": "revoke_codex_member",
@@ -219,7 +221,7 @@
           "owner": "easyprotocol",
           "stage": "revoke",
           "alwaysRun": true,
-          "enabledWhen": "{{task.free_stop_after_validate_cleanup_enabled}}"
+          "enabledWhen": "{{task.team_invite_cleanup_enabled}}"
         }
       },
       {
@@ -241,7 +243,7 @@
         "id": "release-mailbox",
         "type": "release_mailbox",
         "input": {
-          "source_path": "{{small_success_artifact.source_path}}",
+          "source_path": "{{openai_oauth_artifact.source_path}}",
           "mailbox_ref": "{{mailbox.mailbox_ref}}",
           "mailbox_session_id": "{{mailbox.session_id}}"
         },
@@ -282,15 +284,15 @@
         }
       },
       {
-        "id": "finalize-small-success-artifact",
-        "type": "finalize_small_success_artifact",
+        "id": "finalize-openai-oauth-artifact",
+        "type": "finalize_openai_oauth_artifact",
         "input": {
-          "artifact": "{{small_success_artifact}}",
+          "artifact": "{{openai_oauth_artifact}}",
           "output_dir": "{{task.output_dir}}",
           "task_error_code": "{{task.errorCode}}",
           "failure_mode": "delete"
         },
-        "saveAs": "finalize_small_success_artifact",
+        "saveAs": "finalize_openai_oauth_artifact",
         "metadata": {
           "owner": "orchestration",
           "stage": "cleanup",

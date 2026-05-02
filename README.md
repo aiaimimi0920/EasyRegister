@@ -219,8 +219,66 @@ python -m infinite_runner
 典型启动命令：
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\scripts\deploy-compose.ps1"
+```
+
+如果你只想直接查看 compose 配置，或者已经提前物化过输出目录链接，也可以继续手工执行：
+
+```powershell
 docker compose -f "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\compose\docker-compose.yaml" up -d
 ```
+
+`deploy-compose.ps1` 会在 `docker compose up` 前先执行：
+
+- `scripts/materialize-output-links.ps1`
+
+它会在 `REGISTER_OUTPUT_DIR_HOST` 指向的统一输出根下面，按用户层目录契约物化这些目录：
+
+- `openai/pending`
+- `openai/converted`
+- `openai/failed-once`
+- `openai/failed-twice`
+- `codex/free`
+- `codex/team`
+- `codex/plus`
+- `codex/team-input`
+- `codex/team-mother-input`
+
+如果用户额外提供了本地目标目录，脚本会在统一输出根下创建对应的目录联接：
+
+- `REGISTER_OUTPUT_ALIAS_ROOT_HOST`
+  - 给所有用户层目录提供一个统一的别名根
+- `REGISTER_OPENAI_PENDING_DIR_HOST`
+- `REGISTER_OPENAI_CONVERTED_DIR_HOST`
+- `REGISTER_OPENAI_FAILED_ONCE_DIR_HOST`
+- `REGISTER_OPENAI_FAILED_TWICE_DIR_HOST`
+- `REGISTER_CODEX_FREE_DIR_HOST`
+- `REGISTER_CODEX_TEAM_DIR_HOST`
+- `REGISTER_CODEX_PLUS_DIR_HOST`
+- `REGISTER_CODEX_TEAM_INPUT_DIR_HOST`
+- `REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST`
+
+当前这台机器上的默认本地映射已经预置为：
+
+- `codex/free -> C:\Users\vmjcv\.cli-proxy-api`
+- `codex/team -> C:\Users\vmjcv\.cli-proxy-api\team`
+- `codex/team-input -> C:\Users\vmjcv\.cli-proxy-api\team`
+- `codex/team-mother-input`
+  - 默认不做宿主别名映射，仍留在统一输出根下
+
+推荐用法是：
+
+```powershell
+$env:REGISTER_OUTPUT_DIR_HOST = "C:\EasyRegister\output"
+$env:REGISTER_OUTPUT_ALIAS_ROOT_HOST = "D:\EasyRegisterVault"
+powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\scripts\deploy-compose.ps1"
+```
+
+这时容器仍然只挂一个：
+
+- `REGISTER_OUTPUT_DIR_HOST -> /shared/register-output`
+
+但宿主机会在 `C:\EasyRegister\output` 下看到指向 `D:\EasyRegisterVault\...` 的目录联接。
 
 ## 隔离测试 compose
 
@@ -240,7 +298,9 @@ docker compose -f "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\compose\d
 典型启动命令：
 
 ```powershell
-docker compose -f "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\compose\docker-compose.test.yaml" up -d --build
+powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\scripts\deploy-compose.ps1" `
+  -ComposeFile "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\compose\docker-compose.test.yaml" `
+  -Build
 ```
 
 本地迭代时，compose 默认会用已有的 `registerservice/register-service:local`
@@ -304,21 +364,21 @@ GHCR 登录也支持和参考仓同样的双路径：
 
 - `register-service`
   - 主注册 flow
-  - 负责持续产出新的 `small_success`
+  - 负责持续产出新的 `openai_oauth`
   - 暴露运行态面板
   - 默认 `7` 个 worker
 - `register-continue-service`
-  - 小成功续跑 flow
-  - 负责从 `small-success-pool` 中 claim 一个 `small_success`，继续跑后半段
+  - `openai_oauth` 续跑 flow
+  - 负责从 `openai/failed-once` 中 claim 一个 `openai_oauth`，继续跑后半段
   - 默认按 `free` 本地分流比例写入 `free` 本地存储目录，不再上传
   - 只有把 `REGISTER_FREE_LOCAL_SPLIT_PERCENT` 调低后，未命中本地分流的 free 成品才会上传
   - 默认 `2` 个 worker
 - `register-team-service`
   - team 扩容 flow
-  - 负责把 `small-success-pool` 中的文件随机补充到 `others/team-pre-pool`
-  - 监控你手动放入 `team-mother-pool` 的 mother 凭证
+  - 负责把 `openai/pending` 和 `openai/failed-twice` 中的文件随机补充到 `others/team-pre-pool`
+  - 监控你手动放入 `codex/team-mother-input` 的 mother 凭证
   - 自动完成 mother 二次登录、team workspace 选择、4 个成员邀请、4 个成员 OAuth
-  - 最终 team 成品默认会上传到 `codex-team/<文件名>` 并删除 `team-oauth-pool` 中的本地文件
+  - 最终 team 成品默认会上传到 `codex-team/<文件名>` 并删除 `codex/team` 中的本地文件
   - 如果命中 `team` 本地分流比例，则改为写入 `team` 本地存储目录，不再上传
   - 默认 `1` 个 worker
 
@@ -361,7 +421,7 @@ GHCR 登录也支持和参考仓同样的双路径：
   },
   {
     "name": "openai-continue",
-    "path": "server/services/orchestration_service/flows/codex-small-success-continue-v1.semantic-flow.json",
+    "path": "server/services/orchestration_service/flows/codex-openai-oauth-continue-v1.semantic-flow.json",
     "role": "continue",
     "weight": 2
   },
@@ -376,17 +436,23 @@ GHCR 登录也支持和参考仓同样的双路径：
 
 其中：
 
-- `main` flow 默认消费 `small-success-pool`
-- `continue` flow 默认消费 `small-success-continue-pool`
-- `team` flow 默认仍从主 `small-success-pool` 补 `team-pre-pool`，并等待 `team-mother-pool` 有可用 mother 后再被调度
+- `main` flow 默认消费 `openai/pending`
+- `continue` flow 默认消费 `openai/failed-once`
+- `team` flow 默认从 `openai/pending` 和 `openai/failed-twice` 补 `team-pre-pool`，并等待 `codex/team-mother-input` 有可用 mother 后再被调度
 - `REGISTER_TEAM_PRE_FILL_COUNT`
-  - 每轮最多从 `small-success-pool` 随机移动到 `others/team-pre-pool` 的文件数，默认 `1`
+  - 每轮最多从 `openai/pending` 和 `openai/failed-twice` 随机移动到 `others/team-pre-pool` 的文件数，默认 `1`
 - `REGISTER_TEAM_MEMBER_COUNT`
   - 每个 mother 凭证扩容时要从 `others/team-pre-pool` claim 的成员数，默认 `4`
 - `REGISTER_TEAM_PRE_POOL_DIR`
   - 默认 `/shared/register-output/others/team-pre-pool`
 - `REGISTER_TEAM_MOTHER_POOL_DIR`
-  - 默认 `/shared/register-output/team-mother-pool`
+- 默认 `/shared/register-output/codex/team-mother-input`
+- `REGISTER_TEAM_AUTH_LOCAL_DIR`
+  - `main` / `continue` 默认读取 `/shared/register-output/codex/team-input`
+- `REGISTER_TEAM_AUTH_DEFAULT_DIR`
+  - `main` / `continue` 默认读取 `/shared/register-output/codex/team-input`
+- `REGISTER_TEAM_AUTH_DIR`
+  - `main` / `continue` 默认读取 `/shared/register-output/codex/team-input`
 - `REGISTER_TEAM_MOTHER_CLAIMS_DIR`
   - 默认 `/shared/register-output/others/team-mother-claims`
 - `REGISTER_TEAM_MEMBER_CLAIMS_DIR`
@@ -394,17 +460,17 @@ GHCR 登录也支持和参考仓同样的双路径：
 - `REGISTER_TEAM_POST_POOL_DIR`
   - 默认 `/shared/register-output/others/team-post-pool`
 - `REGISTER_TEAM_POOL_DIR`
-  - 默认 `/shared/register-output/team-oauth-pool`
+- 默认 `/shared/register-output/codex/team`
 - `REGISTER_TEAM_WORKSPACE_SELECTOR`
   - 传给协议执行器的 workspace 选择策略，默认 `first_team`
 - `REGISTER_FREE_LOCAL_SPLIT_PERCENT`
   - `free` 最终凭证本地分流比例，支持 `0-100` 或 `0-1` 写法，默认 `100`
 - `REGISTER_FREE_LOCAL_DIR`
-  - `free` 最终凭证的本地存储目录，默认 `/shared/local-free-store`
+  - `free` 最终凭证的容器内目标目录，默认 `/shared/register-output/codex/free`
 - `REGISTER_TEAM_LOCAL_SPLIT_PERCENT`
   - `team` 最终凭证本地分流比例，支持 `0-100` 或 `0-1` 写法，默认 `100`
 - `REGISTER_TEAM_LOCAL_DIR`
-  - `team` 最终凭证的本地存储目录，默认 `/shared/local-team-store`
+  - `team` 最终凭证的容器内目标目录，默认 `/shared/register-output/codex/team`
 
 ## 资源容量兜底
 
@@ -436,40 +502,48 @@ supervisor 还内置了两类容量兜底：
 
 新增第三个 flow 的目录语义是：
 
-- `small-success-pool/`
-  - 主注册失败后保留下来的 `small_success` 种子池
-- `team-mother-pool/`
-  - 你手动完成 team 套餐订阅后的 mother 凭证池
-- `free-oauth-pool/`
-  - `free` 非本地分流路径的临时本地池
-  - 默认仍按现有逻辑上传后删除
-- `team-oauth-pool/`
-  - `team` 非本地分流路径的临时本地池
-  - 默认上传到 `codex-team/<文件名>` 成功后删除
+- `openai/pending/`
+  - 尚未进入 `codex` 转换的 `openai_oauth` 凭证
+- `openai/converted/`
+  - 已成功完成 `codex` 转换的 `openai_oauth` 凭证
+- `openai/failed-once/`
+  - 已完成第 1 次 `codex` 转换尝试但失败的 `openai_oauth` 凭证
+- `openai/failed-twice/`
+  - 已完成第 2 次 `codex` 转换尝试但失败的 `openai_oauth` 凭证
+- `codex/team-mother-input/`
+  - 用户手动提供的 team mother 凭证池
+- `codex/team-input/`
+  - `main` / `continue` 邀请链默认读取的 team 邀请凭证输入池
+- `codex/free/`
+  - `main` / `continue` 成功产出的 `codex-oauth` 凭证池
+- `codex/team/`
+  - `team` 转换成功后的 mother 和成员 `codex-oauth` 凭证池
+- `codex/plus/`
+  - 预留给 `plus` 类别的 `codex-oauth` 凭证池
 - `others/`
   - 存放内部运行目录和中间目录，例如 `main-runs/`、`continue-runs/`、`team-runs/`、`team-pre-pool/`、`team-post-pool/`、claims、dashboard/state、debug 等
-  - 也包含默认的 `free-local-store/` 和 `team-local-store/`
+  - 不再承载用户层 free / team 成品目录
 
 这条链路分为人工阶段和自动阶段：
 
 - 人工阶段
   - `register-team-service` 会把随机挑出的预备账号移动到 `others/team-pre-pool`
   - 你手动从 `others/team-pre-pool` 选一个账号，登录并开通 team 套餐
-  - 完成后你把这个 mother 凭证移动到 `team-mother-pool`
+  - 完成后你把这个 mother 凭证移动到 `codex/team-mother-input`
 - 自动阶段
-  - flow 监控 `team-mother-pool`，claim 一个 mother 凭证
+  - flow 监控 `codex/team-mother-input`，claim 一个 mother 凭证
   - 通过 `EasyProtocol -> PythonProtocol` 做 mother 二次登录
   - 如果登录后存在多个 workspace，优先选择有效 team workspace，当前默认策略是第一个 team space
-  - 生成新的 mother team 凭证，并先写入 `team-oauth-pool`
+  - 生成新的 mother team 凭证，并先写入 `codex/team`
   - 再从 `others/team-pre-pool` 随机 claim 4 个成员账号
   - 邀请这 4 个邮箱加入 mother 的 team workspace
   - 对这 4 个成员账号做一次 OAuth，拿到对应的 team 凭证
-  - 将这 4 个成员 team 凭证写入 `team-oauth-pool`
+  - 将这 4 个成员 team 凭证写入 `codex/team`
   - 对未命中本地分流的成品自动上传到 `codex-team/<文件名>` 并删除本地文件
 
 如果自动阶段失败：
 
-- mother 凭证会放回 `team-mother-pool`
+- mother 凭证会放回 `codex/team-mother-input`
 - 已 claim 的 4 个成员账号会放回 `others/team-pre-pool`
 - 已经命中本地分流并写入本地目录的结果文件不会自动回滚
 
@@ -488,8 +562,8 @@ supervisor 还内置了两类容量兜底：
 - 每个 `PythonProtocol` 执行器的当前活跃请求数
 - 每个执行器的命中次数、成功次数、失败次数
 - 主注册实例的配置 worker 数和当前活跃 worker 数
-- 小成功续跑实例的配置 worker 数和当前活跃 worker 数
-- `small-success-pool` 当前文件数
+- `openai_oauth` 续跑实例的配置 worker 数和当前活跃 worker 数
+- `openai/pending` 当前文件数
 - 最近成功上传到 R2 的 auth JSON
 
 相关环境变量：
@@ -512,9 +586,9 @@ supervisor 还内置了两类容量兜底：
 - `worker-XX/run-...`
 
 不会保留已经成功上传到 R2 的本地运行产物。主注册 flow 如果在上传前失败，
-会把 `small_success/*.json` 复制进：
+会把 `openai_oauth/*.json` 复制进：
 
-- `small-success-pool/`
+- `openai/pending/`
 
 然后删除失败轮次目录。续跑 flow 会从这个池里 claim 文件，成功后删除 claim，
 失败后放回池中。

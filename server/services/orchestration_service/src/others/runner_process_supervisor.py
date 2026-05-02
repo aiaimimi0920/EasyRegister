@@ -149,7 +149,7 @@ def main() -> int:
     output_root = config.output_root
     _ensure_directory(output_root)
     shared_root = config.shared_root
-    _ensure_directory(config.small_success_pool_dir)
+    _ensure_directory(config.openai_oauth_pool_dir)
     _ensure_directory(config.free_oauth_pool_dir)
 
     ctx = mp.get_context("spawn")
@@ -168,7 +168,7 @@ def main() -> int:
         worker_count=config.worker_count,
         delay_seconds=config.delay_seconds,
         worker_stagger_seconds=config.worker_stagger_seconds,
-        small_success_pool_dir=str(config.small_success_pool_dir),
+        openai_oauth_pool_dir=str(config.openai_oauth_pool_dir),
         flow_specs=[flow_spec_summary(spec) for spec in config.flow_specs],
     )
 
@@ -192,7 +192,8 @@ def main() -> int:
             "maxRuns": config.max_runs,
             "outputRoot": str(output_root),
             "flowSpecs": [flow_spec_summary(spec) for spec in config.flow_specs],
-            "smallSuccessPoolDir": str(config.small_success_pool_dir),
+            "openaiOauthPoolDir": str(config.openai_oauth_pool_dir),
+            "smallSuccessPoolDir": str(config.openai_oauth_pool_dir),
             "freeOauthPoolDir": str(config.free_oauth_pool_dir),
         }
     )

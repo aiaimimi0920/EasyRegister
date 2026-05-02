@@ -7,28 +7,29 @@ from others.runner_artifact_settings import (
     resolve_free_local_dir,
     resolve_free_manual_oauth_pool_dir,
     resolve_free_oauth_pool_dir,
-    resolve_small_success_continue_pool_dir,
-    resolve_small_success_pool_dir,
-    resolve_small_success_wait_pool_dir,
+    resolve_openai_oauth_continue_pool_dir,
+    resolve_openai_oauth_pool_dir,
+    resolve_openai_oauth_wait_pool_dir,
     resolve_team_local_dir,
     select_local_split,
     should_cleanup_successful_run_output,
-    small_success_continue_prefill_count,
-    small_success_continue_prefill_min_age_seconds,
-    small_success_continue_prefill_target_count,
-    small_success_wait_seconds,
+    openai_oauth_continue_prefill_count,
+    openai_oauth_continue_prefill_min_age_seconds,
+    openai_oauth_continue_prefill_target_count,
+    openai_oauth_wait_seconds,
     upload_artifact_to_r2,
 )
 from others.runner_credential_sync import (
     cleanup_run_output_dir,
     sync_refreshed_credentials_back_to_sources,
 )
-from others.runner_small_success import (
-    backfill_small_success_continue_pool,
-    copy_small_success_artifacts_to_pool,
-    drain_small_success_wait_pool,
+from others.runner_openai_oauth import (
+    backfill_openai_oauth_continue_pool,
+    collect_openai_oauth_success_artifacts,
+    copy_openai_oauth_artifacts_to_pool,
+    drain_openai_oauth_wait_pool,
     postprocess_free_success_artifact,
-    small_success_failure_target_pool_dir,
+    openai_oauth_failure_target_pool_dir,
 )
 from others.runner_team_artifacts import (
     drain_oauth_pool_backlog,

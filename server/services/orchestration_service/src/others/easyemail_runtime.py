@@ -19,7 +19,7 @@ from shared_mailbox.easy_email_client import recover_mailbox_capacity, release_m
 def write_team_flow_update(*, source_path: Path, updater: Any) -> dict[str, Any]:
     payload = load_json_payload(source_path)
     if not isinstance(payload, dict):
-        raise RuntimeError("small_success_payload_invalid")
+        raise RuntimeError("openai_oauth_payload_invalid")
     updated = updater(dict(payload))
     source_path.write_text(json.dumps(updated, indent=2, ensure_ascii=False), encoding="utf-8")
     return updated

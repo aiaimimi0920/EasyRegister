@@ -22,7 +22,7 @@ from others.common import (  # noqa: E402
     free_manual_oauth_preserve_codes,
     free_manual_oauth_preserve_enabled,
     standardize_export_credential_payload,
-    validate_small_success_seed_payload,
+    validate_openai_oauth_seed_payload,
     write_json_atomic,
 )
 
@@ -32,7 +32,7 @@ def _jwt_token(payload: dict[str, object]) -> str:
     return f"header.{encoded}.signature"
 
 
-def _valid_small_success_payload(*, created_at: datetime | None = None) -> dict[str, object]:
+def _valid_openai_oauth_payload(*, created_at: datetime | None = None) -> dict[str, object]:
     created = created_at or datetime.now(timezone.utc)
     return {
         "platformOrganization": {"status": "completed"},
@@ -95,24 +95,24 @@ class CommonHelpersTests(unittest.TestCase):
                 free_manual_oauth_preserve_codes(),
             )
 
-    def test_validate_small_success_seed_payload_accepts_valid_payload(self) -> None:
+    def test_validate_openai_oauth_seed_payload_accepts_valid_payload(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
-            ok, reason = validate_small_success_seed_payload(_valid_small_success_payload())
+            ok, reason = validate_openai_oauth_seed_payload(_valid_openai_oauth_payload())
         self.assertTrue(ok)
         self.assertEqual("", reason)
 
-    def test_validate_small_success_seed_payload_rejects_expired_seed(self) -> None:
-        payload = _valid_small_success_payload(
+    def test_validate_openai_oauth_seed_payload_rejects_expired_seed(self) -> None:
+        payload = _valid_openai_oauth_payload(
             created_at=datetime.now(timezone.utc) - timedelta(seconds=20)
         )
         with mock.patch.dict(
             "os.environ",
-            {"REGISTER_SMALL_SUCCESS_SEED_MAX_AGE_SECONDS": "5"},
+            {"REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "5"},
             clear=True,
         ):
-            ok, reason = validate_small_success_seed_payload(payload)
+            ok, reason = validate_openai_oauth_seed_payload(payload)
         self.assertFalse(ok)
-        self.assertTrue(reason.startswith("small_success_seed_too_old:"))
+        self.assertTrue(reason.startswith("openai_oauth_seed_too_old:"))
 
     def test_extract_account_id_supports_top_level_auth_claims(self) -> None:
         payload = {

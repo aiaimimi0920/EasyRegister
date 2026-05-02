@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .paths import resolve_first_phone_dir, resolve_small_success_dir, resolve_success_dir
+from .paths import resolve_first_phone_dir, resolve_openai_oauth_dir, resolve_success_dir
 
 
 def load_json_payload(path: str | Path) -> dict[str, Any]:
@@ -72,10 +72,10 @@ def persist_success_auth_json(
     return str(file_path)
 
 
-def persist_small_success_record(
+def persist_openai_oauth_record(
     *,
     output_dir: str | None,
-    outcome: str = "small_success",
+    outcome: str = "openai_oauth",
     email: str,
     password: str,
     mailbox_provider: str,
@@ -91,11 +91,11 @@ def persist_small_success_record(
     source: str = "browser_flow",
     registration_mode: str = "browser-platform-first",
 ) -> str:
-    target_dir = resolve_small_success_dir(output_dir)
+    target_dir = resolve_openai_oauth_dir(output_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     file_path = target_dir / _build_filename(email=email, prefix="small")
     payload = {
-        "outcome": str(outcome or "").strip() or "small_success",
+        "outcome": str(outcome or "").strip() or "openai_oauth",
         "site": "platform.openai.com",
         "registrationMode": str(registration_mode or "").strip() or "browser-platform-first",
         "source": str(source or "").strip() or "browser_flow",

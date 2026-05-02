@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from others.artifact_pool_claims import (
-    claim_small_success_artifact,
+    claim_openai_oauth_artifact,
     claim_team_member_candidates,
     claim_team_mother_artifact,
     fill_team_pre_pool,
-    finalize_small_success_artifact,
+    finalize_openai_oauth_artifact,
     sleep_seconds,
     validate_free_personal_oauth,
 )
@@ -21,10 +21,10 @@ def dispatch_orchestration_step(*, step_type: str, step_input: dict[str, Any]) -
     normalized_step_type = str(step_type or "").strip()
     if normalized_step_type == "sleep_seconds":
         return sleep_seconds(step_input=step_input)
-    if normalized_step_type == "acquire_small_success_artifact":
-        return claim_small_success_artifact(step_input=step_input)
-    if normalized_step_type == "finalize_small_success_artifact":
-        return finalize_small_success_artifact(step_input=step_input)
+    if normalized_step_type == "acquire_openai_oauth_artifact":
+        return claim_openai_oauth_artifact(step_input=step_input)
+    if normalized_step_type == "finalize_openai_oauth_artifact":
+        return finalize_openai_oauth_artifact(step_input=step_input)
     if normalized_step_type == "validate_free_personal_oauth":
         return validate_free_personal_oauth(step_input=step_input)
     if normalized_step_type == "fill_team_pre_pool":

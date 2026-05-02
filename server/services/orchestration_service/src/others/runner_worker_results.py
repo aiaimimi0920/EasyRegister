@@ -9,11 +9,11 @@ from others.common import json_log as _json_log
 from others.config import CleanupRuntimeConfig
 from others.runner_artifacts import (
     cleanup_run_output_dir as _cleanup_run_output_dir,
-    copy_small_success_artifacts_to_pool as _copy_small_success_artifacts_to_pool,
+    copy_openai_oauth_artifacts_to_pool as _copy_openai_oauth_artifacts_to_pool,
     free_stop_after_validate_mode as _free_stop_after_validate_mode,
     postprocess_free_success_artifact as _postprocess_free_success_artifact,
     postprocess_team_success_artifacts as _postprocess_team_success_artifacts,
-    small_success_failure_target_pool_dir as _small_success_failure_target_pool_dir,
+    openai_oauth_failure_target_pool_dir as _openai_oauth_failure_target_pool_dir,
     sync_refreshed_credentials_back_to_sources as _sync_refreshed_credentials_back_to_sources,
     team_has_collectable_artifacts as _team_has_collectable_artifacts,
 )
@@ -60,7 +60,7 @@ def process_worker_run_result(
     run_output_dir: Path,
     output_root: Path,
     shared_root: Path,
-    small_success_pool_dir: Path,
+    openai_oauth_pool_dir: Path,
     normalized_role: str,
     worker_label: str,
     task_index: int,
@@ -92,6 +92,8 @@ def process_worker_run_result(
         finished_at=finished_at,
     )
     result_payload = result.to_dict()
+    if isinstance(result_payload, dict):
+        result_payload.setdefault("instanceRole", normalized_role)
     effective_team_auth_path = selected_team_auth_path
     if normalized_role == "team":
         effective_team_auth_path = _team_auth_path_from_result_payload(
@@ -196,6 +198,7 @@ def process_worker_run_result(
                 "taskIndex": task_index,
                 "instanceRole": normalized_role,
                 "email": str((create_output or {}).get("email") or "").strip(),
+                "openaiOauthPath": str((create_output or {}).get("storage_path") or "").strip(),
                 "smallSuccessPath": str((create_output or {}).get("storage_path") or "").strip(),
                 "validateStatus": str((validate_output or {}).get("status") or "").strip(),
                 "validateCode": str((validate_output or {}).get("code") or "").strip(),
@@ -337,9 +340,9 @@ def process_worker_run_result(
                     "result": postprocess_result,
                 }
             )
-        _copy_small_success_artifacts_to_pool(
+        _copy_openai_oauth_artifacts_to_pool(
             run_output_dir=run_output_dir,
-            pool_dir=_small_success_failure_target_pool_dir(
+            pool_dir=_openai_oauth_failure_target_pool_dir(
                 output_root=output_root,
                 result_payload_value=result_payload,
             ),
@@ -372,7 +375,8 @@ def process_worker_run_crash(
     exc: Exception,
     started_at: str,
     run_output_dir: Path,
-    small_success_pool_dir: Path,
+    openai_oauth_pool_dir: Path,
+    normalized_role: str,
     worker_label: str,
     task_index: int,
     local_run_index: int,
@@ -399,9 +403,16 @@ def process_worker_run_crash(
         error=str(exc),
         finished_at=finished_at,
     )
-    _copy_small_success_artifacts_to_pool(
+    _copy_openai_oauth_artifacts_to_pool(
         run_output_dir=run_output_dir,
-        pool_dir=small_success_pool_dir,
+        pool_dir=(
+            _openai_oauth_failure_target_pool_dir(
+                output_root=openai_oauth_pool_dir.parent.parent if openai_oauth_pool_dir.parent.name == "openai" else openai_oauth_pool_dir.parent,
+                result_payload_value={"error": str(exc), "instanceRole": normalized_role},
+            )
+            if normalized_role in {"main", "continue"}
+            else openai_oauth_pool_dir
+        ),
         worker_label=worker_label,
         task_index=task_index,
     )

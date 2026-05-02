@@ -43,7 +43,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--r2-secret-access-key", default="", help="Optional R2 secret access key override.")
     parser.add_argument("--r2-region", default="", help="Optional R2 region override.")
     parser.add_argument("--r2-public-base-url", default="", help="Optional R2 public base url override.")
-    parser.add_argument("--small-success-pool-dir", default="", help="Optional pooled small-success artifact directory.")
+    parser.add_argument("--openai-oauth-pool-dir", default="", help="Optional pooled openai-oauth artifact directory.")
     parser.add_argument("--flow-path", default="", help="Optional semantic flow json path.")
     parser.add_argument("--task-max-attempts", default="", help="Optional task-level retry attempts override.")
     parser.add_argument("--mailbox-business-key", default="", help="Optional mailbox business key override for this task.")
@@ -67,7 +67,7 @@ def main() -> int:
         r2_secret_access_key=str(args.r2_secret_access_key or "").strip() or None,
         r2_region=str(args.r2_region or "").strip() or None,
         r2_public_base_url=str(args.r2_public_base_url or "").strip() or None,
-        small_success_pool_dir=str(args.small_success_pool_dir or "").strip() or None,
+        openai_oauth_pool_dir=str(args.openai_oauth_pool_dir or "").strip() or None,
         flow_path=str(args.flow_path or "").strip() or None,
         task_max_attempts=int(str(args.task_max_attempts or "").strip()) if str(args.task_max_attempts or "").strip() else None,
         mailbox_business_key=str(args.mailbox_business_key or "").strip() or None,

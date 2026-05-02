@@ -92,8 +92,8 @@ class TypedConfigTests(unittest.TestCase):
             self.assertEqual("continue", config.instance_id)
             self.assertEqual("continue", config.instance_role)
             self.assertEqual("http://control:9788", config.easy_protocol_base_url)
-            self.assertEqual(config.shared_root / "small-success-pool", config.small_success_pool_dir)
-            self.assertEqual(config.shared_root / "free-oauth-pool", config.free_oauth_pool_dir)
+            self.assertEqual(config.shared_root / "openai" / "pending", config.openai_oauth_pool_dir)
+            self.assertEqual(config.shared_root / "codex" / "free", config.free_oauth_pool_dir)
 
     def test_runner_main_config_parses_mixed_flow_specs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -122,8 +122,8 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual("main", config.flow_specs[0].instance_role)
         self.assertEqual("continue", config.flow_specs[1].instance_role)
         self.assertEqual(
-            config.shared_root / "others" / "small-success-continue-pool",
-            config.flow_specs[1].small_success_pool_dir,
+            config.shared_root / "openai" / "failed-once",
+            config.flow_specs[1].openai_oauth_pool_dir,
         )
         self.assertEqual(str(flow_main.resolve()), config.flow_path)
 
@@ -269,7 +269,9 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual(("codex", "usage_based"), config.codex_seat_types)
         self.assertEqual(77, config.stale_claim_seconds)
         self.assertEqual(7200.0, config.temp_blacklist_seconds)
-        self.assertEqual(resolve_shared_root(str(output_root)) / "team-mother-pool", config.mother_pool_dir)
+        self.assertEqual(resolve_shared_root(str(output_root)) / "codex" / "team-mother-input", config.mother_pool_dir)
+        self.assertEqual(str(resolve_shared_root(str(output_root)) / "codex" / "team-input"), config.auth_local_dir)
+        self.assertEqual(str(resolve_shared_root(str(output_root)) / "codex" / "team-input"), config.auth_default_dir)
 
     def test_artifact_routing_config_resolves_paths_and_upload_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -287,8 +289,8 @@ class TypedConfigTests(unittest.TestCase):
             ):
                 config = ArtifactRoutingConfig.from_env(output_root=output_root)
         shared_root = resolve_shared_root(str(output_root))
-        self.assertEqual(shared_root / "others" / "free-local-store", config.free_local_dir)
-        self.assertEqual(shared_root / "others" / "team-local-store", config.team_local_dir)
+        self.assertEqual(shared_root / "codex" / "free", config.free_local_dir)
+        self.assertEqual(shared_root / "codex" / "team", config.team_local_dir)
         self.assertEqual(80.0, config.free_local_split_percent)
         self.assertEqual(25.0, config.team_local_split_percent)
         self.assertEqual("artifacts", config.r2_bucket)

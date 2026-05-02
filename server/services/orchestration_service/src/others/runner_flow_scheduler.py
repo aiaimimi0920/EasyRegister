@@ -28,7 +28,8 @@ def flow_spec_summary(spec: RunnerFlowSpec) -> dict[str, Any]:
         "weight": float(spec.weight or 0.0),
         "teamAuthPath": str(spec.team_auth_path or "").strip(),
         "taskMaxAttempts": int(spec.task_max_attempts or 0),
-        "smallSuccessPoolDir": str(spec.small_success_pool_dir),
+        "openaiOauthPoolDir": str(spec.openai_oauth_pool_dir),
+        "smallSuccessPoolDir": str(spec.openai_oauth_pool_dir),
         "mailboxBusinessKey": str(spec.mailbox_business_key or "").strip().lower(),
     }
 
@@ -55,11 +56,11 @@ def flow_spec_runnable_state(
     summary = flow_spec_summary(spec)
     normalized_role = normalize_flow_role(spec.instance_role)
     if normalized_role == "continue":
-        ready = _path_has_json_files(spec.small_success_pool_dir)
+        ready = _path_has_json_files(spec.openai_oauth_pool_dir)
         return {
             **summary,
             "ready": ready,
-            "reason": "pool_ready" if ready else "small_success_pool_empty",
+            "reason": "pool_ready" if ready else "openai_oauth_pool_empty",
         }
     if normalized_role == "team":
         mother_pool_dir = _team_mother_pool_dir(output_root=output_root, shared_root=shared_root)

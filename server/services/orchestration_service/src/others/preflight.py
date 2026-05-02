@@ -111,7 +111,8 @@ def validate_runtime_preflight() -> dict[str, Any]:
                 "flowPath": str(flow_path or ""),
                 "instanceRole": str(flow_spec.instance_role or "").strip().lower(),
                 "teamAuthPath": str(team_auth_override or ""),
-                "smallSuccessPoolDir": str(flow_spec.small_success_pool_dir),
+                "openaiOauthPoolDir": str(flow_spec.openai_oauth_pool_dir),
+                "smallSuccessPoolDir": str(flow_spec.openai_oauth_pool_dir),
             }
         )
     team_auth_path = Path(runner_config.team_auth_path).expanduser().resolve() if str(runner_config.team_auth_path or "").strip() else None
@@ -148,7 +149,8 @@ def validate_runtime_preflight() -> dict[str, Any]:
             "reservationTtlSeconds": team_auth_config.reservation_ttl_seconds,
         },
         "artifactRouting": {
-            "smallSuccessPoolDir": str(artifact_config.small_success_pool_dir),
+            "openaiOauthPoolDir": str(artifact_config.openai_oauth_pool_dir),
+            "smallSuccessPoolDir": str(artifact_config.openai_oauth_pool_dir),
             "freeOauthPoolDir": str(artifact_config.free_oauth_pool_dir),
             "r2Configured": not bool(missing_r2_fields),
         },

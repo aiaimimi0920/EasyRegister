@@ -11,7 +11,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from others.result_artifacts import (  # noqa: E402
-    FREE_SMALL_SUCCESS_SOURCE_CANDIDATES,
+    FREE_OPENAI_OAUTH_SOURCE_CANDIDATES,
     credential_backwrite_actions,
     first_existing_output_path,
     normalized_team_pool_artifacts,
@@ -43,10 +43,10 @@ class ResultArtifactsTests(unittest.TestCase):
             payload = {
                 "outputs": {
                     "create-openai-account": {"storage_path": str(path)},
-                    "acquire-small-success-artifact": {"claimed_path": str(root / "missing.json")},
+                    "acquire-openai-oauth-artifact": {"claimed_path": str(root / "missing.json")},
                 }
             }
-            resolved = first_existing_output_path(payload, FREE_SMALL_SUCCESS_SOURCE_CANDIDATES)
+            resolved = first_existing_output_path(payload, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES)
             self.assertEqual(path.resolve(), resolved)
 
     def test_normalized_team_pool_artifacts_resolves_paths(self) -> None:
@@ -113,7 +113,7 @@ class ResultArtifactsTests(unittest.TestCase):
             restored.write_text("{}", encoding="utf-8")
             payload = {
                 "outputs": {
-                    "finalize-small-success-artifact": {
+                    "finalize-openai-oauth-artifact": {
                         "claimed_path": str(claimed),
                         "restored_path": str(restored),
                     }
@@ -126,7 +126,7 @@ class ResultArtifactsTests(unittest.TestCase):
             "outputs": {
                 "obtain-codex-oauth": {"successPath": "oauth.json"},
                 "create-openai-account": {"storage_path": "create.json"},
-                "acquire-small-success-artifact": {
+                "acquire-openai-oauth-artifact": {
                     "source_path": "claimed.json",
                     "claimed_path": "claimed.json",
                 },

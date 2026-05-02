@@ -6,8 +6,8 @@ from typing import Any
 from others.config import ArtifactRoutingConfig, TeamAuthRuntimeConfig
 from others.paths import (
     resolve_shared_root,
-    resolve_small_success_claims_dir,
-    resolve_small_success_pool_dir,
+    resolve_openai_oauth_claims_dir,
+    resolve_openai_oauth_pool_dir,
     resolve_team_member_claims_dir,
     resolve_team_mother_claims_dir,
     resolve_team_mother_cooldowns_dir,
@@ -41,32 +41,46 @@ def team_auth_runtime_config_for_step_input(step_input: dict[str, Any] | None = 
     return TeamAuthRuntimeConfig.from_env(output_root=output_root, shared_root=Path(shared_root))
 
 
-def resolve_small_success_pool(step_input: dict[str, Any]) -> Path:
+def resolve_openai_oauth_pool(step_input: dict[str, Any]) -> Path:
     explicit = str(step_input.get("pool_dir") or "").strip()
     if explicit:
         return Path(explicit).resolve()
-    return resolve_small_success_pool_dir(str(derive_output_root_from_run_dir(step_input.get("output_dir"))))
+    return resolve_openai_oauth_pool_dir(str(derive_output_root_from_run_dir(step_input.get("output_dir"))))
 
 
-def resolve_small_success_claims(step_input: dict[str, Any]) -> Path:
+def resolve_openai_oauth_success_pool(step_input: dict[str, Any]) -> Path:
+    explicit = str(step_input.get("success_pool_dir") or step_input.get("openai_oauth_success_pool_dir") or "").strip()
+    if explicit:
+        return Path(explicit).resolve()
+    return artifact_routing_config_for_step_input(step_input).openai_oauth_success_pool_dir
+
+
+def resolve_openai_oauth_claims(step_input: dict[str, Any]) -> Path:
     explicit = str(step_input.get("claims_dir") or "").strip()
     if explicit:
         return Path(explicit).resolve()
-    return resolve_small_success_claims_dir(str(derive_output_root_from_run_dir(step_input.get("output_dir"))))
+    return resolve_openai_oauth_claims_dir(str(derive_output_root_from_run_dir(step_input.get("output_dir"))))
 
 
-def resolve_small_success_wait_pool(step_input: dict[str, Any]) -> Path:
-    explicit = str(step_input.get("wait_pool_dir") or step_input.get("small_success_wait_pool_dir") or "").strip()
+def resolve_openai_oauth_wait_pool(step_input: dict[str, Any]) -> Path:
+    explicit = str(step_input.get("wait_pool_dir") or step_input.get("openai_oauth_wait_pool_dir") or "").strip()
     if explicit:
         return Path(explicit).resolve()
-    return artifact_routing_config_for_step_input(step_input).small_success_wait_pool_dir
+    return artifact_routing_config_for_step_input(step_input).openai_oauth_wait_pool_dir
 
 
-def resolve_small_success_continue_pool(step_input: dict[str, Any]) -> Path:
-    explicit = str(step_input.get("continue_pool_dir") or step_input.get("small_success_continue_pool_dir") or "").strip()
+def resolve_openai_oauth_continue_pool(step_input: dict[str, Any]) -> Path:
+    explicit = str(step_input.get("continue_pool_dir") or step_input.get("openai_oauth_continue_pool_dir") or "").strip()
     if explicit:
         return Path(explicit).resolve()
-    return artifact_routing_config_for_step_input(step_input).small_success_continue_pool_dir
+    return artifact_routing_config_for_step_input(step_input).openai_oauth_continue_pool_dir
+
+
+def resolve_openai_oauth_need_phone_pool(step_input: dict[str, Any]) -> Path:
+    explicit = str(step_input.get("need_phone_pool_dir") or step_input.get("openai_oauth_need_phone_pool_dir") or "").strip()
+    if explicit:
+        return Path(explicit).resolve()
+    return artifact_routing_config_for_step_input(step_input).openai_oauth_need_phone_pool_dir
 
 
 def resolve_free_manual_oauth_pool(step_input: dict[str, Any]) -> Path:

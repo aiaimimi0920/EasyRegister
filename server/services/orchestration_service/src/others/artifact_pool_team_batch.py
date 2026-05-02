@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Any
 
 from others.artifact_pool_common import (
+    derive_output_root_from_run_dir,
     load_team_expand_progress_from_artifact,
     path_is_inside_directory,
+    resolve_openai_oauth_success_pool,
     resolve_team_mother_pool,
     resolve_team_pool,
     resolve_team_pre_pool,
@@ -18,6 +20,7 @@ from others.common import (
     extract_org_id,
     standardize_export_credential_payload,
 )
+from others.openai_oauth_conversion_guard import release_conversion_lock
 from others.prepared_artifacts import (
     copy_delete_prepared_artifact_to_dir,
     prepare_named_artifact,
@@ -275,6 +278,7 @@ def collect_team_pool_artifacts(*, step_input: dict[str, Any]) -> dict[str, Any]
 
 
 def finalize_team_batch(*, step_input: dict[str, Any]) -> dict[str, Any]:
+    shared_root = derive_output_root_from_run_dir(step_input.get("output_dir"))
     task_error_code = str(step_input.get("task_error_code") or "").strip()
     invite_result = step_input.get("invite_result")
     oauth_result = step_input.get("oauth_result")
@@ -317,6 +321,12 @@ def finalize_team_batch(*, step_input: dict[str, Any]) -> dict[str, Any]:
             return
         if force_delete:
             claimed_path.unlink(missing_ok=True)
+            if isinstance(artifact, dict):
+                release_conversion_lock(
+                    shared_root=shared_root,
+                    email=str(artifact.get("email") or "").strip(),
+                    claimed_path=claimed_path,
+                )
             deleted.append(str(claimed_path))
             return
         should_restore = bool(task_error_code) or bool(restore_on_success)
@@ -324,6 +334,12 @@ def finalize_team_batch(*, step_input: dict[str, Any]) -> dict[str, Any]:
             should_restore = False
         if not should_restore:
             claimed_path.unlink(missing_ok=True)
+            if isinstance(artifact, dict):
+                release_conversion_lock(
+                    shared_root=shared_root,
+                    email=str(artifact.get("email") or "").strip(),
+                    claimed_path=claimed_path,
+                )
             deleted.append(str(claimed_path))
             return
         target_pool_dir = pool_dir or Path(str(artifact.get("pool_dir") or "")).resolve()
@@ -335,10 +351,18 @@ def finalize_team_batch(*, step_input: dict[str, Any]) -> dict[str, Any]:
             pool_dir=target_pool_dir,
             preferred_name=str(artifact.get("original_name") or claimed_path.name).strip() or claimed_path.name,
         )
+        if isinstance(artifact, dict):
+            release_conversion_lock(
+                shared_root=shared_root,
+                email=str(artifact.get("email") or "").strip(),
+                claimed_path=claimed_path,
+            )
         restored.append(
             {
                 "claimed_path": str(claimed_path),
                 "restored_path": restored_path,
+                "email": str((artifact or {}).get("email") or "").strip(),
+                "pool_dir": str(target_pool_dir),
             }
         )
 
@@ -363,15 +387,21 @@ def finalize_team_batch(*, step_input: dict[str, Any]) -> dict[str, Any]:
                 "output_dir": step_input.get("output_dir"),
             }
         )
+        openai_success_pool_dir = resolve_openai_oauth_success_pool(
+            {
+                "output_dir": step_input.get("output_dir"),
+                "openai_oauth_success_pool_dir": step_input.get("openai_oauth_success_pool_dir"),
+            }
+        )
         for artifact in member_artifacts:
             member_email = str((artifact or {}).get("email") or "").strip().lower() if isinstance(artifact, dict) else ""
             member_restore_on_success = restore_members_on_success_flag
             member_force_delete = member_email in discarded_member_emails
             if not task_error_code and not restore_members_on_success_flag:
-                member_restore_on_success = member_email not in successful_member_emails
+                member_restore_on_success = True
             _finalize_one(
                 artifact=artifact,
-                pool_dir=team_pre_pool_dir,
+                pool_dir=openai_success_pool_dir if member_email in successful_member_emails else team_pre_pool_dir,
                 restore_on_success=member_restore_on_success,
                 force_delete=member_force_delete,
             )

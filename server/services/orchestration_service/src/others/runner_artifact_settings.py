@@ -28,16 +28,24 @@ def should_cleanup_successful_run_output(result: Any) -> bool:
         return False
 
 
-def resolve_small_success_pool_dir(*, output_root: Path) -> Path:
-    return artifact_routing_config(output_root=output_root).small_success_pool_dir
+def resolve_openai_oauth_pool_dir(*, output_root: Path) -> Path:
+    return artifact_routing_config(output_root=output_root).openai_oauth_pool_dir
 
 
-def resolve_small_success_wait_pool_dir(*, output_root: Path) -> Path:
-    return artifact_routing_config(output_root=output_root).small_success_wait_pool_dir
+def resolve_openai_oauth_success_pool_dir(*, output_root: Path) -> Path:
+    return artifact_routing_config(output_root=output_root).openai_oauth_success_pool_dir
 
 
-def resolve_small_success_continue_pool_dir(*, output_root: Path) -> Path:
-    return artifact_routing_config(output_root=output_root).small_success_continue_pool_dir
+def resolve_openai_oauth_wait_pool_dir(*, output_root: Path) -> Path:
+    return artifact_routing_config(output_root=output_root).openai_oauth_wait_pool_dir
+
+
+def resolve_openai_oauth_continue_pool_dir(*, output_root: Path) -> Path:
+    return artifact_routing_config(output_root=output_root).openai_oauth_continue_pool_dir
+
+
+def resolve_openai_oauth_need_phone_pool_dir(*, output_root: Path) -> Path:
+    return artifact_routing_config(output_root=output_root).openai_oauth_need_phone_pool_dir
 
 
 def resolve_free_oauth_pool_dir(*, output_root: Path) -> Path:
@@ -56,6 +64,10 @@ def resolve_team_local_dir(*, output_root: Path) -> Path:
     return artifact_routing_config(output_root=output_root).team_local_dir
 
 
+def resolve_plus_local_dir(*, output_root: Path) -> Path:
+    return artifact_routing_config(output_root=output_root).plus_local_dir
+
+
 def select_local_split(*, percent: float) -> bool:
     if float(percent or 0.0) <= 0.0:
         return False
@@ -64,20 +76,24 @@ def select_local_split(*, percent: float) -> bool:
     return random.random() * 100.0 < float(percent)
 
 
-def small_success_wait_seconds() -> float:
-    return artifact_routing_config().small_success_wait_seconds
+def select_upload_split(*, percent: float) -> bool:
+    return select_local_split(percent=percent)
 
 
-def small_success_continue_prefill_count() -> int:
-    return artifact_routing_config().small_success_continue_prefill_count
+def openai_oauth_wait_seconds() -> float:
+    return artifact_routing_config().openai_oauth_wait_seconds
 
 
-def small_success_continue_prefill_target_count() -> int:
-    return artifact_routing_config().small_success_continue_prefill_target_count
+def openai_oauth_continue_prefill_count() -> int:
+    return artifact_routing_config().openai_oauth_continue_prefill_count
 
 
-def small_success_continue_prefill_min_age_seconds() -> float:
-    return artifact_routing_config().small_success_continue_prefill_min_age_seconds
+def openai_oauth_continue_prefill_target_count() -> int:
+    return artifact_routing_config().openai_oauth_continue_prefill_target_count
+
+
+def openai_oauth_continue_prefill_min_age_seconds() -> float:
+    return artifact_routing_config().openai_oauth_continue_prefill_min_age_seconds
 
 
 def free_stop_after_validate_mode() -> bool:

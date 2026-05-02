@@ -285,6 +285,7 @@ def run_dst_flow_once(
     *,
     output_dir: str | None = None,
     team_auth_path: str | Path | None = None,
+    team_invite_enabled: bool | None = None,
     preallocated_email: str | None = None,
     preallocated_session_id: str | None = None,
     preallocated_mailbox_ref: str | None = None,
@@ -298,7 +299,7 @@ def run_dst_flow_once(
     r2_region: str | None = None,
     r2_public_base_url: str | None = None,
     r2_upload_enabled: bool | None = None,
-    small_success_pool_dir: str | None = None,
+    openai_oauth_pool_dir: str | None = None,
     flow_path: str | Path | None = None,
     task_max_attempts: int | None = None,
     mailbox_business_key: str | None = None,
@@ -330,10 +331,14 @@ def run_dst_flow_once(
         if str(statement.save_as or "").strip()
     }
     for task_attempt in range(1, task_retry_max_attempts(plan, task_max_attempts) + 1):
+        resolved_team_auth_path = str(team_auth_path or "").strip()
+        resolved_team_invite_enabled = bool(team_invite_enabled) if team_invite_enabled is not None else bool(resolved_team_auth_path)
         state = {
             "task": {
                 "output_dir": str(output_dir or "").strip(),
-                "team_auth_path": str(team_auth_path or "").strip(),
+                "team_auth_path": resolved_team_auth_path,
+                "team_invite_enabled": resolved_team_invite_enabled,
+                "team_invite_cleanup_enabled": resolved_team_invite_enabled and (not free_stop_after_validate),
                 "preallocated_email": str(preallocated_email or "").strip(),
                 "preallocated_session_id": str(preallocated_session_id or "").strip(),
                 "preallocated_mailbox_ref": str(preallocated_mailbox_ref or "").strip(),
@@ -347,7 +352,7 @@ def run_dst_flow_once(
                 "r2_region": str(r2_region or "").strip(),
                 "r2_public_base_url": str(r2_public_base_url or "").strip(),
                 "r2_upload_enabled": bool(r2_upload_enabled) if r2_upload_enabled is not None else False,
-                "small_success_pool_dir": str(small_success_pool_dir or "").strip(),
+                "openai_oauth_pool_dir": str(openai_oauth_pool_dir or "").strip(),
                 "mailbox_ttl_seconds": env_config.mailbox_ttl_seconds,
                 "mailbox_recreate_preallocated": bool(env_config.mailbox_recreate_preallocated),
                 "team_pre_fill_count": env_config.team_pre_fill_count,

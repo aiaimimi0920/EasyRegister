@@ -150,7 +150,7 @@
         "metadata": {
           "owner": "easyprotocol",
           "stage": "team-auth-refresh",
-          "enabledWhen": "{{task.__disabled_team_auth_refresh__}}"
+          "enabledWhen": "{{task.team_invite_enabled}}"
         }
       },
       {
@@ -165,6 +165,7 @@
         "metadata": {
           "owner": "easyprotocol",
           "stage": "invite",
+          "enabledWhen": "{{task.team_invite_enabled}}",
           "retry": {
             "maxAttempts": 2,
             "backoffSeconds": 2,
@@ -186,7 +187,8 @@
         "saveAs": "wait_free_oauth_after_invite",
         "metadata": {
           "owner": "orchestration",
-          "stage": "post-invite-wait"
+          "stage": "post-invite-wait",
+          "enabledWhen": "{{task.team_invite_enabled}}"
         }
       },
       {
@@ -232,7 +234,7 @@
           "owner": "easyprotocol",
           "stage": "revoke",
           "alwaysRun": true,
-          "enabledWhen": "{{task.free_stop_after_validate_cleanup_enabled}}"
+          "enabledWhen": "{{task.team_invite_cleanup_enabled}}"
         }
       },
       {

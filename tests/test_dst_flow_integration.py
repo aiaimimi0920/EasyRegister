@@ -231,6 +231,89 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual(2, proxy_call_count)
         self.assertEqual(2, refresh_call_count)
 
+    def test_run_dst_flow_once_skips_invite_chain_when_team_invite_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "refresh-team-auth-on-demand",
+                                    "type": "obtain_team_mother_oauth",
+                                    "metadata": {
+                                        "owner": "easyprotocol",
+                                        "enabledWhen": "{{task.team_invite_enabled}}",
+                                    },
+                                    "saveAs": "team_mother_oauth_refresh",
+                                },
+                                {
+                                    "id": "invite-codex-member",
+                                    "type": "invite_codex_member",
+                                    "metadata": {
+                                        "owner": "easyprotocol",
+                                        "enabledWhen": "{{task.team_invite_enabled}}",
+                                    },
+                                    "saveAs": "invite_codex_member",
+                                },
+                                {
+                                    "id": "obtain-codex-oauth",
+                                    "type": "obtain_codex_oauth",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "saveAs": "obtain_codex_oauth",
+                                },
+                                {
+                                    "id": "validate-free-personal-oauth",
+                                    "type": "validate_free_personal_oauth",
+                                    "metadata": {"owner": "orchestration"},
+                                    "input": {
+                                        "oauth_result": "{{obtain_codex_oauth}}",
+                                        "invite_result": "{{invite_codex_member}}",
+                                    },
+                                    "saveAs": "validate_free_personal_oauth",
+                                },
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            calls: list[str] = []
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                calls.append(step_type)
+                if step_type == "obtain_codex_oauth":
+                    return {
+                        "ok": True,
+                        "status": "completed",
+                        "organizations": [{"id": "org_123"}],
+                    }
+                if step_type == "validate_free_personal_oauth":
+                    return {"ok": True, "status": "personal_oauth_confirmed"}
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {"easyprotocol": _dispatcher, "orchestration": _dispatcher},
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                    team_invite_enabled=False,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual("skipped", result.steps["refresh-team-auth-on-demand"])
+        self.assertEqual("skipped", result.steps["invite-codex-member"])
+        self.assertEqual(
+            ["obtain_codex_oauth", "validate_free_personal_oauth"],
+            calls,
+        )
+
     def test_run_dst_flow_once_retries_chatgpt_login_after_proxy_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             flow_path = Path(tmp_dir) / "temp-flow.json"

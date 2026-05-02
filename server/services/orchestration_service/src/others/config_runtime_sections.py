@@ -17,9 +17,13 @@ from others.config_env import split_csv
 from others.config_env import split_path_list
 from others.paths import (
     resolve_free_oauth_pool_dir,
+    resolve_plus_oauth_pool_dir,
     resolve_shared_root,
-    resolve_small_success_pool_dir,
+    resolve_openai_oauth_pool_dir,
+    resolve_openai_oauth_success_pool_dir,
+    resolve_team_input_dir,
     resolve_team_mother_pool_dir,
+    resolve_team_pool_dir,
 )
 
 
@@ -85,7 +89,7 @@ class RunnerFlowSpec:
     weight: float
     team_auth_path: str
     task_max_attempts: int
-    small_success_pool_dir: Path
+    openai_oauth_pool_dir: Path
     mailbox_business_key: str
 
 
@@ -94,7 +98,7 @@ def _normalize_instance_role(value: Any, *, default: str) -> str:
     return normalized or str(default or "main").strip().lower() or "main"
 
 
-def _default_small_success_pool_dir_for_role(
+def _default_openai_oauth_pool_dir_for_role(
     *,
     output_root: Path,
     shared_root: Path,
@@ -102,8 +106,8 @@ def _default_small_success_pool_dir_for_role(
 ) -> Path:
     normalized_role = _normalize_instance_role(instance_role, default="main")
     if normalized_role == "continue":
-        return (shared_root / "others" / "small-success-continue-pool").resolve()
-    return Path(resolve_small_success_pool_dir(str(output_root))).resolve()
+        return (shared_root / "openai" / "failed-once").resolve()
+    return Path(resolve_openai_oauth_pool_dir(str(output_root))).resolve()
 
 
 def _split_top_level_parts(text: str, delimiter: str) -> list[str]:
@@ -273,15 +277,17 @@ def _parse_runner_flow_specs(
             task_max_attempts = max(0, int(item.get("taskMaxAttempts") or item.get("task_max_attempts") or default_task_max_attempts))
         except Exception:
             task_max_attempts = max(0, int(default_task_max_attempts or 0))
-        small_success_pool_dir_text = str(
-            item.get("smallSuccessPoolDir")
+        openai_oauth_pool_dir_text = str(
+            item.get("openaiOauthPoolDir")
+            or item.get("openai_oauth_pool_dir")
+            or item.get("smallSuccessPoolDir")
             or item.get("small_success_pool_dir")
             or ""
         ).strip()
-        small_success_pool_dir = (
-            Path(small_success_pool_dir_text).expanduser().resolve()
-            if small_success_pool_dir_text
-            else _default_small_success_pool_dir_for_role(
+        openai_oauth_pool_dir = (
+            Path(openai_oauth_pool_dir_text).expanduser().resolve()
+            if openai_oauth_pool_dir_text
+            else _default_openai_oauth_pool_dir_for_role(
                 output_root=output_root,
                 shared_root=shared_root,
                 instance_role=instance_role,
@@ -306,7 +312,7 @@ def _parse_runner_flow_specs(
                     or ""
                 ).strip(),
                 task_max_attempts=task_max_attempts,
-                small_success_pool_dir=small_success_pool_dir,
+                openai_oauth_pool_dir=openai_oauth_pool_dir,
                 mailbox_business_key=str(
                     item.get("mailboxBusinessKey")
                     or item.get("mailbox_business_key")
@@ -329,7 +335,7 @@ class RunnerMainConfig:
     team_auth_path: str
     flow_path: str
     flow_specs: tuple[RunnerFlowSpec, ...]
-    small_success_pool_dir: Path
+    openai_oauth_pool_dir: Path
     free_oauth_pool_dir: Path
     instance_id: str
     instance_role: str
@@ -363,7 +369,7 @@ class RunnerMainConfig:
                     weight=1.0,
                     team_auth_path=str(team_auth_path or "").strip(),
                     task_max_attempts=max(0, int(task_max_attempts or 0)),
-                    small_success_pool_dir=_default_small_success_pool_dir_for_role(
+                    openai_oauth_pool_dir=_default_openai_oauth_pool_dir_for_role(
                         output_root=output_root,
                         shared_root=shared_root,
                         instance_role=instance_role,
@@ -384,7 +390,7 @@ class RunnerMainConfig:
             team_auth_path=effective_team_auth_path,
             flow_path=effective_flow_path,
             flow_specs=flow_specs,
-            small_success_pool_dir=Path(resolve_small_success_pool_dir(str(output_root))).resolve(),
+            openai_oauth_pool_dir=Path(resolve_openai_oauth_pool_dir(str(output_root))).resolve(),
             free_oauth_pool_dir=Path(resolve_free_oauth_pool_dir(str(output_root))).resolve(),
             instance_id=instance_id,
             instance_role=instance_role,
@@ -616,8 +622,8 @@ class TeamAuthRuntimeConfig:
             auth_paths=split_path_list(env_text("REGISTER_TEAM_AUTH_PATHS")),
             auth_path=env_text("REGISTER_TEAM_AUTH_PATH"),
             auth_dirs=split_path_list(env_text("REGISTER_TEAM_AUTH_DIRS")),
-            auth_local_dir=env_first_text("REGISTER_TEAM_AUTH_LOCAL_DIR", "REGISTER_TEAM_LOCAL_DIR"),
-            auth_default_dir=env_first_text("REGISTER_TEAM_AUTH_DEFAULT_DIR", "REGISTER_TEAM_AUTH_DIR"),
+            auth_local_dir=env_text("REGISTER_TEAM_AUTH_LOCAL_DIR") or str(resolve_team_input_dir(str(resolved_shared_root))),
+            auth_default_dir=env_text("REGISTER_TEAM_AUTH_DEFAULT_DIR") or env_text("REGISTER_TEAM_AUTH_DIR") or str(resolve_team_input_dir(str(resolved_shared_root))),
             local_dir=env_text("REGISTER_TEAM_LOCAL_DIR"),
             sall_cc_weight=max(0.0, min(1.0, env_percent_value("REGISTER_TEAM_AUTH_SALL_CC_WEIGHT", 5.0) / 100.0)),
             zero_success_window_seconds=max(0.0, env_float("REGISTER_TEAM_AUTH_ZERO_SUCCESS_WINDOW_SECONDS", 1800.0)),
@@ -643,19 +649,26 @@ class TeamAuthRuntimeConfig:
 
 @dataclass(frozen=True)
 class ArtifactRoutingConfig:
-    small_success_pool_dir: Path
-    small_success_wait_pool_dir: Path
-    small_success_continue_pool_dir: Path
+    openai_oauth_pool_dir: Path
+    openai_oauth_success_pool_dir: Path
+    openai_oauth_wait_pool_dir: Path
+    openai_oauth_continue_pool_dir: Path
+    openai_oauth_need_phone_pool_dir: Path
     free_oauth_pool_dir: Path
     free_manual_oauth_pool_dir: Path
     free_local_dir: Path
     team_local_dir: Path
+    plus_local_dir: Path
     free_local_split_percent: float
     team_local_split_percent: float
-    small_success_wait_seconds: float
-    small_success_continue_prefill_count: int
-    small_success_continue_prefill_target_count: int
-    small_success_continue_prefill_min_age_seconds: float
+    openai_upload_percent: float
+    codex_free_upload_percent: float
+    codex_team_upload_percent: float
+    codex_plus_upload_percent: float
+    openai_oauth_wait_seconds: float
+    openai_oauth_continue_prefill_count: int
+    openai_oauth_continue_prefill_target_count: int
+    openai_oauth_continue_prefill_min_age_seconds: float
     r2_bucket: str
     r2_account_id: str
     r2_endpoint_url: str
@@ -669,14 +682,24 @@ class ArtifactRoutingConfig:
         resolved_output_root = output_root.resolve() if output_root is not None else resolve_output_root()
         shared_root = resolve_shared_root(str(resolved_output_root))
         return cls(
-            small_success_pool_dir=Path(
-                env_text("REGISTER_SMALL_SUCCESS_POOL_DIR") or resolve_small_success_pool_dir(str(resolved_output_root))
+            openai_oauth_pool_dir=Path(
+                env_first_text("REGISTER_OPENAI_OAUTH_POOL_DIR", "REGISTER_SMALL_SUCCESS_POOL_DIR")
+                or resolve_openai_oauth_pool_dir(str(resolved_output_root))
             ).expanduser().resolve(),
-            small_success_wait_pool_dir=Path(
-                env_text("REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR") or shared_root / "others" / "small-success-wait-pool"
+            openai_oauth_success_pool_dir=Path(
+                env_text("REGISTER_OPENAI_OAUTH_SUCCESS_POOL_DIR")
+                or resolve_openai_oauth_success_pool_dir(str(resolved_output_root))
             ).expanduser().resolve(),
-            small_success_continue_pool_dir=Path(
-                env_text("REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR") or shared_root / "others" / "small-success-continue-pool"
+            openai_oauth_wait_pool_dir=Path(
+                env_first_text("REGISTER_OPENAI_OAUTH_WAIT_POOL_DIR", "REGISTER_SMALL_SUCCESS_WAIT_POOL_DIR")
+                or shared_root / "others" / "openai-oauth-wait-pool"
+            ).expanduser().resolve(),
+            openai_oauth_continue_pool_dir=Path(
+                env_first_text("REGISTER_OPENAI_OAUTH_CONTINUE_POOL_DIR", "REGISTER_SMALL_SUCCESS_CONTINUE_POOL_DIR")
+                or shared_root / "openai" / "failed-once"
+            ).expanduser().resolve(),
+            openai_oauth_need_phone_pool_dir=Path(
+                env_text("REGISTER_OPENAI_OAUTH_NEED_PHONE_POOL_DIR") or shared_root / "openai" / "failed-twice"
             ).expanduser().resolve(),
             free_oauth_pool_dir=Path(
                 env_text("REGISTER_FREE_OAUTH_POOL_DIR") or resolve_free_oauth_pool_dir(str(resolved_output_root))
@@ -685,19 +708,53 @@ class ArtifactRoutingConfig:
                 env_text("REGISTER_FREE_MANUAL_OAUTH_POOL_DIR") or shared_root / "others" / "free-manual-oauth-pool"
             ).expanduser().resolve(),
             free_local_dir=Path(
-                env_text("REGISTER_FREE_LOCAL_DIR") or shared_root / "others" / "free-local-store"
+                env_text("REGISTER_FREE_LOCAL_DIR") or resolve_free_oauth_pool_dir(str(resolved_output_root))
             ).expanduser().resolve(),
             team_local_dir=Path(
-                env_text("REGISTER_TEAM_LOCAL_DIR") or shared_root / "others" / "team-local-store"
+                env_text("REGISTER_TEAM_LOCAL_DIR") or resolve_team_pool_dir(str(resolved_output_root))
+            ).expanduser().resolve(),
+            plus_local_dir=Path(
+                env_text("REGISTER_PLUS_LOCAL_DIR") or resolve_plus_oauth_pool_dir(str(resolved_output_root))
             ).expanduser().resolve(),
             free_local_split_percent=env_percent_value("REGISTER_FREE_LOCAL_SPLIT_PERCENT", 100.0),
             team_local_split_percent=env_percent_value("REGISTER_TEAM_LOCAL_SPLIT_PERCENT", 0.0),
-            small_success_wait_seconds=max(0.0, env_float("REGISTER_SMALL_SUCCESS_WAIT_SECONDS", 600.0)),
-            small_success_continue_prefill_count=max(0, env_int("REGISTER_SMALL_SUCCESS_CONTINUE_PREFILL_COUNT", 1)),
-            small_success_continue_prefill_target_count=max(0, env_int("REGISTER_SMALL_SUCCESS_CONTINUE_PREFILL_TARGET_COUNT", 2)),
-            small_success_continue_prefill_min_age_seconds=max(
+            openai_upload_percent=env_percent_value("REGISTER_OPENAI_UPLOAD_PERCENT", 0.0),
+            codex_free_upload_percent=env_percent_value(
+                "REGISTER_CODEX_FREE_UPLOAD_PERCENT",
+                max(0.0, 100.0 - env_percent_value("REGISTER_FREE_LOCAL_SPLIT_PERCENT", 100.0)),
+            ),
+            codex_team_upload_percent=env_percent_value(
+                "REGISTER_CODEX_TEAM_UPLOAD_PERCENT",
+                max(0.0, 100.0 - env_percent_value("REGISTER_TEAM_LOCAL_SPLIT_PERCENT", 0.0)),
+            ),
+            codex_plus_upload_percent=env_percent_value("REGISTER_CODEX_PLUS_UPLOAD_PERCENT", 0.0),
+            openai_oauth_wait_seconds=max(
                 0.0,
-                env_float("REGISTER_SMALL_SUCCESS_CONTINUE_PREFILL_MIN_AGE_SECONDS", 0.0),
+                env_float(
+                    "REGISTER_OPENAI_OAUTH_WAIT_SECONDS",
+                    env_float("REGISTER_SMALL_SUCCESS_WAIT_SECONDS", 600.0),
+                ),
+            ),
+            openai_oauth_continue_prefill_count=max(
+                0,
+                env_int(
+                    "REGISTER_OPENAI_OAUTH_CONTINUE_PREFILL_COUNT",
+                    env_int("REGISTER_SMALL_SUCCESS_CONTINUE_PREFILL_COUNT", 1),
+                ),
+            ),
+            openai_oauth_continue_prefill_target_count=max(
+                0,
+                env_int(
+                    "REGISTER_OPENAI_OAUTH_CONTINUE_PREFILL_TARGET_COUNT",
+                    env_int("REGISTER_SMALL_SUCCESS_CONTINUE_PREFILL_TARGET_COUNT", 2),
+                ),
+            ),
+            openai_oauth_continue_prefill_min_age_seconds=max(
+                0.0,
+                env_float(
+                    "REGISTER_OPENAI_OAUTH_CONTINUE_PREFILL_MIN_AGE_SECONDS",
+                    env_float("REGISTER_SMALL_SUCCESS_CONTINUE_PREFILL_MIN_AGE_SECONDS", 0.0),
+                ),
             ),
             r2_bucket=env_first_text("REGISTER_R2_BUCKET", "R2_BUCKET"),
             r2_account_id=env_first_text("REGISTER_R2_ACCOUNT_ID", "R2_ACCOUNT_ID"),

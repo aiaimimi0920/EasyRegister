@@ -215,7 +215,7 @@ class ServiceRuntimeState:
         worker_count: int,
         delay_seconds: float,
         worker_stagger_seconds: float,
-        small_success_pool_dir: str,
+        openai_oauth_pool_dir: str,
         flow_specs: list[dict[str, Any]] | None = None,
     ) -> None:
         self._path = service_state_path(shared_root, instance_id)
@@ -229,7 +229,8 @@ class ServiceRuntimeState:
                 "workerCountConfigured": int(worker_count),
                 "delaySeconds": float(delay_seconds),
                 "workerStaggerSeconds": float(worker_stagger_seconds),
-                "smallSuccessPoolDir": str(small_success_pool_dir),
+                "openaiOauthPoolDir": str(openai_oauth_pool_dir),
+                "smallSuccessPoolDir": str(openai_oauth_pool_dir),
                 "flowSpecs": list(flow_specs or []),
             }
         )

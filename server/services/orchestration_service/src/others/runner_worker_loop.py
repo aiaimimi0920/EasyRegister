@@ -171,8 +171,8 @@ def worker_loop(
             break
 
         normalized_role = str(selected_flow_spec.instance_role or "").strip().lower()
-        small_success_pool_dir = Path(selected_flow_spec.small_success_pool_dir).resolve()
-        _ensure_directory(small_success_pool_dir)
+        openai_oauth_pool_dir = Path(selected_flow_spec.openai_oauth_pool_dir).resolve()
+        _ensure_directory(openai_oauth_pool_dir)
         free_local_selected = False
         if normalized_role in {"main", "continue"}:
             artifact_config = _artifact_routing_config(output_root=output_root)
@@ -192,7 +192,7 @@ def worker_loop(
         selected_team_auth_path = team_auth_selection.selected_team_auth_path
         seat_reservation = team_auth_selection.seat_reservation
 
-        if normalized_role in {"main", "continue", "team"} and team_auth_pool and not selected_team_auth_path:
+        if normalized_role == "team" and team_auth_pool and not selected_team_auth_path:
             _json_log(
                 {
                     "event": "register_team_auth_pool_filtered_empty",
@@ -228,7 +228,9 @@ def worker_loop(
                 "taskRole": normalized_role,
                 "teamAuthPath": selected_team_auth_path,
                 "teamAuthPoolSize": len(team_auth_pool),
-                "smallSuccessPoolDir": str(small_success_pool_dir),
+                "teamInviteEnabled": bool(selected_team_auth_path),
+                "openaiOauthPoolDir": str(openai_oauth_pool_dir),
+                "smallSuccessPoolDir": str(openai_oauth_pool_dir),
                 "freeLocalSelected": free_local_selected,
             }
         )
@@ -248,7 +250,8 @@ def worker_loop(
             result = run_dst_flow_once(
                 output_dir=str(run_output_dir),
                 team_auth_path=selected_team_auth_path or None,
-                small_success_pool_dir=str(small_success_pool_dir),
+                team_invite_enabled=bool(selected_team_auth_path),
+                openai_oauth_pool_dir=str(openai_oauth_pool_dir),
                 flow_path=str(selected_flow_spec.flow_path or "").strip() or None,
                 task_max_attempts=selected_flow_spec.task_max_attempts or task_max_attempts or None,
                 mailbox_business_key=str(selected_flow_spec.mailbox_business_key or "").strip() or None,
@@ -262,7 +265,7 @@ def worker_loop(
                 run_output_dir=run_output_dir,
                 output_root=output_root,
                 shared_root=shared_root,
-                small_success_pool_dir=small_success_pool_dir,
+                openai_oauth_pool_dir=openai_oauth_pool_dir,
                 normalized_role=normalized_role,
                 worker_label=worker_label,
                 task_index=task_index,
@@ -277,7 +280,8 @@ def worker_loop(
                 exc=exc,
                 started_at=started_at,
                 run_output_dir=run_output_dir,
-                small_success_pool_dir=small_success_pool_dir,
+                openai_oauth_pool_dir=openai_oauth_pool_dir,
+                normalized_role=normalized_role,
                 worker_label=worker_label,
                 task_index=task_index,
                 local_run_index=local_run_index,

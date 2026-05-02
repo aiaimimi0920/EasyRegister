@@ -43,7 +43,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
     def test_create_openai_account_can_bridge_storage_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            source_path = Path(tmp_dir) / "small-success.json"
+            source_path = Path(tmp_dir) / "openai-oauth.json"
             source_path.write_text('{"ok": true}', encoding="utf-8")
             bridge_dir = Path(tmp_dir) / "bridge"
 

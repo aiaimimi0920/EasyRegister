@@ -16,7 +16,7 @@ class ErrorCodes:
     PASSWORD_VERIFY_BLOCKED = "password_verify_blocked"
     PROXY_CONNECT_FAILED = "proxy_connect_failed"
     REFRESH_TOKEN_REUSED = "refresh_token_reused"
-    SMALL_SUCCESS_POOL_EMPTY = "small_success_pool_empty"
+    OPENAI_OAUTH_POOL_EMPTY = "openai_oauth_pool_empty"
     TEAM_AUTH_TOKEN_INVALIDATED = "team_auth_token_invalidated"
     TEAM_INVITE_UPSTREAM_ERROR = "team_invite_upstream_error"
     TEAM_MOTHER_TOKEN_VALIDATION_FAILED = "team_mother_token_validation_failed"
@@ -40,7 +40,7 @@ CODE_CATEGORY_MAP: dict[str, str] = {
     ErrorCodes.PASSWORD_VERIFY_BLOCKED: "blocked",
     ErrorCodes.PROXY_CONNECT_FAILED: "proxy_error",
     ErrorCodes.REFRESH_TOKEN_REUSED: "auth_error",
-    ErrorCodes.SMALL_SUCCESS_POOL_EMPTY: "flow_error",
+    ErrorCodes.OPENAI_OAUTH_POOL_EMPTY: "flow_error",
     ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED: "auth_error",
     ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR: "flow_error",
     ErrorCodes.TEAM_MOTHER_TOKEN_VALIDATION_FAILED: "auth_error",
@@ -286,8 +286,8 @@ def classify_error_code(
         return ErrorCodes.OTP_TIMEOUT
     if "r2_upload_failed" in lowered or ErrorCodes.UPLOAD_FILE_TO_R2_FAILED in lowered:
         return ErrorCodes.UPLOAD_FILE_TO_R2_FAILED
-    if ErrorCodes.SMALL_SUCCESS_POOL_EMPTY in lowered:
-        return ErrorCodes.SMALL_SUCCESS_POOL_EMPTY
+    if ErrorCodes.OPENAI_OAUTH_POOL_EMPTY in lowered:
+        return ErrorCodes.OPENAI_OAUTH_POOL_EMPTY
     if ErrorCodes.FLOW_TIMEOUT_EXCEEDED in lowered:
         return ErrorCodes.FLOW_TIMEOUT_EXCEEDED
     if "curl" in lowered or "connect" in lowered or "tls" in lowered:

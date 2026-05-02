@@ -8,18 +8,23 @@ from typing import Any
 
 from errors import ErrorCodes
 from others.artifact_pool_common import (
+    artifact_routing_config_for_step_input,
     choose_random_files,
+    derive_output_root_from_run_dir,
     extract_free_oauth_organizations,
     extract_free_oauth_plan_type,
     has_free_personal_oauth_claims,
-    load_small_success_seed_validation,
+    load_openai_oauth_seed_validation,
     load_team_expand_progress_from_artifact,
     recover_stale_team_claims,
     reset_claimed_team_expand_cycle_payload,
     resolve_free_manual_oauth_pool,
-    resolve_small_success_claims,
-    resolve_small_success_pool,
-    resolve_small_success_wait_pool,
+    resolve_openai_oauth_claims,
+    resolve_openai_oauth_continue_pool,
+    resolve_openai_oauth_pool,
+    resolve_openai_oauth_need_phone_pool,
+    resolve_openai_oauth_success_pool,
+    resolve_openai_oauth_wait_pool,
     resolve_team_member_claims,
     resolve_team_mother_claims,
     resolve_team_mother_cooldowns,
@@ -40,7 +45,16 @@ from others.common import (
     extract_account_id,
     free_manual_oauth_preserve_codes,
     free_manual_oauth_preserve_enabled,
+    json_log,
 )
+from others.openai_oauth_conversion_guard import (
+    acquire_conversion_lock,
+    codex_success_lookup,
+    conversion_lock_path,
+    prune_stale_conversion_lock,
+    release_conversion_lock,
+)
+from others.runner_openai_oauth import route_openai_oauth_artifact
 from others.storage import load_json_payload
 
 
@@ -60,22 +74,74 @@ def sleep_seconds(*, step_input: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def claim_small_success_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]:
-    pool_dir = resolve_small_success_pool(step_input)
-    claims_dir = resolve_small_success_claims(step_input)
+def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]:
+    shared_root = derive_output_root_from_run_dir(step_input.get("output_dir"))
+    pool_dir = resolve_openai_oauth_pool(step_input)
+    claims_dir = resolve_openai_oauth_claims(step_input)
     ensure_directory(pool_dir)
     ensure_directory(claims_dir)
+    skipped_existing_codex: list[dict[str, Any]] = []
+    skipped_locked: list[dict[str, Any]] = []
 
     for candidate in sort_paths_newest_first([path for path in pool_dir.glob("*.json") if path.is_file()]):
+        valid, _, payload = load_openai_oauth_seed_validation(candidate)
+        if not valid:
+            candidate.unlink(missing_ok=True)
+            continue
+        email = str(payload.get("email") or "").strip()
+        existing_codex = codex_success_lookup(
+            shared_root=shared_root,
+            output_root=shared_root,
+            email=email,
+        )
+        if bool(existing_codex.get("exists")):
+            skipped_existing_codex.append(
+                {
+                    "source_path": str(candidate),
+                    "email": email,
+                    "matches": existing_codex.get("matches") or [],
+                }
+            )
+            continue
+        prune_stale_conversion_lock(shared_root=shared_root, email=email)
+        email_lock_path = conversion_lock_path(shared_root=shared_root, email=email)
+        if email and email_lock_path.is_file():
+            skipped_locked.append(
+                {
+                    "source_path": str(candidate),
+                    "email": email,
+                    "lock_path": str(email_lock_path),
+                }
+            )
+            continue
         claim_name = f"{uuid.uuid4().hex[:8]}-{candidate.name}"
         claimed_path = claims_dir / claim_name
         try:
             candidate.replace(claimed_path)
         except FileNotFoundError:
             continue
-        valid, _, payload = load_small_success_seed_validation(claimed_path)
-        if not valid:
-            claimed_path.unlink(missing_ok=True)
+        conversion_claim = acquire_conversion_lock(
+            shared_root=shared_root,
+            email=email,
+            claimed_path=claimed_path,
+            source_path=candidate,
+            stage="continue",
+            worker_label=str(step_input.get("worker_label") or "").strip(),
+            task_index=int(step_input.get("task_index") or 0),
+        )
+        if email and conversion_claim is None:
+            restore_to_pool(
+                claimed_path=claimed_path,
+                pool_dir=pool_dir,
+                preferred_name=candidate.name,
+            )
+            skipped_locked.append(
+                {
+                    "source_path": str(candidate),
+                    "email": email,
+                    "lock_path": str(email_lock_path),
+                }
+            )
             continue
         return {
             "ok": True,
@@ -84,13 +150,27 @@ def claim_small_success_artifact(*, step_input: dict[str, Any]) -> dict[str, Any
             "pool_dir": str(pool_dir),
             "claims_dir": str(claims_dir),
             "original_name": candidate.name,
-            "email": str(payload.get("email") or "").strip(),
+            "email": email,
+            "conversion_claim": conversion_claim or {},
         }
 
-    raise RuntimeError("small_success_pool_empty")
+    if skipped_existing_codex or skipped_locked:
+        json_log(
+            {
+                "event": "register_openai_oauth_candidates_skipped",
+                "workerId": str(step_input.get("worker_label") or "").strip(),
+                "taskIndex": int(step_input.get("task_index") or 0),
+                "poolDir": str(pool_dir),
+                "skippedExistingCodexCount": len(skipped_existing_codex),
+                "skippedLockedCount": len(skipped_locked),
+                "skippedExistingCodex": skipped_existing_codex,
+                "skippedLocked": skipped_locked,
+            }
+        )
+    raise RuntimeError("openai_oauth_pool_empty")
 
 
-def finalize_small_success_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]:
+def finalize_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]:
     artifact = step_input.get("artifact")
     if not isinstance(artifact, dict):
         return {
@@ -106,7 +186,17 @@ def finalize_small_success_artifact(*, step_input: dict[str, Any]) -> dict[str, 
         }
 
     claimed_path = Path(claimed_path_text).resolve()
+    shared_root = derive_output_root_from_run_dir(step_input.get("output_dir"))
+    artifact_email = str(artifact.get("email") or "").strip()
+    routing_config = artifact_routing_config_for_step_input(step_input)
     if not claimed_path.exists():
+        release_conversion_lock(
+            shared_root=shared_root,
+            email=artifact_email,
+            claimed_path=claimed_path,
+            worker_label=str(step_input.get("worker_label") or "").strip(),
+            task_index=int(step_input.get("task_index") or 0),
+        )
         return {
             "ok": True,
             "status": "skipped_missing_artifact",
@@ -114,6 +204,18 @@ def finalize_small_success_artifact(*, step_input: dict[str, Any]) -> dict[str, 
 
     task_error_code = str(step_input.get("task_error_code") or "").strip()
     failure_mode = str(step_input.get("failure_mode") or "").strip().lower()
+    original_pool_dir = resolve_openai_oauth_pool(
+        {
+            "pool_dir": artifact.get("pool_dir"),
+            "output_dir": step_input.get("output_dir"),
+        }
+    )
+    continue_source = original_pool_dir.resolve() == resolve_openai_oauth_continue_pool(
+        {
+            "output_dir": step_input.get("output_dir"),
+            "openai_oauth_continue_pool_dir": step_input.get("openai_oauth_continue_pool_dir"),
+        }
+    ).resolve()
     if (
         task_error_code
         and free_manual_oauth_preserve_enabled(step_input)
@@ -126,6 +228,13 @@ def finalize_small_success_artifact(*, step_input: dict[str, Any]) -> dict[str, 
             pool_dir=pool_dir,
             preferred_name=str(artifact.get("original_name") or claimed_path.name).strip() or claimed_path.name,
         )
+        release_conversion_lock(
+            shared_root=shared_root,
+            email=artifact_email,
+            claimed_path=claimed_path,
+            worker_label=str(step_input.get("worker_label") or "").strip(),
+            task_index=int(step_input.get("task_index") or 0),
+        )
         return {
             "ok": True,
             "status": "preserved_for_manual_oauth",
@@ -135,27 +244,58 @@ def finalize_small_success_artifact(*, step_input: dict[str, Any]) -> dict[str, 
             "task_error_code": task_error_code,
             "email": str(artifact.get("email") or "").strip(),
         }
-    if task_error_code == ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING:
-        pool_dir = resolve_small_success_wait_pool(step_input)
+    if continue_source:
+        pool_dir = resolve_openai_oauth_need_phone_pool(step_input)
+    elif task_error_code == ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING:
+        pool_dir = resolve_openai_oauth_wait_pool(step_input)
     else:
-        pool_dir = resolve_small_success_pool(
-            {
-                "pool_dir": artifact.get("pool_dir"),
-                "output_dir": step_input.get("output_dir"),
-            }
-        )
+        pool_dir = original_pool_dir
     ensure_directory(pool_dir)
 
     if not task_error_code:
-        claimed_path.unlink(missing_ok=True)
+        success_pool_dir = resolve_openai_oauth_success_pool(step_input)
+        route_result = route_openai_oauth_artifact(
+            source_path=claimed_path,
+            destination_dir=success_pool_dir,
+            output_root=shared_root,
+            target_folder="openai/converted",
+            upload_percent=routing_config.openai_upload_percent,
+            preferred_name=str(artifact.get("original_name") or claimed_path.name).strip() or claimed_path.name,
+            move_local=True,
+        )
+        if not bool(route_result.get("ok")):
+            return {
+                "ok": False,
+                "status": "openai_upload_failed",
+                "claimed_path": str(claimed_path),
+                "detail": str(route_result.get("detail") or "upload_failed"),
+            }
+        release_conversion_lock(
+            shared_root=shared_root,
+            email=artifact_email,
+            claimed_path=claimed_path,
+            worker_label=str(step_input.get("worker_label") or "").strip(),
+            task_index=int(step_input.get("task_index") or 0),
+        )
         return {
             "ok": True,
-            "status": "deleted",
+            "status": "uploaded" if str(route_result.get("route") or "") == "uploaded" else "promoted_success",
             "claimed_path": str(claimed_path),
+            "restored_path": str(route_result.get("stored_path") or ""),
+            "restore_pool_dir": str(success_pool_dir),
+            "route": str(route_result.get("route") or ""),
+            "object_key": str(route_result.get("object_key") or ""),
         }
 
-    if failure_mode == "delete":
+    if failure_mode == "delete" and not continue_source:
         claimed_path.unlink(missing_ok=True)
+        release_conversion_lock(
+            shared_root=shared_root,
+            email=artifact_email,
+            claimed_path=claimed_path,
+            worker_label=str(step_input.get("worker_label") or "").strip(),
+            task_index=int(step_input.get("task_index") or 0),
+        )
         return {
             "ok": True,
             "status": "deleted_failed_artifact",
@@ -163,17 +303,37 @@ def finalize_small_success_artifact(*, step_input: dict[str, Any]) -> dict[str, 
             "task_error_code": task_error_code,
         }
 
-    restored_path = restore_to_pool(
-        claimed_path=claimed_path,
-        pool_dir=pool_dir,
+    route_result = route_openai_oauth_artifact(
+        source_path=claimed_path,
+        destination_dir=pool_dir,
+        output_root=shared_root,
+        target_folder="openai/failed-twice" if continue_source else "openai/failed-once",
+        upload_percent=routing_config.openai_upload_percent if continue_source else 0.0,
         preferred_name=str(artifact.get("original_name") or claimed_path.name).strip() or claimed_path.name,
+        move_local=True,
+    )
+    if not bool(route_result.get("ok")):
+        return {
+            "ok": False,
+            "status": "openai_upload_failed",
+            "claimed_path": str(claimed_path),
+            "detail": str(route_result.get("detail") or "upload_failed"),
+        }
+    release_conversion_lock(
+        shared_root=shared_root,
+        email=artifact_email,
+        claimed_path=claimed_path,
+        worker_label=str(step_input.get("worker_label") or "").strip(),
+        task_index=int(step_input.get("task_index") or 0),
     )
     return {
         "ok": True,
-        "status": "restored",
-        "restored_path": restored_path,
+        "status": "uploaded" if str(route_result.get("route") or "") == "uploaded" else "restored",
+        "restored_path": str(route_result.get("stored_path") or ""),
         "claimed_path": str(claimed_path),
         "restore_pool_dir": str(pool_dir),
+        "route": str(route_result.get("route") or ""),
+        "object_key": str(route_result.get("object_key") or ""),
     }
 
 
@@ -212,23 +372,64 @@ def validate_free_personal_oauth(*, step_input: dict[str, Any]) -> dict[str, Any
 
 
 def fill_team_pre_pool(*, step_input: dict[str, Any]) -> dict[str, Any]:
-    source_pool_dir = resolve_small_success_pool(step_input)
+    shared_root = derive_output_root_from_run_dir(step_input.get("output_dir"))
+    source_pool_dir = resolve_openai_oauth_pool(step_input)
+    retry_source_pool_dir = resolve_openai_oauth_need_phone_pool(
+        {
+            "output_dir": step_input.get("output_dir"),
+            "openai_oauth_need_phone_pool_dir": step_input.get("openai_oauth_need_phone_pool_dir"),
+        }
+    )
     team_pre_pool_dir = resolve_team_pre_pool(step_input)
     ensure_directory(source_pool_dir)
+    ensure_directory(retry_source_pool_dir)
     ensure_directory(team_pre_pool_dir)
 
     max_move_count = safe_count(step_input.get("max_move_count") or 1, 1) or 1
-    selected_paths = choose_random_files(directory=source_pool_dir, pattern="*.json", limit=max_move_count)
+    selected_paths = sort_paths_newest_first(
+        [
+            *[path for path in source_pool_dir.glob("*.json") if path.is_file()],
+            *[path for path in retry_source_pool_dir.glob("*.json") if path.is_file()],
+        ]
+    )[:max_move_count]
     moved: list[dict[str, Any]] = []
     discarded: list[dict[str, Any]] = []
+    skipped_existing_codex: list[dict[str, Any]] = []
+    skipped_locked: list[dict[str, Any]] = []
     for candidate in selected_paths:
-        valid, reason, payload = load_small_success_seed_validation(candidate)
+        valid, reason, payload = load_openai_oauth_seed_validation(candidate)
         if not valid:
             candidate.unlink(missing_ok=True)
             discarded.append(
                 {
                     "source_path": str(candidate),
                     "reason": reason,
+                }
+            )
+            continue
+        email = str(payload.get("email") or "").strip()
+        existing_codex = codex_success_lookup(
+            shared_root=shared_root,
+            output_root=shared_root,
+            email=email,
+        )
+        if bool(existing_codex.get("exists")):
+            skipped_existing_codex.append(
+                {
+                    "source_path": str(candidate),
+                    "email": email,
+                    "matches": existing_codex.get("matches") or [],
+                }
+            )
+            continue
+        prune_stale_conversion_lock(shared_root=shared_root, email=email)
+        email_lock_path = conversion_lock_path(shared_root=shared_root, email=email)
+        if email and email_lock_path.is_file():
+            skipped_locked.append(
+                {
+                    "source_path": str(candidate),
+                    "email": email,
+                    "lock_path": str(email_lock_path),
                 }
             )
             continue
@@ -255,7 +456,12 @@ def fill_team_pre_pool(*, step_input: dict[str, Any]) -> dict[str, Any]:
         "moved": moved,
         "discarded_count": len(discarded),
         "discarded": discarded,
+        "skipped_existing_codex_count": len(skipped_existing_codex),
+        "skipped_existing_codex": skipped_existing_codex,
+        "skipped_locked_count": len(skipped_locked),
+        "skipped_locked": skipped_locked,
         "source_pool_dir": str(source_pool_dir),
+        "retry_source_pool_dir": str(retry_source_pool_dir),
         "team_pre_pool_dir": str(team_pre_pool_dir),
     }
 
@@ -358,6 +564,7 @@ def claim_team_mother_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]:
 
 
 def claim_team_member_candidates(*, step_input: dict[str, Any]) -> dict[str, Any]:
+    shared_root = derive_output_root_from_run_dir(step_input.get("output_dir"))
     team_pre_pool_dir = resolve_team_pre_pool(step_input)
     claims_dir = resolve_team_member_claims(step_input)
     ensure_directory(team_pre_pool_dir)
@@ -390,19 +597,72 @@ def claim_team_member_candidates(*, step_input: dict[str, Any]) -> dict[str, Any
             "mother_progress": mother_progress,
         }
 
-    selected_paths = choose_random_files(directory=team_pre_pool_dir, pattern="*.json", limit=member_count)
-    if len(selected_paths) < member_count:
-        raise RuntimeError("team_pre_pool_insufficient_members")
-
     claimed_members: list[dict[str, Any]] = []
+    skipped_existing_codex: list[dict[str, Any]] = []
+    skipped_locked: list[dict[str, Any]] = []
+    selected_paths = sort_paths_newest_first([path for path in team_pre_pool_dir.glob("*.json") if path.is_file()])
     for candidate in selected_paths:
+        if len(claimed_members) >= member_count:
+            break
+        valid, reason, payload = load_openai_oauth_seed_validation(candidate)
+        if not valid:
+            candidate.unlink(missing_ok=True)
+            continue
+        email = str(payload.get("email") or "").strip()
+        existing_codex = codex_success_lookup(
+            shared_root=shared_root,
+            output_root=shared_root,
+            email=email,
+        )
+        if bool(existing_codex.get("exists")):
+            skipped_existing_codex.append(
+                {
+                    "source_path": str(candidate),
+                    "email": email,
+                    "matches": existing_codex.get("matches") or [],
+                }
+            )
+            continue
+        prune_stale_conversion_lock(shared_root=shared_root, email=email)
+        email_lock_path = conversion_lock_path(shared_root=shared_root, email=email)
+        if email and email_lock_path.is_file():
+            skipped_locked.append(
+                {
+                    "source_path": str(candidate),
+                    "email": email,
+                    "lock_path": str(email_lock_path),
+                }
+            )
+            continue
         claim_name = f"{uuid.uuid4().hex[:8]}-{candidate.name}"
         claimed_path = claims_dir / claim_name
         try:
             candidate.replace(claimed_path)
         except FileNotFoundError:
             continue
-        payload = load_json_payload(claimed_path)
+        conversion_claim = acquire_conversion_lock(
+            shared_root=shared_root,
+            email=email,
+            claimed_path=claimed_path,
+            source_path=candidate,
+            stage="team",
+            worker_label=str(step_input.get("worker_label") or "").strip(),
+            task_index=int(step_input.get("task_index") or 0),
+        )
+        if email and conversion_claim is None:
+            restore_to_pool(
+                claimed_path=claimed_path,
+                pool_dir=team_pre_pool_dir,
+                preferred_name=candidate.name,
+            )
+            skipped_locked.append(
+                {
+                    "source_path": str(candidate),
+                    "email": email,
+                    "lock_path": str(email_lock_path),
+                }
+            )
+            continue
         claimed_members.append(
             {
                 "source_path": str(claimed_path),
@@ -410,8 +670,9 @@ def claim_team_member_candidates(*, step_input: dict[str, Any]) -> dict[str, Any
                 "pool_dir": str(team_pre_pool_dir),
                 "claims_dir": str(claims_dir),
                 "original_name": candidate.name,
-                "email": str(payload.get("email") or "").strip(),
+                "email": email,
                 "password": str(payload.get("password") or "").strip(),
+                "conversion_claim": conversion_claim or {},
             }
         )
 
@@ -424,6 +685,13 @@ def claim_team_member_candidates(*, step_input: dict[str, Any]) -> dict[str, Any
                     pool_dir=team_pre_pool_dir,
                     preferred_name=str(artifact.get("original_name") or claimed_path.name).strip() or claimed_path.name,
                 )
+            release_conversion_lock(
+                shared_root=shared_root,
+                email=str(artifact.get("email") or "").strip(),
+                claimed_path=claimed_path,
+                worker_label=str(step_input.get("worker_label") or "").strip(),
+                task_index=int(step_input.get("task_index") or 0),
+            )
         raise RuntimeError("team_pre_pool_claim_race")
 
     return {
@@ -438,4 +706,8 @@ def claim_team_member_candidates(*, step_input: dict[str, Any]) -> dict[str, Any
         "recovered_claims": recovered,
         "member_emails": [str(item.get("email") or "").strip() for item in claimed_members],
         "mother_progress": mother_progress,
+        "skipped_existing_codex_count": len(skipped_existing_codex),
+        "skipped_existing_codex": skipped_existing_codex,
+        "skipped_locked_count": len(skipped_locked),
+        "skipped_locked": skipped_locked,
     }

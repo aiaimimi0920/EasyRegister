@@ -63,18 +63,86 @@ class ArtifactPoolCommonTests(unittest.TestCase):
 
 
 class ArtifactPoolClaimsTests(unittest.TestCase):
-    def test_fill_team_pre_pool_defaults_target_dir_under_others(self) -> None:
+    def test_claim_openai_oauth_artifact_skips_email_when_codex_success_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"
-            run_output_dir = output_root / "others" / "mixed-runs" / "worker-01" / "run-20260430-task000001"
-            source_pool_dir = output_root / "small-success-pool"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260502-task000001"
+            source_pool_dir = output_root / "openai" / "pending"
+            codex_free_dir = output_root / "codex" / "free"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            codex_free_dir.mkdir(parents=True, exist_ok=True)
+            seed_path = source_pool_dir / "seed.json"
+            seed_path.write_text("{}", encoding="utf-8")
+            (codex_free_dir / "already-success.json").write_text('{"email":"seed@example.com"}', encoding="utf-8")
+
+            with mock.patch.object(
+                artifact_pool_claims,
+                "load_openai_oauth_seed_validation",
+                return_value=(True, "", {"email": "seed@example.com"}),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "openai_oauth_pool_empty"):
+                    artifact_pool_claims.claim_openai_oauth_artifact(
+                        step_input={
+                            "output_dir": str(run_output_dir),
+                            "pool_dir": str(source_pool_dir),
+                        }
+                    )
+
+            self.assertTrue(seed_path.exists())
+
+    def test_claim_openai_oauth_artifact_acquires_and_finalize_releases_conversion_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260502-task000001"
+            source_pool_dir = output_root / "openai" / "pending"
             source_pool_dir.mkdir(parents=True, exist_ok=True)
             seed_path = source_pool_dir / "seed.json"
             seed_path.write_text("{}", encoding="utf-8")
 
             with mock.patch.object(
                 artifact_pool_claims,
-                "load_small_success_seed_validation",
+                "load_openai_oauth_seed_validation",
+                return_value=(True, "", {"email": "seed@example.com"}),
+            ):
+                artifact = artifact_pool_claims.claim_openai_oauth_artifact(
+                    step_input={
+                        "output_dir": str(run_output_dir),
+                        "pool_dir": str(source_pool_dir),
+                        "worker_label": "worker-01",
+                        "task_index": 1,
+                    }
+                )
+
+            lock_dir = output_root / "others" / "openai-oauth-conversion-locks"
+            lock_files = list(lock_dir.glob("*.json"))
+            self.assertEqual(1, len(lock_files))
+            self.assertTrue(Path(artifact["claimed_path"]).exists())
+
+            finalize_result = artifact_pool_claims.finalize_openai_oauth_artifact(
+                step_input={
+                    "output_dir": str(run_output_dir),
+                    "artifact": artifact,
+                    "worker_label": "worker-01",
+                    "task_index": 1,
+                }
+            )
+
+            self.assertEqual("promoted_success", finalize_result["status"])
+            self.assertEqual([], list(lock_dir.glob("*.json")))
+            self.assertTrue((output_root / "openai" / "converted" / "seed.json").exists())
+
+    def test_fill_team_pre_pool_defaults_target_dir_under_others(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "mixed-runs" / "worker-01" / "run-20260430-task000001"
+            source_pool_dir = output_root / "openai" / "pending"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            seed_path = source_pool_dir / "seed.json"
+            seed_path.write_text("{}", encoding="utf-8")
+
+            with mock.patch.object(
+                artifact_pool_claims,
+                "load_openai_oauth_seed_validation",
                 return_value=(True, "", {"email": "seed@example.com"}),
             ):
                 result = artifact_pool_claims.fill_team_pre_pool(
@@ -90,7 +158,35 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
             self.assertFalse(seed_path.exists())
             self.assertTrue((expected_team_pre_pool_dir / "seed.json").exists())
 
-    def test_finalize_small_success_artifact_preserves_manual_oauth(self) -> None:
+    def test_fill_team_pre_pool_skips_email_when_codex_success_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "team-runs" / "worker-01" / "run-20260502-task000001"
+            source_pool_dir = output_root / "openai" / "pending"
+            codex_team_dir = output_root / "codex" / "team"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            codex_team_dir.mkdir(parents=True, exist_ok=True)
+            seed_path = source_pool_dir / "seed.json"
+            seed_path.write_text("{}", encoding="utf-8")
+            (codex_team_dir / "already-team.json").write_text('{"email":"seed@example.com"}', encoding="utf-8")
+
+            with mock.patch.object(
+                artifact_pool_claims,
+                "load_openai_oauth_seed_validation",
+                return_value=(True, "", {"email": "seed@example.com"}),
+            ):
+                result = artifact_pool_claims.fill_team_pre_pool(
+                    step_input={
+                        "output_dir": str(run_output_dir),
+                        "pool_dir": str(source_pool_dir),
+                    }
+                )
+
+            self.assertEqual("idle", result["status"])
+            self.assertEqual(1, result["skipped_existing_codex_count"])
+            self.assertTrue(seed_path.exists())
+
+    def test_finalize_openai_oauth_artifact_preserves_manual_oauth(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             claims_dir = Path(tmp_dir) / "claims"
             manual_pool_dir = Path(tmp_dir) / "manual-oauth-pool"
@@ -106,7 +202,7 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
                 },
                 clear=True,
             ):
-                result = artifact_pool_claims.finalize_small_success_artifact(
+                result = artifact_pool_claims.finalize_openai_oauth_artifact(
                     step_input={
                         "artifact": {
                             "claimed_path": str(claimed_path),
@@ -121,6 +217,35 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
             self.assertEqual("preserved_for_manual_oauth", result["status"])
             self.assertFalse(claimed_path.exists())
             self.assertTrue((manual_pool_dir / "original.json").exists())
+
+    def test_finalize_openai_oauth_artifact_routes_continue_failure_to_failed_twice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260502-task000001"
+            continue_pool_dir = output_root / "openai" / "failed-once"
+            continue_pool_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir = output_root / "others" / "openai-oauth-claims"
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            claimed_path = claims_dir / "claimed.json"
+            claimed_path.write_text('{"email":"retry@example.com"}', encoding="utf-8")
+
+            result = artifact_pool_claims.finalize_openai_oauth_artifact(
+                step_input={
+                    "output_dir": str(run_output_dir),
+                    "artifact": {
+                        "claimed_path": str(claimed_path),
+                        "original_name": "retry.json",
+                        "email": "retry@example.com",
+                        "pool_dir": str(continue_pool_dir),
+                    },
+                    "task_error_code": "obtain_codex_oauth_failed",
+                    "failure_mode": "delete",
+                }
+            )
+
+            self.assertEqual("restored", result["status"])
+            self.assertFalse(claimed_path.exists())
+            self.assertTrue((output_root / "openai" / "failed-twice" / "retry.json").exists())
 
     def test_claim_team_member_candidates_short_circuits_when_target_is_satisfied(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -152,6 +277,60 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
             self.assertEqual("target_already_satisfied", result["status"])
             self.assertEqual(0, result["member_count"])
             self.assertEqual([], result["members"])
+
+    def test_claim_team_member_candidates_acquires_and_finalize_releases_conversion_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "team-runs" / "worker-01" / "run-20260502-task000001"
+            team_pre_pool_dir = output_root / "others" / "team-pre-pool"
+            claims_dir = output_root / "others" / "team-member-claims"
+            team_pre_pool_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            seed_path = team_pre_pool_dir / "member.json"
+            seed_path.write_text("{}", encoding="utf-8")
+            mother_path = Path(tmp_dir) / "mother.json"
+            mother_path.write_text(
+                (
+                    '{"teamFlow":{"teamExpandProgress":{"targetCount":1,'
+                    '"successfulMemberEmails":[],"successCount":0,"remainingCount":1,"readyForMotherCollection":false}}}'
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(
+                artifact_pool_claims,
+                "load_openai_oauth_seed_validation",
+                return_value=(True, "", {"email": "member@example.com", "password": "pw"}),
+            ):
+                result = artifact_pool_claims.claim_team_member_candidates(
+                    step_input={
+                        "output_dir": str(run_output_dir),
+                        "member_count": 1,
+                        "team_pre_pool_dir": str(team_pre_pool_dir),
+                        "team_member_claims_dir": str(claims_dir),
+                        "mother_artifact": {
+                            "source_path": str(mother_path),
+                        },
+                        "worker_label": "worker-01",
+                        "task_index": 2,
+                    }
+                )
+
+            lock_dir = output_root / "others" / "openai-oauth-conversion-locks"
+            self.assertEqual(1, len(list(lock_dir.glob("*.json"))))
+
+            finalize_result = artifact_pool_team_batch.finalize_team_batch(
+                step_input={
+                    "output_dir": str(run_output_dir),
+                    "invite_result": {
+                        "successfulMemberEmails": ["member@example.com"],
+                    },
+                    "member_artifacts": result["members"],
+                }
+            )
+
+            self.assertEqual("restored", finalize_result["status"])
+            self.assertEqual([], list(lock_dir.glob("*.json")))
 
 
 class ArtifactPoolTeamBatchTests(unittest.TestCase):
@@ -234,16 +413,16 @@ class ArtifactPoolTeamBatchTests(unittest.TestCase):
                 }
             )
 
-            self.assertEqual("mixed", result["status"])
+            self.assertEqual("restored", result["status"])
             self.assertFalse(success_claimed.exists())
             self.assertFalse(retry_claimed.exists())
             self.assertTrue((team_pre_pool_dir / "retry.json").exists())
-            self.assertEqual(1, len(result["restored"]))
-            self.assertEqual(1, len(result["deleted"]))
+            self.assertEqual(2, len(result["restored"]))
+            self.assertEqual(0, len(result["deleted"]))
 
     def test_finalize_team_batch_restores_mother_after_soft_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            team_mother_pool_dir = Path(tmp_dir) / "team-mother-pool"
+            team_mother_pool_dir = Path(tmp_dir) / "codex" / "team-mother-input"
             team_mother_claims_dir = Path(tmp_dir) / "team-mother-claims"
             team_mother_pool_dir.mkdir(parents=True, exist_ok=True)
             team_mother_claims_dir.mkdir(parents=True, exist_ok=True)

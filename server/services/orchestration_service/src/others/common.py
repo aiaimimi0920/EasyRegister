@@ -25,7 +25,7 @@ from others.common_runtime import env_flag_value
 from others.common_runtime import free_manual_oauth_preserve_codes
 from others.common_runtime import free_manual_oauth_preserve_enabled
 from others.common_runtime import json_log
-from others.common_runtime import validate_small_success_seed_payload
+from others.common_runtime import validate_openai_oauth_seed_payload
 
 __all__ = [
     "DEFAULT_FREE_MANUAL_OAUTH_PRESERVE_ERROR_CODES",
@@ -50,6 +50,6 @@ __all__ = [
     "short_account_id_segment",
     "standardize_export_credential_payload",
     "team_mother_cooldown_key",
-    "validate_small_success_seed_payload",
+    "validate_openai_oauth_seed_payload",
     "write_json_atomic",
 ]

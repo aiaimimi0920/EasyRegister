@@ -5,7 +5,7 @@
     "name": "Codex Team Expand Flow",
     "platform": "codex-team",
     "kind": "semantic-flow",
-    "description": "Fill the team-pre pool from small_success artifacts, wait for a manually upgraded mother credential, then expand that mother workspace into one owner team credential plus four invited member team credentials.",
+    "description": "Fill the team-pre pool from openai_oauth artifacts, wait for a manually upgraded mother credential, then expand that mother workspace into one owner team credential plus four invited member team credentials.",
     "resourcePolicies": [],
     "metadata": {
       "taskRetry": {
@@ -27,7 +27,7 @@
         "type": "fill_team_pre_pool",
         "input": {
           "output_dir": "{{task.output_dir}}",
-          "pool_dir": "{{task.small_success_pool_dir}}",
+          "pool_dir": "{{task.openai_oauth_pool_dir}}",
           "team_pre_pool_dir": "{{task.team_pre_pool_dir}}",
           "max_move_count": "{{task.team_pre_fill_count}}"
         },

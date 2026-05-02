@@ -4,11 +4,11 @@ from pathlib import Path
 from typing import Any
 
 
-FREE_SMALL_SUCCESS_SOURCE_CANDIDATES: tuple[tuple[str, str], ...] = (
+FREE_OPENAI_OAUTH_SOURCE_CANDIDATES: tuple[tuple[str, str], ...] = (
     ("create-openai-account", "storage_path"),
     ("create_openai_account", "storage_path"),
-    ("acquire-small-success-artifact", "source_path"),
-    ("acquire-small-success-artifact", "claimed_path"),
+    ("acquire-openai-oauth-artifact", "source_path"),
+    ("acquire-openai-oauth-artifact", "claimed_path"),
 )
 
 TEAM_MOTHER_PATH_CANDIDATES: tuple[tuple[str, str], ...] = (
@@ -130,7 +130,7 @@ def team_auth_path(result_or_payload: Any, fallback_path: str) -> str:
 def restored_path_for_source(result_or_payload: Any, source_path: Path) -> Path | None:
     normalized_source = str(source_path).lower()
 
-    finalize_small = output_dict(result_or_payload, "finalize-small-success-artifact")
+    finalize_small = output_dict(result_or_payload, "finalize-openai-oauth-artifact")
     claimed_path = str(finalize_small.get("claimed_path") or "").strip()
     restored_path = str(finalize_small.get("restored_path") or "").strip()
     if claimed_path and restored_path and normalized_source == str(Path(claimed_path).resolve()).lower():
@@ -177,7 +177,7 @@ def credential_backwrite_actions(result_or_payload: Any) -> list[dict[str, Any]]
 
     codex_success = output_text(result_or_payload, "obtain-codex-oauth", "successPath")
     if codex_success:
-        for source_path in all_output_texts(result_or_payload, FREE_SMALL_SUCCESS_SOURCE_CANDIDATES):
+        for source_path in all_output_texts(result_or_payload, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES):
             actions.append(
                 {
                     "kind": "generic_oauth_refresh",

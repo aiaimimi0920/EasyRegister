@@ -31,7 +31,7 @@ class DashboardIntegrationTests(unittest.TestCase):
                 worker_count=1,
                 delay_seconds=1.0,
                 worker_stagger_seconds=0.0,
-                small_success_pool_dir=str(shared_root / "small-success-pool"),
+                openai_oauth_pool_dir=str(shared_root / "openai" / "pending"),
             )
             service_state.started(pid=1234, max_runs=0)
             worker_state = dashboard_server.WorkerRuntimeState(
@@ -57,8 +57,8 @@ class DashboardIntegrationTests(unittest.TestCase):
                 output_dir=str(output_root / "run-1"),
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
-            (shared_root / "small-success-pool").mkdir(parents=True, exist_ok=True)
-            (shared_root / "small-success-pool" / "artifact.json").write_text("{}", encoding="utf-8")
+            (shared_root / "openai" / "pending").mkdir(parents=True, exist_ok=True)
+            (shared_root / "openai" / "pending" / "artifact.json").write_text("{}", encoding="utf-8")
 
             with mock.patch.object(
                 dashboard_server.DashboardHTTPServer,
@@ -96,5 +96,6 @@ class DashboardIntegrationTests(unittest.TestCase):
         self.assertEqual(0, payload["pipelines"]["main"]["activeWorkers"])
         self.assertEqual(1, payload["recentUploads"]["count"])
         self.assertEqual("oauth/artifact.json", payload["recentUploads"]["items"][0]["objectKey"])
+        self.assertEqual(1, payload["openaiOauthPool"]["size"])
         self.assertEqual(1, payload["smallSuccessPool"]["size"])
         self.assertEqual("PythonProtocol-1", payload["executors"][0]["service"])
