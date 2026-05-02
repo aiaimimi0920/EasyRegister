@@ -126,7 +126,7 @@ def _build_management_opener(base_url: str) -> urllib.request.OpenerDirector:
         "localhost",
         "::1",
         "0.0.0.0",
-        "easy-proxy-service",
+        "easy-proxy",
         "easy-proxy-monorepo-service",
     )
     if not should_bypass_proxy and host:

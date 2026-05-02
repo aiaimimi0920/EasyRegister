@@ -169,7 +169,7 @@ class TypedConfigTests(unittest.TestCase):
             config = ProxyRuntimeConfig.from_env(
                 default_management_base_url="http://default:9888",
                 default_ttl_minutes=30,
-                default_runtime_host="easy-proxy-service",
+                default_runtime_host="easy-proxy",
                 default_mode="auto",
                 running_in_docker=True,
             )
@@ -178,7 +178,7 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual("random-node", config.mode)
         self.assertEqual("http://manager:9888", config.management_base_url)
         self.assertEqual(5, config.unique_attempts)
-        self.assertEqual("easy-proxy-service", config.runtime_host)
+        self.assertEqual("easy-proxy", config.runtime_host)
 
     def test_mailbox_runtime_config_supports_fallback_env_names_and_percent_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

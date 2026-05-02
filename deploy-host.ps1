@@ -7,6 +7,7 @@ param(
     [string]$CodexTeamInputDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
     [string]$CodexTeamMotherInputDirHost = "",
     [string]$DashboardPortHost = "19790",
+    [string]$ComposeProjectName = "easy-register",
     [ValidateSet("Auto", "Junction", "SymbolicLink")]
     [string]$LinkType = "Auto",
     [switch]$ForceLinks,
@@ -31,7 +32,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$defaultEasyProxyBaseUrl = "http://easy-proxy-service:29888"
+$defaultEasyProxyBaseUrl = "http://easy-proxy:29888"
 $defaultDashboardControlToken = "easyregister-dashboard-local-token"
 $defaultDashboardListen = "0.0.0.0:9790"
 
@@ -280,6 +281,7 @@ $deployArgs = @(
     "-ExecutionPolicy", "Bypass",
     "-File", (Join-Path $repoRoot "scripts\deploy-compose.ps1"),
     "-ComposeFile", $resolvedComposeFile,
+    "-ComposeProjectName", $ComposeProjectName,
     "-OutputDirHost", $resolvedOutputDirHost,
     "-LinkType", $LinkType
 )

@@ -17,8 +17,8 @@ from shared_proxy import env_flag
 
 DEFAULT_ORCHESTRATION_HOST_ID = "python-register-orchestration"
 DEFAULT_EASY_PROXY_BASE_URL_HOST = "http://localhost:19888"
-DEFAULT_EASY_PROXY_BASE_URL_DOCKER = "http://easy-proxy-service:29888"
-DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER = "easy-proxy-service"
+DEFAULT_EASY_PROXY_BASE_URL_DOCKER = "http://easy-proxy:29888"
+DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER = "easy-proxy"
 DEFAULT_EASY_PROXY_TTL_MINUTES = 30
 DEFAULT_EASY_PROXY_MODE = "auto"
 

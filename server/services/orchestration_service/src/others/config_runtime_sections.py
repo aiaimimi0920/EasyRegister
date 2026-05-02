@@ -394,7 +394,7 @@ class RunnerMainConfig:
             free_oauth_pool_dir=Path(resolve_free_oauth_pool_dir(str(output_root))).resolve(),
             instance_id=instance_id,
             instance_role=instance_role,
-            easy_protocol_base_url=env_text("EASY_PROTOCOL_BASE_URL", "http://easy-protocol-service:9788"),
+            easy_protocol_base_url=env_text("EASY_PROTOCOL_BASE_URL", "http://easy-protocol:9788"),
             easy_protocol_control_token=env_text("EASY_PROTOCOL_CONTROL_TOKEN", ""),
             easy_protocol_control_actor=env_text("EASY_PROTOCOL_CONTROL_ACTOR", "register-dashboard"),
         )

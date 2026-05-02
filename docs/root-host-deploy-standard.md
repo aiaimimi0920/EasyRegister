@@ -28,3 +28,13 @@ The contract for that file is:
    without launching the full runtime.
 
 Future deploy changes must preserve this contract.
+
+## Canonical Docker Naming
+
+This repo must keep the short slug `easy-register` as the operator-facing
+default. Preserve:
+
+- Docker Compose project name `easy-register`
+- role container names `easy-register-main`, `easy-register-continue`,
+  `easy-register-team`
+- default local image name `easy-register/easy-register:local`

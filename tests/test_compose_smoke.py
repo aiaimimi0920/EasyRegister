@@ -19,9 +19,9 @@ class ComposeSmokeTests(unittest.TestCase):
     def test_test_compose_keeps_isolated_contract_strings(self) -> None:
         payload = TEST_COMPOSE_PATH.read_text(encoding="utf-8")
         for expected in (
-            "easyregister-test-main",
-            "easyregister-test-continue",
-            "easyregister-test-team",
+            "easy-register-main",
+            "easy-register-continue",
+            "easy-register-team",
             "29790",
             "tmp/easyregister-test-output",
             "EasyAiMi",

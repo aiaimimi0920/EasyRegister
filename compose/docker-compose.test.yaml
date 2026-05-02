@@ -1,11 +1,11 @@
 x-easyregister-test-env: &easyregister-test-env
-  EASY_PROTOCOL_BASE_URL: ${EASYREGISTER_TEST_EASY_PROTOCOL_BASE_URL:-http://easy-protocol-service:9788}
+  EASY_PROTOCOL_BASE_URL: ${EASYREGISTER_TEST_EASY_PROTOCOL_BASE_URL:-http://easy-protocol:9788}
   EASY_PROTOCOL_CONTROL_TOKEN: ${EASYREGISTER_TEST_EASY_PROTOCOL_CONTROL_TOKEN:-}
   EASY_PROTOCOL_CONTROL_ACTOR: ${EASYREGISTER_TEST_EASY_PROTOCOL_CONTROL_ACTOR:-easyregister-test-dashboard}
   EASY_PROTOCOL_TIMEOUT_SECONDS: ${EASYREGISTER_TEST_EASY_PROTOCOL_TIMEOUT_SECONDS:-900}
-  MAILBOX_SERVICE_BASE_URL: ${EASYREGISTER_TEST_MAILBOX_SERVICE_BASE_URL:-http://easy-email-service:8080}
+  MAILBOX_SERVICE_BASE_URL: ${EASYREGISTER_TEST_MAILBOX_SERVICE_BASE_URL:-http://easy-email:8080}
   MAILBOX_SERVICE_API_KEY: ${EASYREGISTER_TEST_MAILBOX_SERVICE_API_KEY:-}
-  EASY_PROXY_BASE_URL: ${EASYREGISTER_TEST_EASY_PROXY_BASE_URL:-http://easy-proxy-service:29888}
+  EASY_PROXY_BASE_URL: ${EASYREGISTER_TEST_EASY_PROXY_BASE_URL:-http://easy-proxy:29888}
   EASY_PROXY_API_KEY: ${EASYREGISTER_TEST_EASY_PROXY_API_KEY:-}
   REGISTER_ENABLE_EASY_PROXY: ${EASYREGISTER_TEST_ENABLE_EASY_PROXY:-true}
   REGISTER_REQUIRE_EASY_PROXY: ${EASYREGISTER_TEST_REQUIRE_EASY_PROXY:-true}
@@ -30,7 +30,7 @@ x-easyregister-test-common: &easyregister-test-common
     dockerfile: deploy/Dockerfile
     args:
       REGISTER_SERVICE_BASE_IMAGE: ${EASYREGISTER_TEST_BASE_IMAGE:-python:3.10-bookworm}
-  image: ${EASYREGISTER_TEST_IMAGE:-easyregister/easyregister-test:local}
+  image: ${EASYREGISTER_TEST_IMAGE:-easy-register/easy-register:local}
   restart: unless-stopped
   volumes:
     - ${EASYREGISTER_TEST_OUTPUT_DIR_HOST:-../tmp/easyregister-test-output}:/shared/register-output
@@ -41,12 +41,12 @@ x-easyregister-test-common: &easyregister-test-common
     - EasyAiMi
 
 services:
-  easyregister-test-main:
+  easy-register-main:
     <<: *easyregister-test-common
-    container_name: easyregister-test-main
+    container_name: easy-register-main
     environment:
       <<: *easyregister-test-env
-      REGISTER_INSTANCE_ID: easyregister-test-main
+      REGISTER_INSTANCE_ID: easy-register-main
       REGISTER_INSTANCE_ROLE: main
       REGISTER_MAILBOX_ROUTING_PROFILE_ID: ${EASYREGISTER_TEST_MAIN_MAILBOX_ROUTING_PROFILE_ID:-}
       REGISTER_MAILBOX_STRATEGY_MODE_ID: ${EASYREGISTER_TEST_MAIN_MAILBOX_STRATEGY_MODE_ID:-}
@@ -75,12 +75,12 @@ services:
     ports:
       - ${EASYREGISTER_TEST_DASHBOARD_PORT_HOST:-29790}:9790
 
-  easyregister-test-continue:
+  easy-register-continue:
     <<: *easyregister-test-common
-    container_name: easyregister-test-continue
+    container_name: easy-register-continue
     environment:
       <<: *easyregister-test-env
-      REGISTER_INSTANCE_ID: easyregister-test-continue
+      REGISTER_INSTANCE_ID: easy-register-continue
       REGISTER_INSTANCE_ROLE: continue
       REGISTER_MAILBOX_ROUTING_PROFILE_ID: ${EASYREGISTER_TEST_CONTINUE_MAILBOX_ROUTING_PROFILE_ID:-}
       REGISTER_MAILBOX_STRATEGY_MODE_ID: ${EASYREGISTER_TEST_CONTINUE_MAILBOX_STRATEGY_MODE_ID:-}
@@ -103,12 +103,12 @@ services:
       REGISTER_FLOW_PATH: /app/server/services/orchestration_service/flows/codex-openai-oauth-continue-v1.semantic-flow.json
       REGISTER_DASHBOARD_ENABLED: "false"
 
-  easyregister-test-team:
+  easy-register-team:
     <<: *easyregister-test-common
-    container_name: easyregister-test-team
+    container_name: easy-register-team
     environment:
       <<: *easyregister-test-env
-      REGISTER_INSTANCE_ID: easyregister-test-team
+      REGISTER_INSTANCE_ID: easy-register-team
       REGISTER_INSTANCE_ROLE: team
       REGISTER_MAILBOX_ROUTING_PROFILE_ID: ${EASYREGISTER_TEST_TEAM_MAILBOX_ROUTING_PROFILE_ID:-}
       REGISTER_MAILBOX_STRATEGY_MODE_ID: ${EASYREGISTER_TEST_TEAM_MAILBOX_STRATEGY_MODE_ID:-}

@@ -119,10 +119,10 @@ class EasyEmailRuntimeTests(unittest.TestCase):
 
 class RuntimeProxySupportTests(unittest.TestCase):
     def test_runtime_reachable_proxy_url_rewrites_localhost_when_runtime_host_is_set(self) -> None:
-        with mock.patch.object(runtime_proxy_support, "resolve_easy_proxy_runtime_host", return_value="easy-proxy-service"):
+        with mock.patch.object(runtime_proxy_support, "resolve_easy_proxy_runtime_host", return_value="easy-proxy"):
             rewritten = runtime_proxy_support.runtime_reachable_proxy_url("http://127.0.0.1:8080")
 
-        self.assertEqual("http://easy-proxy-service:8080", rewritten)
+        self.assertEqual("http://easy-proxy:8080", rewritten)
 
     def test_flow_network_env_clears_proxy_vars_when_easy_proxy_disabled(self) -> None:
         env = {

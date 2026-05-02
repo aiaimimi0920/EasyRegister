@@ -1,23 +1,23 @@
 services:
-  register-service:
+  easy-register-main:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
       args:
-        REGISTER_SERVICE_BASE_IMAGE: ${REGISTER_SERVICE_BASE_IMAGE:-registerservice/register-service:local}
-    image: ${REGISTER_SERVICE_IMAGE:-registerservice/register-service:local}
-    container_name: register-service
+        REGISTER_SERVICE_BASE_IMAGE: ${REGISTER_SERVICE_BASE_IMAGE:-easy-register/easy-register:local}
+    image: ${REGISTER_SERVICE_IMAGE:-easy-register/easy-register:local}
+    container_name: easy-register-main
     restart: unless-stopped
     environment:
-      REGISTER_INSTANCE_ID: main
+      REGISTER_INSTANCE_ID: easy-register-main
       REGISTER_INSTANCE_ROLE: main
-      EASY_PROTOCOL_BASE_URL: http://easy-protocol-service:9788
+      EASY_PROTOCOL_BASE_URL: http://easy-protocol:9788
       EASY_PROTOCOL_CONTROL_TOKEN: ${EASY_PROTOCOL_CONTROL_TOKEN:-}
       EASY_PROTOCOL_CONTROL_ACTOR: ${EASY_PROTOCOL_CONTROL_ACTOR:-register-dashboard}
       EASY_PROTOCOL_TIMEOUT_SECONDS: "900"
-      MAILBOX_SERVICE_BASE_URL: http://easy-email-service:8080
+      MAILBOX_SERVICE_BASE_URL: http://easy-email:8080
       MAILBOX_SERVICE_API_KEY: ${MAILBOX_SERVICE_API_KEY}
-  EASY_PROXY_BASE_URL: http://easy-proxy-service:29888
+      EASY_PROXY_BASE_URL: http://easy-proxy:29888
       EASY_PROXY_API_KEY: ${EASY_PROXY_API_KEY}
       REGISTER_ENABLE_EASY_PROXY: "true"
       REGISTER_REQUIRE_EASY_PROXY: "true"
@@ -68,18 +68,18 @@ services:
     networks:
       - EasyAiMi
 
-  register-continue-service:
-    image: ${REGISTER_SERVICE_IMAGE:-registerservice/register-service:local}
-    container_name: register-continue-service
+  easy-register-continue:
+    image: ${REGISTER_SERVICE_IMAGE:-easy-register/easy-register:local}
+    container_name: easy-register-continue
     restart: unless-stopped
     environment:
-      REGISTER_INSTANCE_ID: continue
+      REGISTER_INSTANCE_ID: easy-register-continue
       REGISTER_INSTANCE_ROLE: continue
-      EASY_PROTOCOL_BASE_URL: http://easy-protocol-service:9788
+      EASY_PROTOCOL_BASE_URL: http://easy-protocol:9788
       EASY_PROTOCOL_TIMEOUT_SECONDS: "900"
-      MAILBOX_SERVICE_BASE_URL: http://easy-email-service:8080
+      MAILBOX_SERVICE_BASE_URL: http://easy-email:8080
       MAILBOX_SERVICE_API_KEY: ${MAILBOX_SERVICE_API_KEY}
-  EASY_PROXY_BASE_URL: http://easy-proxy-service:29888
+      EASY_PROXY_BASE_URL: http://easy-proxy:29888
       EASY_PROXY_API_KEY: ${EASY_PROXY_API_KEY}
       REGISTER_ENABLE_EASY_PROXY: "true"
       REGISTER_REQUIRE_EASY_PROXY: "true"
@@ -124,18 +124,18 @@ services:
     networks:
       - EasyAiMi
 
-  register-team-service:
-    image: ${REGISTER_SERVICE_IMAGE:-registerservice/register-service:local}
-    container_name: register-team-service
+  easy-register-team:
+    image: ${REGISTER_SERVICE_IMAGE:-easy-register/easy-register:local}
+    container_name: easy-register-team
     restart: unless-stopped
     environment:
-      REGISTER_INSTANCE_ID: team
+      REGISTER_INSTANCE_ID: easy-register-team
       REGISTER_INSTANCE_ROLE: team
-      EASY_PROTOCOL_BASE_URL: http://easy-protocol-service:9788
+      EASY_PROTOCOL_BASE_URL: http://easy-protocol:9788
       EASY_PROTOCOL_TIMEOUT_SECONDS: "900"
-      MAILBOX_SERVICE_BASE_URL: http://easy-email-service:8080
+      MAILBOX_SERVICE_BASE_URL: http://easy-email:8080
       MAILBOX_SERVICE_API_KEY: ${MAILBOX_SERVICE_API_KEY}
-  EASY_PROXY_BASE_URL: http://easy-proxy-service:29888
+      EASY_PROXY_BASE_URL: http://easy-proxy:29888
       EASY_PROXY_API_KEY: ${EASY_PROXY_API_KEY}
       REGISTER_ENABLE_EASY_PROXY: "true"
       REGISTER_REQUIRE_EASY_PROXY: "true"

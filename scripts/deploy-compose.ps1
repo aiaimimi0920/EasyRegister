@@ -1,5 +1,6 @@
 param(
     [string]$ComposeFile = "",
+    [string]$ComposeProjectName = "",
     [string]$OutputDirHost = $env:REGISTER_OUTPUT_DIR_HOST,
     [string]$AliasRootHost = $env:REGISTER_OUTPUT_ALIAS_ROOT_HOST,
     [ValidateSet("Auto", "Junction", "SymbolicLink")]
@@ -56,7 +57,13 @@ if (-not $SkipMaterialize) {
     & powershell @materializeArgs
 }
 
-$composeArgs = @("compose", "-f", $resolvedComposeFile, "up")
+$resolvedComposeProjectName = if ([string]::IsNullOrWhiteSpace($ComposeProjectName)) {
+    'easy-register'
+} else {
+    $ComposeProjectName
+}
+
+$composeArgs = @("compose", "-p", $resolvedComposeProjectName, "-f", $resolvedComposeFile, "up")
 if (-not $NoDetach) {
     $composeArgs += "-d"
 }

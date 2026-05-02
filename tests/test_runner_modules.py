@@ -283,7 +283,7 @@ class RunnerProcessSupervisorTests(unittest.TestCase):
             max_runs=1,
             task_max_attempts=1,
             flow_specs=(),
-            easy_protocol_base_url="http://easy-protocol-service:9788",
+            easy_protocol_base_url="http://easy-protocol:9788",
             easy_protocol_control_token="secure-token",
             easy_protocol_control_actor="register-dashboard",
         )
