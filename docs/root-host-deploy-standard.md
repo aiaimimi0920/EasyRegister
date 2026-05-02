@@ -26,6 +26,9 @@ The contract for that file is:
 9. The script should expose at least one no-side-effect self-check mode such
    as `-ResolveRepoOnly`, so future maintainers can verify the bootstrap path
    without launching the full runtime.
+10. The default Docker deployment path must not bind-mount repository source
+    files such as `../server` into `/app/server`, because that breaks GHCR
+    image verification and lets stale repo-cache content override the image.
 
 Future deploy changes must preserve this contract.
 

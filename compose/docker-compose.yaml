@@ -81,8 +81,6 @@ services:
     volumes:
       - ${REGISTER_OUTPUT_DIR_HOST}:/shared/register-output
       - ${REGISTER_TEAM_AUTH_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/team-auth:ro
-      - ../server:/app/server
-      - ../README.md:/app/README.md:ro
     ports:
       - ${REGISTER_DASHBOARD_PORT_HOST:-19790}:9790
     networks:

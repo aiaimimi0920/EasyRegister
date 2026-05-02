@@ -77,8 +77,6 @@ x-easyregister-test-common: &easyregister-test-common
   volumes:
     - ${EASYREGISTER_TEST_OUTPUT_DIR_HOST:-../tmp/easyregister-test-output}:/shared/register-output
     - ${EASYREGISTER_TEST_TEAM_AUTH_DIR_HOST:-../tmp/easyregister-test-team-auth}:/shared/team-auth:ro
-    - ../server:/app/server
-    - ../README.md:/app/README.md:ro
   networks:
     - EasyAiMi
 
