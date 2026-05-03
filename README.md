@@ -128,6 +128,13 @@
 - 运行态统计会按 task / flow 实际携带的 `businessKey` 分桶记录
 - 如果当前业务显式拉黑某个域名，后续申请到该域名会立即释放并重新申请
 - 对 `moemail` 这类业务邮箱，如果实际返回域名不在当前业务配置的域名池里，也会立即丢弃并重申请
+- 当前仓库默认 `openai` 业务显式忽略这些邮箱后缀：
+  - `coolkid.icu`
+  - `shaole.me`
+  - `cpu.edu.kg`
+  - `tmail.bio`
+  - `do4.tech`
+- 这批后缀是通过 `REGISTER_MAILBOX_BUSINESS_POLICIES_JSON` 配的，可直接从配置里删掉后恢复使用
 - 当前默认策略下，只有明确命中 `unsupported_email` 这类“业务明确不支持该邮箱域”的结果，才建议进入业务黑名单
 - 像 `cksa.eu.cc` 这种当前阶段高失败、但仍可能偶发通过的域名，默认只做统计，不会因为失败率高就自动进入业务黑名单
 
@@ -251,6 +258,14 @@ python -m infinite_runner
   - `REGISTER_MAIN_CONCURRENCY_LIMIT=5`
   - `REGISTER_CONTINUE_CONCURRENCY_LIMIT=2`
   - `REGISTER_TEAM_CONCURRENCY_LIMIT=1`
+- 显式写入邮箱业务策略：
+  - `REGISTER_MAILBOX_BUSINESS_POLICIES_JSON`
+  - 默认 `openai` 黑名单包含：
+    - `coolkid.icu`
+    - `shaole.me`
+    - `cpu.edu.kg`
+    - `tmail.bio`
+    - `do4.tech`
 - 自动物化目录联接
 - 然后执行 `docker compose up`
 

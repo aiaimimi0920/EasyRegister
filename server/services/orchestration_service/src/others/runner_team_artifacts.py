@@ -200,6 +200,19 @@ def sync_team_member_artifacts_from_active_claims(
             if not success_path.is_file():
                 continue
             try:
+                try:
+                    if success_path.parent.resolve() == local_dir.resolve():
+                        localized.append(
+                            {
+                                "claim_path": str(claim_path),
+                                "source_path": str(success_path),
+                                "email": str(artifact.get("email") or "").strip(),
+                                "stored_path": str(success_path),
+                            }
+                        )
+                        continue
+                except Exception:
+                    pass
                 prepared_artifact = prepare_team_artifact(source_path=success_path, is_mother=False)
                 route_result = route_prepared_artifact(
                     prepared_artifact,
@@ -281,6 +294,18 @@ def drain_oauth_pool_backlog(
 ) -> dict[str, Any]:
     if not pool_dir.is_dir():
         return {"ok": True, "status": "idle", "uploaded": [], "failures": []}
+    if local_dir is not None:
+        try:
+            if pool_dir.resolve() == local_dir.resolve():
+                return {
+                    "ok": True,
+                    "status": "same-dir-skipped",
+                    "uploaded": [],
+                    "localized": [],
+                    "failures": [],
+                }
+        except Exception:
+            pass
 
     uploaded: list[dict[str, Any]] = []
     localized: list[dict[str, Any]] = []

@@ -26,8 +26,10 @@ x-easyregister-test-env: &easyregister-test-env
   REGISTER_MAILBOX_ROUTING_PROFILE_ID: ${EASYREGISTER_TEST_MAILBOX_ROUTING_PROFILE_ID:-}
   REGISTER_MAILBOX_STRATEGY_MODE_ID: ${EASYREGISTER_TEST_MAILBOX_STRATEGY_MODE_ID:-}
   REGISTER_MAILBOX_PROVIDERS: ${EASYREGISTER_TEST_MAILBOX_PROVIDERS:-}
+  REGISTER_MAILBOX_DOMAIN_BLACKLIST: ${EASYREGISTER_TEST_MAILBOX_DOMAIN_BLACKLIST:-${REGISTER_MAILBOX_DOMAIN_BLACKLIST:-}}
+  REGISTER_MAILBOX_BUSINESS_POLICIES_JSON: "${EASYREGISTER_TEST_MAILBOX_BUSINESS_POLICIES_JSON:-${REGISTER_MAILBOX_BUSINESS_POLICIES_JSON:-}}"
   REGISTER_OUTPUT_ROOT: /shared/register-output/others/mixed-runs
-  REGISTER_INSTANCE_ID: easy-register-test
+  REGISTER_INSTANCE_ID: ${EASYREGISTER_TEST_INSTANCE_ID:-easy-register-test}
   REGISTER_INSTANCE_ROLE: mixed
   REGISTER_OPENAI_OAUTH_POOL_DIR: /shared/register-output/openai/pending
   REGISTER_OPENAI_OAUTH_SUCCESS_POOL_DIR: /shared/register-output/openai/converted
@@ -85,12 +87,14 @@ x-easyregister-test-common: &easyregister-test-common
     - ${EASYREGISTER_TEST_OUTPUT_DIR_HOST:-../tmp/easyregister-test-output}:/shared/register-output
     - ${EASYREGISTER_TEST_TEAM_AUTH_DIR_HOST:-../tmp/easyregister-test-team-auth}:/shared/team-auth:ro
   networks:
-    - EasyAiMi
+    easy-register-test-net:
+      aliases:
+        - ${EASYREGISTER_TEST_NETWORK_ALIAS:-easy-register-test}
 
 services:
   easy-register-test:
     <<: *easyregister-test-common
-    container_name: easy-register-test
+    container_name: ${EASYREGISTER_TEST_CONTAINER_NAME:-easy-register-test}
     environment:
       <<: *easyregister-test-env
       REGISTER_DASHBOARD_ENABLED: ${EASYREGISTER_TEST_DASHBOARD_ENABLED:-true}
@@ -101,5 +105,6 @@ services:
       - ${EASYREGISTER_TEST_DASHBOARD_PORT_HOST:-29790}:9790
 
 networks:
-  EasyAiMi:
-    external: true
+  easy-register-test-net:
+    name: ${EASYREGISTER_TEST_DOCKER_NETWORK_NAME:-EasyAiMi}
+    external: ${EASYREGISTER_TEST_DOCKER_NETWORK_EXTERNAL:-true}

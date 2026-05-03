@@ -258,6 +258,79 @@ class RunnerTeamArtifactsTests(unittest.TestCase):
             )
             self.assertTrue(runner_team_artifacts.team_has_collectable_artifacts(result=result))
 
+    def test_drain_oauth_pool_backlog_skips_when_pool_matches_local_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pool_dir = Path(tmp_dir) / "free"
+            pool_dir.mkdir(parents=True, exist_ok=True)
+            marker_path = pool_dir / "a.json"
+            marker_path.write_text("", encoding="utf-8")
+
+            result = runner_team_artifacts.drain_oauth_pool_backlog(
+                pool_dir=pool_dir,
+                target_folder="codex",
+                local_percent=100.0,
+                local_dir=pool_dir,
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual("same-dir-skipped", result["status"])
+            self.assertTrue(marker_path.is_file())
+            self.assertEqual("", marker_path.read_text(encoding="utf-8"))
+
+    def test_sync_team_member_artifacts_skips_when_success_path_already_in_local_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared-root"
+            output_root = shared_root / "others" / "mixed-runs"
+            claims_dir = shared_root / "others" / "team-mother-claims"
+            local_dir = shared_root / "codex" / "team"
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            local_dir.mkdir(parents=True, exist_ok=True)
+
+            existing_team_path = local_dir / "member-existing.json"
+            existing_team_path.write_text("{}", encoding="utf-8")
+            before_hash = existing_team_path.read_text(encoding="utf-8")
+            before_mtime = existing_team_path.stat().st_mtime
+
+            claim_path = claims_dir / "claim.json"
+            claim_path.write_text(
+                json.dumps(
+                    {
+                        "teamFlow": {
+                            "teamExpandProgress": {
+                                "successfulArtifacts": [
+                                    {
+                                        "email": "member@example.com",
+                                        "successPath": str(existing_team_path),
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_TEAM_LOCAL_DIR": str(local_dir),
+                    "REGISTER_TEAM_LOCAL_SPLIT_PERCENT": "100",
+                },
+                clear=False,
+            ):
+                result = runner_team_artifacts.sync_team_member_artifacts_from_active_claims(
+                    output_root=output_root,
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertIn(result["status"], {"processed", "idle"})
+            self.assertTrue(existing_team_path.is_file())
+            self.assertEqual(before_hash, existing_team_path.read_text(encoding="utf-8"))
+            self.assertEqual(before_mtime, existing_team_path.stat().st_mtime)
+            self.assertEqual(1, len(result["localized"]))
+            self.assertEqual(str(existing_team_path), result["localized"][0]["stored_path"])
+
 
 class RunnerFlowSchedulerTests(unittest.TestCase):
     def test_choose_runnable_flow_spec_skips_empty_continue_pool(self) -> None:

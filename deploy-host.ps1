@@ -5,6 +5,8 @@ param(
     [string]$ComposeFile = "",
     [string]$MailboxServiceBaseUrl = "http://easy-email:8080",
     [string]$MailboxServiceApiKey = "J7L+RCwLIBEcMZHzz0rXjm4oyR9rymq9",
+    [string]$MailboxDomainBlacklist = "",
+    [string]$MailboxBusinessPoliciesJson = "",
     [string]$EasyProxyBaseUrl = "http://easy-proxy:29888",
     [string]$EasyProxyApiKey = "YP9l2DecuS_MRhARQu5v829VFOWKar7S",
     [string]$TeamAuthDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
@@ -22,6 +24,12 @@ param(
     [double]$CodexPlusUploadPercent = 0,
     [string]$DashboardPortHost = "19790",
     [string]$ComposeProjectName = "easy-register",
+    [string]$ContainerName = "easy-register",
+    [string]$InstanceId = "easy-register",
+    [string]$NetworkAlias = "easy-register",
+    [string]$DockerNetworkName = "EasyAiMi",
+    [ValidateSet("true", "false")]
+    [string]$DockerNetworkExternal = "true",
     [ValidateSet("Auto", "Junction", "SymbolicLink")]
     [string]$LinkType = "Auto",
     [switch]$ForceLinks,
@@ -53,6 +61,7 @@ foreach ($entry in $PSBoundParameters.GetEnumerator()) {
 $defaultEasyProxyBaseUrl = "http://easy-proxy:29888"
 $defaultDashboardControlToken = "easyregister-dashboard-local-token"
 $defaultDashboardListen = "0.0.0.0:9790"
+$defaultMailboxBusinessPoliciesJson = '{"openai":{"domainPool":["cnmlgb.de","zhooo.org","zhooo.ggff.net","coolkidsa.ggff.net"],"explicitBlacklistDomains":["coolkid.icu","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"]}}'
 
 function Resolve-AbsolutePath {
     param(
@@ -107,6 +116,143 @@ function Write-ComposeEnvFile {
         New-Item -ItemType Directory -Force -Path $parent | Out-Null
     }
     Set-Content -LiteralPath $Path -Value $lines -Encoding ASCII
+}
+
+function Get-LinkTargetPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    try {
+        $resolved = [System.IO.Directory]::ResolveLinkTarget($Path, $false)
+        if ($null -ne $resolved) {
+            return [System.IO.Path]::GetFullPath($resolved.FullName)
+        }
+    } catch {
+    }
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    $candidates = @()
+    if ($item.PSObject.Properties.Name -contains "LinkTarget") {
+        $candidates += $item.LinkTarget
+    }
+    if ($item.PSObject.Properties.Name -contains "Target") {
+        $candidates += $item.Target
+    }
+    foreach ($candidate in $candidates) {
+        if ($null -eq $candidate) {
+            continue
+        }
+        foreach ($value in @($candidate)) {
+            $text = [string]$value
+            if ([string]::IsNullOrWhiteSpace($text)) {
+                continue
+            }
+            if (-not [System.IO.Path]::IsPathRooted($text)) {
+                $text = Join-Path (Split-Path -Parent $Path) $text
+            }
+            return [System.IO.Path]::GetFullPath($text)
+        }
+    }
+    return $null
+}
+
+function Convert-HostPathToContainerMirrorPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $normalized = [System.IO.Path]::GetFullPath($Path)
+    if ($normalized -match '^(?<drive>[A-Za-z]):\\(?<rest>.*)$') {
+        $drive = $matches['drive'].ToLowerInvariant()
+        $rest = ($matches['rest'] -replace '\\', '/').TrimStart('/')
+        if ([string]::IsNullOrWhiteSpace($rest)) {
+            return "/mnt/host/$drive"
+        }
+        return "/mnt/host/$drive/$rest"
+    }
+    if ($normalized.StartsWith('\\')) {
+        $trimmed = $normalized.TrimStart('\')
+        $parts = $trimmed -split '\\+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        if ($parts.Count -ge 2) {
+            return "/mnt/host/unc/$($parts -join '/')"
+        }
+    }
+    throw "Cannot derive container mirror path for host path: $normalized"
+}
+
+function Convert-HostPathToComposeSource {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    return ([System.IO.Path]::GetFullPath($Path) -replace '\\', '/')
+}
+
+function New-AliasMountOverrideFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OutputDirHost,
+        [Parameter(Mandatory = $true)]
+        [string]$OverridePath
+    )
+
+    $aliasMappings = @(
+        'codex/free',
+        'codex/team',
+        'codex/plus',
+        'codex/team-input',
+        'codex/team-mother-input'
+    )
+
+    $mounts = @()
+    foreach ($relative in $aliasMappings) {
+        $localPath = Resolve-AbsolutePath -Path $relative -BaseDir $OutputDirHost
+        if (-not (Test-Path -LiteralPath $localPath)) {
+            continue
+        }
+        $item = Get-Item -LiteralPath $localPath -Force -ErrorAction Stop
+        $isReparsePoint = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+        if (-not $isReparsePoint) {
+            continue
+        }
+        $targetPath = Get-LinkTargetPath -Path $localPath
+        if ([string]::IsNullOrWhiteSpace($targetPath)) {
+            continue
+        }
+        $normalizedLocal = [System.IO.Path]::GetFullPath($localPath)
+        $normalizedTarget = [System.IO.Path]::GetFullPath($targetPath)
+        if ($normalizedLocal -eq $normalizedTarget) {
+            continue
+        }
+        $mounts += [pscustomobject]@{
+            RelativePath = $relative
+            SourcePath = $normalizedTarget
+            TargetPath = Convert-HostPathToContainerMirrorPath -Path $normalizedTarget
+        }
+    }
+
+    if ($mounts.Count -eq 0) {
+        if (Test-Path -LiteralPath $OverridePath) {
+            Remove-Item -LiteralPath $OverridePath -Force
+        }
+        return @()
+    }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('services:')
+    $lines.Add('  easy-register:')
+    $lines.Add('    volumes:')
+    foreach ($mount in $mounts) {
+        $lines.Add('      - type: bind')
+        $lines.Add(("        source: ""{0}""" -f (Convert-HostPathToComposeSource -Path $mount.SourcePath)))
+        $lines.Add(("        target: ""{0}""" -f $mount.TargetPath))
+    }
+    Set-Content -LiteralPath $OverridePath -Value $lines -Encoding ASCII
+    return $mounts
 }
 
 function Read-DotEnvFile {
@@ -326,6 +472,8 @@ function Resolve-EnvValue {
 
 $resolvedMailboxServiceBaseUrl = Resolve-EnvValue -ParameterName 'MailboxServiceBaseUrl' -RuntimeKey 'MAILBOX_SERVICE_BASE_URL' -Fallback 'http://easy-email:8080'
 $resolvedMailboxServiceApiKey = Resolve-EnvValue -ParameterName 'MailboxServiceApiKey' -RuntimeKey 'MAILBOX_SERVICE_API_KEY' -Fallback 'J7L+RCwLIBEcMZHzz0rXjm4oyR9rymq9'
+$resolvedMailboxDomainBlacklist = Resolve-EnvValue -ParameterName 'MailboxDomainBlacklist' -RuntimeKey 'REGISTER_MAILBOX_DOMAIN_BLACKLIST' -Fallback ''
+$resolvedMailboxBusinessPoliciesJson = Resolve-EnvValue -ParameterName 'MailboxBusinessPoliciesJson' -RuntimeKey 'REGISTER_MAILBOX_BUSINESS_POLICIES_JSON' -Fallback $defaultMailboxBusinessPoliciesJson
 $resolvedEasyProxyBaseUrl = Resolve-EnvValue -ParameterName 'EasyProxyBaseUrl' -RuntimeKey 'EASY_PROXY_BASE_URL' -Fallback 'http://easy-proxy:29888'
 $resolvedEasyProxyApiKey = Resolve-EnvValue -ParameterName 'EasyProxyApiKey' -RuntimeKey 'EASY_PROXY_API_KEY' -Fallback 'YP9l2DecuS_MRhARQu5v829VFOWKar7S'
 $resolvedWorkerCount = Resolve-EnvValue -ParameterName 'WorkerCount' -RuntimeKey 'REGISTER_WORKER_COUNT' -Fallback '10'
@@ -344,12 +492,19 @@ $resolvedDashboardAllowRemote = if ($importedRuntimeValues.ContainsKey('REGISTER
 $env:REGISTER_OUTPUT_DIR_HOST = $resolvedOutputDirHost
 $env:REGISTER_TEAM_AUTH_DIR_HOST = $TeamAuthDirHost
 $env:REGISTER_DASHBOARD_PORT_HOST = $DashboardPortHost
+$env:REGISTER_CONTAINER_NAME = $ContainerName
+$env:REGISTER_INSTANCE_ID = $InstanceId
+$env:REGISTER_NETWORK_ALIAS = $NetworkAlias
+$env:REGISTER_DOCKER_NETWORK_NAME = $DockerNetworkName
+$env:REGISTER_DOCKER_NETWORK_EXTERNAL = $DockerNetworkExternal
 $env:REGISTER_WORKER_COUNT = [string]$resolvedWorkerCount
 $env:REGISTER_MAIN_CONCURRENCY_LIMIT = [string]$resolvedMainConcurrencyLimit
 $env:REGISTER_CONTINUE_CONCURRENCY_LIMIT = [string]$resolvedContinueConcurrencyLimit
 $env:REGISTER_TEAM_CONCURRENCY_LIMIT = [string]$resolvedTeamConcurrencyLimit
 $env:MAILBOX_SERVICE_BASE_URL = $resolvedMailboxServiceBaseUrl
 $env:MAILBOX_SERVICE_API_KEY = $resolvedMailboxServiceApiKey
+$env:REGISTER_MAILBOX_DOMAIN_BLACKLIST = $resolvedMailboxDomainBlacklist
+$env:REGISTER_MAILBOX_BUSINESS_POLICIES_JSON = $resolvedMailboxBusinessPoliciesJson
 $env:EASY_PROXY_BASE_URL = $resolvedEasyProxyBaseUrl
 $env:EASY_PROXY_API_KEY = $resolvedEasyProxyApiKey
 
@@ -425,12 +580,19 @@ foreach ($entry in @{
     REGISTER_OUTPUT_DIR_HOST                  = $env:REGISTER_OUTPUT_DIR_HOST
     REGISTER_TEAM_AUTH_DIR_HOST               = $env:REGISTER_TEAM_AUTH_DIR_HOST
     REGISTER_DASHBOARD_PORT_HOST              = $env:REGISTER_DASHBOARD_PORT_HOST
+    REGISTER_CONTAINER_NAME                   = $env:REGISTER_CONTAINER_NAME
+    REGISTER_INSTANCE_ID                      = $env:REGISTER_INSTANCE_ID
+    REGISTER_NETWORK_ALIAS                    = $env:REGISTER_NETWORK_ALIAS
+    REGISTER_DOCKER_NETWORK_NAME              = $env:REGISTER_DOCKER_NETWORK_NAME
+    REGISTER_DOCKER_NETWORK_EXTERNAL          = $env:REGISTER_DOCKER_NETWORK_EXTERNAL
     REGISTER_WORKER_COUNT                     = $env:REGISTER_WORKER_COUNT
     REGISTER_MAIN_CONCURRENCY_LIMIT           = $env:REGISTER_MAIN_CONCURRENCY_LIMIT
     REGISTER_CONTINUE_CONCURRENCY_LIMIT       = $env:REGISTER_CONTINUE_CONCURRENCY_LIMIT
     REGISTER_TEAM_CONCURRENCY_LIMIT           = $env:REGISTER_TEAM_CONCURRENCY_LIMIT
     MAILBOX_SERVICE_BASE_URL                  = $env:MAILBOX_SERVICE_BASE_URL
     MAILBOX_SERVICE_API_KEY                   = $env:MAILBOX_SERVICE_API_KEY
+    REGISTER_MAILBOX_DOMAIN_BLACKLIST         = $env:REGISTER_MAILBOX_DOMAIN_BLACKLIST
+    REGISTER_MAILBOX_BUSINESS_POLICIES_JSON   = $env:REGISTER_MAILBOX_BUSINESS_POLICIES_JSON
     EASY_PROXY_BASE_URL                       = $env:EASY_PROXY_BASE_URL
     EASY_PROXY_API_KEY                        = $env:EASY_PROXY_API_KEY
     REGISTER_OPENAI_UPLOAD_PERCENT            = $env:REGISTER_OPENAI_UPLOAD_PERCENT
@@ -463,7 +625,15 @@ if ($ForceLinks) {
 
 & $materializeScript @materializeParams
 
+$aliasMountOverridePath = Join-Path $launcherRoot '.deploy-compose.alias-mounts.generated.yaml'
+$aliasMounts = New-AliasMountOverrideFile `
+    -OutputDirHost $resolvedOutputDirHost `
+    -OverridePath $aliasMountOverridePath
+
 if ($MaterializeOnly) {
+    if ($aliasMounts.Count -gt 0) {
+        $aliasMounts | Format-Table -AutoSize
+    }
     return
 }
 
@@ -474,6 +644,9 @@ $deployComposeParams = @{
     OutputDirHost      = $resolvedOutputDirHost
     EnvFilePath        = $composeEnvFilePath
     LinkType           = $LinkType
+}
+if ($aliasMounts.Count -gt 0) {
+    $deployComposeParams["AdditionalComposeFiles"] = @($aliasMountOverridePath)
 }
 if ($ForceLinks) {
     $deployComposeParams["ForceLinks"] = $true

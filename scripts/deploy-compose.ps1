@@ -1,5 +1,6 @@
 param(
     [string]$ComposeFile = "",
+    [string[]]$AdditionalComposeFiles = @(),
     [string]$ComposeProjectName = "",
     [string]$EnvFilePath = "",
     [string]$OutputDirHost = $env:REGISTER_OUTPUT_DIR_HOST,
@@ -37,6 +38,13 @@ $resolvedComposeFile = if ([string]::IsNullOrWhiteSpace($ComposeFile)) {
 } else {
     Resolve-AbsolutePath -Path $ComposeFile -BaseDir $repoRoot
 }
+$resolvedAdditionalComposeFiles = @()
+foreach ($composeFilePath in @($AdditionalComposeFiles)) {
+    if ([string]::IsNullOrWhiteSpace($composeFilePath)) {
+        continue
+    }
+    $resolvedAdditionalComposeFiles += Resolve-AbsolutePath -Path $composeFilePath -BaseDir $repoRoot
+}
 $composeDir = Split-Path -Parent $resolvedComposeFile
 
 if (-not $SkipMaterialize) {
@@ -64,11 +72,18 @@ $resolvedComposeProjectName = if ([string]::IsNullOrWhiteSpace($ComposeProjectNa
     $ComposeProjectName
 }
 
-$composeArgs = @("compose", "-p", $resolvedComposeProjectName, "-f", $resolvedComposeFile, "up")
+$composeFileArgs = @("-f", $resolvedComposeFile)
+foreach ($composeFilePath in $resolvedAdditionalComposeFiles) {
+    $composeFileArgs += @("-f", $composeFilePath)
+}
+
+$composeArgs = @("compose", "-p", $resolvedComposeProjectName)
 if (-not [string]::IsNullOrWhiteSpace($EnvFilePath)) {
     $resolvedEnvFilePath = Resolve-AbsolutePath -Path $EnvFilePath -BaseDir $repoRoot
-    $composeArgs = @("compose", "--env-file", $resolvedEnvFilePath, "-p", $resolvedComposeProjectName, "-f", $resolvedComposeFile, "up")
+    $composeArgs += @("--env-file", $resolvedEnvFilePath)
 }
+$composeArgs += $composeFileArgs
+$composeArgs += "up"
 if (-not $NoDetach) {
     $composeArgs += "-d"
 }

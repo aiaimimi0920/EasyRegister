@@ -6,10 +6,10 @@ services:
       args:
         REGISTER_SERVICE_BASE_IMAGE: ${REGISTER_SERVICE_BASE_IMAGE:-easy-register/easy-register:local}
     image: ${REGISTER_SERVICE_IMAGE:-easy-register/easy-register:local}
-    container_name: easy-register
+    container_name: ${REGISTER_CONTAINER_NAME:-easy-register}
     restart: unless-stopped
     environment:
-      REGISTER_INSTANCE_ID: easy-register
+      REGISTER_INSTANCE_ID: ${REGISTER_INSTANCE_ID:-easy-register}
       REGISTER_INSTANCE_ROLE: mixed
       EASY_PROTOCOL_BASE_URL: ${EASY_PROTOCOL_BASE_URL:-http://easy-protocol:9788}
       EASY_PROTOCOL_CONTROL_TOKEN: ${EASY_PROTOCOL_CONTROL_TOKEN:-}
@@ -24,6 +24,8 @@ services:
       REGISTER_MAILBOX_ROUTING_PROFILE_ID: ${REGISTER_MAILBOX_ROUTING_PROFILE_ID:-}
       REGISTER_MAILBOX_STRATEGY_MODE_ID: ${REGISTER_MAILBOX_STRATEGY_MODE_ID:-}
       REGISTER_MAILBOX_PROVIDERS: ${REGISTER_MAILBOX_PROVIDERS:-}
+      REGISTER_MAILBOX_DOMAIN_BLACKLIST: ${REGISTER_MAILBOX_DOMAIN_BLACKLIST:-}
+      REGISTER_MAILBOX_BUSINESS_POLICIES_JSON: "${REGISTER_MAILBOX_BUSINESS_POLICIES_JSON:-}"
       REGISTER_OUTPUT_ROOT: /shared/register-output/others/mixed-runs
       REGISTER_OPENAI_OAUTH_POOL_DIR: ${REGISTER_OPENAI_OAUTH_POOL_DIR:-/shared/register-output/openai/pending}
       REGISTER_OPENAI_OAUTH_SUCCESS_POOL_DIR: ${REGISTER_OPENAI_OAUTH_SUCCESS_POOL_DIR:-/shared/register-output/openai/converted}
@@ -91,8 +93,11 @@ services:
     ports:
       - ${REGISTER_DASHBOARD_PORT_HOST:-19790}:9790
     networks:
-      - EasyAiMi
+      easy-register-net:
+        aliases:
+          - ${REGISTER_NETWORK_ALIAS:-easy-register}
 
 networks:
-  EasyAiMi:
-    external: true
+  easy-register-net:
+    name: ${REGISTER_DOCKER_NETWORK_NAME:-EasyAiMi}
+    external: ${REGISTER_DOCKER_NETWORK_EXTERNAL:-true}
