@@ -43,6 +43,25 @@ the real business blocking point.
 7. Prefer GHCR images produced by the fresh hosted workflow run. Do not reuse
    locally built images as the acceptance source of truth.
 
+## Repository-Specific Blank-Host Entry Rules
+
+1. `EasyProxy` GHCR acceptance deployment must use the GHCR project path:
+   - `deploy-host.ps1 -Project easyproxy-ghcr`
+   - Do not use `-Project easyproxy` for this acceptance, because that path
+     can still fall back to local compose/build behavior.
+2. `EasyProtocol` acceptance deployment must keep:
+   - compose project: `easy-protocol`
+   - gateway container: `easy-protocol`
+   - sibling provider containers under the same compose project
+3. `EasyRegister` acceptance deployment must keep:
+   - compose project: `easy-register`
+   - mixed single-runtime deployment
+   - explicit concurrency env:
+     - `REGISTER_WORKER_COUNT=10`
+     - `REGISTER_MAIN_CONCURRENCY_LIMIT=5`
+     - `REGISTER_CONTINUE_CONCURRENCY_LIMIT=2`
+     - `REGISTER_TEAM_CONCURRENCY_LIMIT=1`
+
 ## Required Local Cleanup Before Redeploy
 
 1. Remove local Easy-stack runtime containers that would interfere with the new
@@ -108,3 +127,100 @@ The acceptance run does **not** pass if the observed failure is caused by:
 6. `EasyProtocol` or `EasyBrowser` failing to create dynamic child containers.
 7. `EasyRegister` failing before the real business flow due to local orchestration
    or container-runtime defects.
+
+## First Recorded Acceptance
+
+### Acceptance Round
+
+- Date: `2026-05-03`
+- Working directory:
+  - `C:\Users\Public\nas_home\AI\GameEditor\linshi\blankhost-acceptance-20260503-v1`
+- Owner private input:
+  - stable passphrase `Qq365210!@#$%^`
+- Derived owner public key:
+  - `hfHJVcWkNbCXqQMB3l39rfXWzCrC0e1eb3CEyBi2FHc`
+
+### Hosted Publish Evidence
+
+- `EasyEmail`
+  - workflow run `25280068036`
+  - result `success`
+  - image `ghcr.io/aiaimimi0920/easy-email-service:service-base-20260503-952`
+- `EasyBrowser`
+  - workflow run `25280068537`
+  - result `success`
+  - image `ghcr.io/aiaimimi0920/easybrowser-service:service-base-20260503-904`
+- `EasyProtocol service-base`
+  - workflow run `25279953318`
+  - result `success`
+  - image `ghcr.io/aiaimimi0920/easy-protocol-service:service-base-20260503-957`
+- `EasyProtocol provider`
+  - workflow run `25280068969`
+  - result `success`
+  - image `ghcr.io/aiaimimi0920/easy-protocol-python:providers-20260503-903`
+- `EasyProxy`
+  - workflow run `25280069396`
+  - result `success`
+  - image `ghcr.io/aiaimimi0920/easy-proxy-monorepo-service:release-20260503-904`
+- `EasyRegister`
+  - workflow run `25280069809`
+  - result `success`
+  - image `ghcr.io/aiaimimi0920/easyregister:release-20260503-906`
+
+### Blank-Host Deployment Evidence
+
+- Only root `deploy-host.ps1` files were downloaded into the blank working
+  directory before deployment.
+- Encrypted import-code artifacts were downloaded from the hosted workflow runs,
+  decrypted locally by the trusted client, and cached as deployment inputs.
+- The blank-host deployment produced these live runtime containers:
+  - `easy-proxy`
+  - `easy-email`
+  - `easy-browser`
+  - `easy-protocol`
+  - `easy-protocol-python-001`
+  - dynamic siblings such as `easy-protocol-python-002/003/004`
+  - `easy-register`
+
+### Runtime Evidence
+
+- `EasyBrowser`
+  - `http://127.0.0.1:18080/healthz`
+  - returned `healthy`
+- `EasyProtocol`
+  - `http://127.0.0.1:29789/api/health`
+  - returned `status=ok`
+- `EasyRegister`
+  - started as a mixed single runtime with:
+    - `REGISTER_WORKER_COUNT=10`
+    - `main=5`
+    - `continue=2`
+    - `team=1`
+
+### Business-Flow Evidence
+
+- `main` was verified to advance through:
+  - `create-openai-account = ok`
+  - `initialize-platform-organization = ok`
+  - `initialize-chatgpt-login-session = ok`
+  - `obtain-codex-oauth = failed`
+- Accepted real business blockers observed in this run:
+  - `phone_wall ... page_type=add_phone`
+  - `chat_requirements_failed status=403`
+- User-layer output evidence was also observed:
+  - `openai/failed-once` received fresh artifacts
+  - `continue` consumed `failed-once`
+  - `openai/failed-twice` received follow-up artifacts after the second failure
+
+### Recorded Outcome
+
+This acceptance round is considered **passed**.
+
+Reason:
+
+- The five repositories were republished to fresh GHCR artifacts.
+- Deployment was reproduced from a brand-new blank working directory using only
+  the downloaded root deploy scripts plus import-code inputs.
+- The stack reached the real upstream business blocking layer instead of
+  failing on local deployment, secret injection, mount alignment, compose
+  ownership, or internal service discovery defects.
