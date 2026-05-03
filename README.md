@@ -246,6 +246,11 @@ python -m infinite_runner
   - `REGISTER_CODEX_FREE_UPLOAD_PERCENT=0`
   - `REGISTER_CODEX_TEAM_UPLOAD_PERCENT=0`
   - `REGISTER_CODEX_PLUS_UPLOAD_PERCENT=0`
+- 显式写入 mixed runtime 并发配置：
+  - `REGISTER_WORKER_COUNT=10`
+  - `REGISTER_MAIN_CONCURRENCY_LIMIT=5`
+  - `REGISTER_CONTINUE_CONCURRENCY_LIMIT=2`
+  - `REGISTER_TEAM_CONCURRENCY_LIMIT=1`
 - 自动物化目录联接
 - 然后执行 `docker compose up`
 
@@ -263,6 +268,16 @@ powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor
   -CodexFreeUploadPercent 0 `
   -CodexTeamUploadPercent 0 `
   -CodexPlusUploadPercent 0
+```
+
+如果你要显式覆盖 mixed runtime 的总并发和每个 flow 的并发上限，也可以直接走根级脚本参数，例如：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\deploy-host.ps1" `
+  -WorkerCount 10 `
+  -MainConcurrencyLimit 5 `
+  -ContinueConcurrencyLimit 2 `
+  -TeamConcurrencyLimit 1
 ```
 
 如果你要在别的宿主机上改映射，可以直接覆盖脚本参数，例如：

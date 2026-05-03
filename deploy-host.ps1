@@ -6,6 +6,10 @@ param(
     [string]$CodexTeamDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
     [string]$CodexTeamInputDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
     [string]$CodexTeamMotherInputDirHost = "",
+    [int]$WorkerCount = 10,
+    [int]$MainConcurrencyLimit = 5,
+    [int]$ContinueConcurrencyLimit = 2,
+    [int]$TeamConcurrencyLimit = 1,
     [double]$OpenaiUploadPercent = 0,
     [double]$CodexFreeUploadPercent = 0,
     [double]$CodexTeamUploadPercent = 0,
@@ -213,6 +217,10 @@ $resolvedComposeFile = if ([string]::IsNullOrWhiteSpace($ComposeFile)) {
 $env:REGISTER_OUTPUT_DIR_HOST = $resolvedOutputDirHost
 $env:REGISTER_TEAM_AUTH_DIR_HOST = $TeamAuthDirHost
 $env:REGISTER_DASHBOARD_PORT_HOST = $DashboardPortHost
+$env:REGISTER_WORKER_COUNT = [string]$WorkerCount
+$env:REGISTER_MAIN_CONCURRENCY_LIMIT = [string]$MainConcurrencyLimit
+$env:REGISTER_CONTINUE_CONCURRENCY_LIMIT = [string]$ContinueConcurrencyLimit
+$env:REGISTER_TEAM_CONCURRENCY_LIMIT = [string]$TeamConcurrencyLimit
 
 if ([string]::IsNullOrWhiteSpace($env:EASY_PROXY_BASE_URL)) {
     $env:EASY_PROXY_BASE_URL = $defaultEasyProxyBaseUrl

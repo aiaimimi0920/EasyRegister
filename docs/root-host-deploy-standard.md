@@ -53,5 +53,14 @@ The default deployment shape must remain:
 - one mixed scheduler instance
 - multiple flow specs supplied through `REGISTER_FLOW_SPECS_JSON`
 
+The root deploy entrypoint must also materialize the current mixed-runtime
+concurrency contract as explicit deployment config, not just as code defaults.
+Current canonical values are:
+
+- `REGISTER_WORKER_COUNT=10`
+- `REGISTER_MAIN_CONCURRENCY_LIMIT=5`
+- `REGISTER_CONTINUE_CONCURRENCY_LIMIT=2`
+- `REGISTER_TEAM_CONCURRENCY_LIMIT=1`
+
 Do not regress the default operator path back to three role-specific runtime
 containers unless the user explicitly asks for that split.
