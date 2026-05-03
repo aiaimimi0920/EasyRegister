@@ -1,6 +1,7 @@
 param(
     [string]$ComposeFile = "",
     [string]$ComposeProjectName = "",
+    [string]$EnvFilePath = "",
     [string]$OutputDirHost = $env:REGISTER_OUTPUT_DIR_HOST,
     [string]$AliasRootHost = $env:REGISTER_OUTPUT_ALIAS_ROOT_HOST,
     [ValidateSet("Auto", "Junction", "SymbolicLink")]
@@ -64,6 +65,10 @@ $resolvedComposeProjectName = if ([string]::IsNullOrWhiteSpace($ComposeProjectNa
 }
 
 $composeArgs = @("compose", "-p", $resolvedComposeProjectName, "-f", $resolvedComposeFile, "up")
+if (-not [string]::IsNullOrWhiteSpace($EnvFilePath)) {
+    $resolvedEnvFilePath = Resolve-AbsolutePath -Path $EnvFilePath -BaseDir $repoRoot
+    $composeArgs = @("compose", "--env-file", $resolvedEnvFilePath, "-p", $resolvedComposeProjectName, "-f", $resolvedComposeFile, "up")
+}
 if (-not $NoDetach) {
     $composeArgs += "-d"
 }

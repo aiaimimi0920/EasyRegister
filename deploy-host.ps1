@@ -1,6 +1,10 @@
 param(
     [string]$OutputDirHost = "",
     [string]$ComposeFile = "",
+    [string]$MailboxServiceBaseUrl = "http://easy-email:8080",
+    [string]$MailboxServiceApiKey = "J7L+RCwLIBEcMZHzz0rXjm4oyR9rymq9",
+    [string]$EasyProxyBaseUrl = "http://easy-proxy:29888",
+    [string]$EasyProxyApiKey = "YP9l2DecuS_MRhARQu5v829VFOWKar7S",
     [string]$TeamAuthDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
     [string]$CodexFreeDirHost = "C:\Users\vmjcv\.cli-proxy-api\free",
     [string]$CodexTeamDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
@@ -72,6 +76,31 @@ function Test-RepoLayout {
         }
     }
     return $true
+}
+
+function Write-ComposeEnvFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Values
+    )
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($key in ($Values.Keys | Sort-Object)) {
+        $name = [string]$key
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            continue
+        }
+        $rawValue = $Values[$key]
+        $value = if ($null -eq $rawValue) { "" } else { [string]$rawValue }
+        $lines.Add("$name=$value")
+    }
+    $parent = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+    Set-Content -LiteralPath $Path -Value $lines -Encoding ASCII
 }
 
 function Get-RepoArchiveUrlValue {
@@ -221,12 +250,13 @@ $env:REGISTER_WORKER_COUNT = [string]$WorkerCount
 $env:REGISTER_MAIN_CONCURRENCY_LIMIT = [string]$MainConcurrencyLimit
 $env:REGISTER_CONTINUE_CONCURRENCY_LIMIT = [string]$ContinueConcurrencyLimit
 $env:REGISTER_TEAM_CONCURRENCY_LIMIT = [string]$TeamConcurrencyLimit
+$env:MAILBOX_SERVICE_BASE_URL = $MailboxServiceBaseUrl
+$env:MAILBOX_SERVICE_API_KEY = $MailboxServiceApiKey
+$env:EASY_PROXY_BASE_URL = $EasyProxyBaseUrl
+$env:EASY_PROXY_API_KEY = $EasyProxyApiKey
 
-if ([string]::IsNullOrWhiteSpace($env:EASY_PROXY_BASE_URL)) {
-    $env:EASY_PROXY_BASE_URL = $defaultEasyProxyBaseUrl
-}
 if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_EASY_PROXY_BASE_URL)) {
-    $env:EASYREGISTER_TEST_EASY_PROXY_BASE_URL = $defaultEasyProxyBaseUrl
+    $env:EASYREGISTER_TEST_EASY_PROXY_BASE_URL = $EasyProxyBaseUrl
 }
 if ([string]::IsNullOrWhiteSpace($env:EASY_PROTOCOL_CONTROL_TOKEN)) {
     $env:EASY_PROTOCOL_CONTROL_TOKEN = $defaultDashboardControlToken
@@ -276,42 +306,66 @@ $env:REGISTER_CODEX_FREE_UPLOAD_PERCENT = [string]$CodexFreeUploadPercent
 $env:REGISTER_CODEX_TEAM_UPLOAD_PERCENT = [string]$CodexTeamUploadPercent
 $env:REGISTER_CODEX_PLUS_UPLOAD_PERCENT = [string]$CodexPlusUploadPercent
 
-$materializeArgs = @(
-    "-ExecutionPolicy", "Bypass",
-    "-File", (Join-Path $repoRoot "scripts\materialize-output-links.ps1"),
-    "-OutputDirHost", $resolvedOutputDirHost,
-    "-PathBaseDir", $launcherRoot,
-    "-LinkType", $LinkType
-)
-if ($ForceLinks) {
-    $materializeArgs += "-Force"
+$composeEnvFilePath = Join-Path $launcherRoot ".deploy-compose.env"
+Write-ComposeEnvFile -Path $composeEnvFilePath -Values @{
+    REGISTER_OUTPUT_DIR_HOST              = $env:REGISTER_OUTPUT_DIR_HOST
+    REGISTER_TEAM_AUTH_DIR_HOST           = $env:REGISTER_TEAM_AUTH_DIR_HOST
+    REGISTER_DASHBOARD_PORT_HOST          = $env:REGISTER_DASHBOARD_PORT_HOST
+    REGISTER_WORKER_COUNT                 = $env:REGISTER_WORKER_COUNT
+    REGISTER_MAIN_CONCURRENCY_LIMIT       = $env:REGISTER_MAIN_CONCURRENCY_LIMIT
+    REGISTER_CONTINUE_CONCURRENCY_LIMIT   = $env:REGISTER_CONTINUE_CONCURRENCY_LIMIT
+    REGISTER_TEAM_CONCURRENCY_LIMIT       = $env:REGISTER_TEAM_CONCURRENCY_LIMIT
+    MAILBOX_SERVICE_BASE_URL              = $env:MAILBOX_SERVICE_BASE_URL
+    MAILBOX_SERVICE_API_KEY               = $env:MAILBOX_SERVICE_API_KEY
+    EASY_PROXY_BASE_URL                   = $env:EASY_PROXY_BASE_URL
+    EASY_PROXY_API_KEY                    = $env:EASY_PROXY_API_KEY
+    REGISTER_OPENAI_UPLOAD_PERCENT        = $env:REGISTER_OPENAI_UPLOAD_PERCENT
+    REGISTER_CODEX_FREE_UPLOAD_PERCENT    = $env:REGISTER_CODEX_FREE_UPLOAD_PERCENT
+    REGISTER_CODEX_TEAM_UPLOAD_PERCENT    = $env:REGISTER_CODEX_TEAM_UPLOAD_PERCENT
+    REGISTER_CODEX_PLUS_UPLOAD_PERCENT    = $env:REGISTER_CODEX_PLUS_UPLOAD_PERCENT
+    REGISTER_CODEX_FREE_DIR_HOST          = $env:REGISTER_CODEX_FREE_DIR_HOST
+    REGISTER_CODEX_TEAM_DIR_HOST          = $env:REGISTER_CODEX_TEAM_DIR_HOST
+    REGISTER_CODEX_TEAM_INPUT_DIR_HOST    = $env:REGISTER_CODEX_TEAM_INPUT_DIR_HOST
+    REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST = $env:REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST
+    EASY_PROTOCOL_BASE_URL                = $env:EASY_PROTOCOL_BASE_URL
+    EASY_PROTOCOL_CONTROL_TOKEN           = $env:EASY_PROTOCOL_CONTROL_TOKEN
+    REGISTER_DASHBOARD_LISTEN             = $env:REGISTER_DASHBOARD_LISTEN
+    REGISTER_DASHBOARD_ALLOW_REMOTE       = $env:REGISTER_DASHBOARD_ALLOW_REMOTE
+    REGISTER_SERVICE_IMAGE                = $env:REGISTER_SERVICE_IMAGE
 }
 
-& powershell @materializeArgs
+$materializeScript = Join-Path $repoRoot "scripts\materialize-output-links.ps1"
+$materializeParams = @{
+    OutputDirHost = $resolvedOutputDirHost
+    PathBaseDir   = $launcherRoot
+    LinkType      = $LinkType
+}
+if ($ForceLinks) {
+    $materializeParams["Force"] = $true
+}
+
+& $materializeScript @materializeParams
 
 if ($MaterializeOnly) {
     return
 }
 
-$deployArgs = @(
-    "-ExecutionPolicy", "Bypass",
-    "-File", (Join-Path $repoRoot "scripts\deploy-compose.ps1"),
-    "-ComposeFile", $resolvedComposeFile,
-    "-ComposeProjectName", $ComposeProjectName,
-    "-OutputDirHost", $resolvedOutputDirHost,
-    "-LinkType", $LinkType
-)
+$deployComposeScript = Join-Path $repoRoot "scripts\deploy-compose.ps1"
+$deployComposeParams = @{
+    ComposeFile        = $resolvedComposeFile
+    ComposeProjectName = $ComposeProjectName
+    OutputDirHost      = $resolvedOutputDirHost
+    EnvFilePath        = $composeEnvFilePath
+    LinkType           = $LinkType
+}
 if ($ForceLinks) {
-    $deployArgs += "-ForceLinks"
+    $deployComposeParams["ForceLinks"] = $true
 }
 if ((-not $NoBuild) -and [string]::IsNullOrWhiteSpace($Image)) {
-    $deployArgs += "-Build"
+    $deployComposeParams["Build"] = $true
 }
 if ($NoDetach) {
-    $deployArgs += "-NoDetach"
-}
-if ($Services) {
-    $deployArgs += $Services
+    $deployComposeParams["NoDetach"] = $true
 }
 
-& powershell @deployArgs
+& $deployComposeScript @deployComposeParams @Services
