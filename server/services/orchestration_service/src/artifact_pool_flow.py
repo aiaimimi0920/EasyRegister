@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from others.artifact_pool_claims import (
+    claim_configured_input_file,
     claim_openai_oauth_artifact,
     claim_team_member_candidates,
     claim_team_mother_artifact,
@@ -21,6 +22,8 @@ def dispatch_orchestration_step(*, step_type: str, step_input: dict[str, Any]) -
     normalized_step_type = str(step_type or "").strip()
     if normalized_step_type == "sleep_seconds":
         return sleep_seconds(step_input=step_input)
+    if normalized_step_type == "acquire_configured_input_file":
+        return claim_configured_input_file(step_input=step_input)
     if normalized_step_type == "acquire_openai_oauth_artifact":
         return claim_openai_oauth_artifact(step_input=step_input)
     if normalized_step_type == "finalize_openai_oauth_artifact":

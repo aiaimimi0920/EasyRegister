@@ -43,6 +43,7 @@ from others.artifact_pool_common import (
 from others.common import (
     ensure_directory,
     extract_account_id,
+    extract_email,
     free_manual_oauth_preserve_codes,
     free_manual_oauth_preserve_enabled,
     json_log,
@@ -72,6 +73,104 @@ def sleep_seconds(*, step_input: dict[str, Any]) -> dict[str, Any]:
         "slept_seconds": seconds,
         "reason": reason,
     }
+
+
+def _resolve_configured_input_source_dir(step_input: dict[str, Any]) -> Path:
+    source_dir_text = str(
+        step_input.get("input_source_dir")
+        or step_input.get("inputSourceDir")
+        or ""
+    ).strip()
+    if not source_dir_text:
+        raise RuntimeError("configured_input_source_dir_missing")
+    return Path(source_dir_text).expanduser().resolve()
+
+
+def _resolve_configured_input_claims_dir(*, step_input: dict[str, Any], source_dir: Path) -> Path:
+    claims_dir_text = str(
+        step_input.get("input_claims_dir")
+        or step_input.get("inputClaimsDir")
+        or ""
+    ).strip()
+    if claims_dir_text:
+        return Path(claims_dir_text).expanduser().resolve()
+    return (source_dir / "_claims").resolve()
+
+
+def _extract_configured_input_email(payload: dict[str, Any]) -> str:
+    direct_email = str(payload.get("email") or "").strip()
+    if direct_email:
+        return direct_email
+    extracted_email = str(extract_email(payload) or "").strip()
+    if extracted_email:
+        return extracted_email
+    profile_claims = payload.get("https://api.openai.com/profile")
+    if isinstance(profile_claims, dict):
+        return str(profile_claims.get("email") or "").strip()
+    return ""
+
+
+def claim_configured_input_file(*, step_input: dict[str, Any]) -> dict[str, Any]:
+    source_dir = _resolve_configured_input_source_dir(step_input)
+    claims_dir = _resolve_configured_input_claims_dir(step_input=step_input, source_dir=source_dir)
+    ensure_directory(source_dir)
+    ensure_directory(claims_dir)
+
+    invalid_candidates: list[dict[str, Any]] = []
+    missing_email_candidates: list[str] = []
+    for candidate in sort_paths_newest_first([path for path in source_dir.glob("*.json") if path.is_file()]):
+        try:
+            payload = load_json_payload(candidate)
+        except Exception as exc:
+            invalid_candidates.append(
+                {
+                    "source_path": str(candidate),
+                    "reason": f"load_failed:{exc}",
+                }
+            )
+            continue
+        email = _extract_configured_input_email(payload)
+        if not email:
+            missing_email_candidates.append(str(candidate))
+            continue
+        claim_name = f"{uuid.uuid4().hex[:8]}-{candidate.name}"
+        claimed_path = claims_dir / claim_name
+        try:
+            candidate.replace(claimed_path)
+        except FileNotFoundError:
+            continue
+        return {
+            "ok": True,
+            "status": "claimed",
+            "source_path": str(claimed_path),
+            "claimed_path": str(claimed_path),
+            "input_source_dir": str(source_dir),
+            "input_claims_dir": str(claims_dir),
+            "original_name": candidate.name,
+            "email": email,
+            "mailbox_ref": str(payload.get("mailbox_ref") or payload.get("mailboxRef") or "").strip(),
+            "session_id": str(payload.get("session_id") or payload.get("sessionId") or "").strip(),
+            "account_id": str(
+                payload.get("account_id")
+                or payload.get("accountId")
+                or extract_account_id(payload)
+                or ""
+            ).strip(),
+            "payload": payload,
+        }
+
+    if invalid_candidates or missing_email_candidates:
+        json_log(
+            {
+                "event": "configured_input_candidates_skipped",
+                "inputSourceDir": str(source_dir),
+                "invalidCandidateCount": len(invalid_candidates),
+                "missingEmailCandidateCount": len(missing_email_candidates),
+                "invalidCandidates": invalid_candidates,
+                "missingEmailCandidates": missing_email_candidates,
+            }
+        )
+    raise RuntimeError("configured_input_pool_empty")
 
 
 def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]:

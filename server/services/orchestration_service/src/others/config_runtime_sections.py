@@ -26,6 +26,8 @@ from others.paths import (
     resolve_team_pool_dir,
 )
 
+DEFAULT_DST_LOGIN_ENTRY_URL = "https://auth.openai.com/log-in-or-create-account"
+
 
 @dataclass(frozen=True)
 class DashboardSettings:
@@ -60,6 +62,9 @@ class DstTaskEnvConfig:
     mailbox_ttl_seconds: str
     mailbox_recreate_preallocated: bool
     free_stop_after_validate: bool
+    input_source_dir: str
+    input_claims_dir: str
+    login_entry_url: str
 
     @classmethod
     def from_env(cls) -> "DstTaskEnvConfig":
@@ -78,6 +83,9 @@ class DstTaskEnvConfig:
             mailbox_ttl_seconds=env_text("REGISTER_MAILBOX_TTL_SECONDS"),
             mailbox_recreate_preallocated=env_bool("REGISTER_MAILBOX_RECREATE_PREALLOCATED", False),
             free_stop_after_validate=env_bool("REGISTER_FREE_STOP_AFTER_VALIDATE", False),
+            input_source_dir=env_text("REGISTER_INPUT_SOURCE_DIR"),
+            input_claims_dir=env_text("REGISTER_INPUT_CLAIMS_DIR"),
+            login_entry_url=env_text("REGISTER_DST_LOGIN_ENTRY_URL", DEFAULT_DST_LOGIN_ENTRY_URL) or DEFAULT_DST_LOGIN_ENTRY_URL,
         )
 
 
@@ -91,6 +99,8 @@ class RunnerFlowSpec:
     task_max_attempts: int
     openai_oauth_pool_dir: Path
     mailbox_business_key: str
+    input_source_dir: str
+    input_claims_dir: str
     concurrency_limit: int = 0
 
 
@@ -252,6 +262,8 @@ def _parse_runner_flow_specs(
     shared_root: Path,
     default_instance_role: str,
     default_team_auth_path: str,
+    default_input_source_dir: str,
+    default_input_claims_dir: str,
     default_task_max_attempts: int,
 ) -> tuple[RunnerFlowSpec, ...]:
     text = str(raw or "").strip()
@@ -342,6 +354,18 @@ def _parse_runner_flow_specs(
                     or item.get("mailbox_business_key")
                     or ""
                 ).strip().lower(),
+                input_source_dir=str(
+                    item.get("inputSourceDir")
+                    or item.get("input_source_dir")
+                    or default_input_source_dir
+                    or ""
+                ).strip(),
+                input_claims_dir=str(
+                    item.get("inputClaimsDir")
+                    or item.get("input_claims_dir")
+                    or default_input_claims_dir
+                    or ""
+                ).strip(),
                 concurrency_limit=concurrency_limit,
             )
         )
@@ -375,6 +399,8 @@ class RunnerMainConfig:
         instance_id = env_text("REGISTER_INSTANCE_ID", "main") or "main"
         instance_role = env_text("REGISTER_INSTANCE_ROLE", instance_id) or instance_id
         team_auth_path = env_text("REGISTER_TEAM_AUTH_PATH")
+        input_source_dir = env_text("REGISTER_INPUT_SOURCE_DIR")
+        input_claims_dir = env_text("REGISTER_INPUT_CLAIMS_DIR")
         flow_path = env_text("REGISTER_FLOW_PATH")
         task_max_attempts = env_int("REGISTER_TASK_MAX_ATTEMPTS", 0)
         flow_specs = _parse_runner_flow_specs(
@@ -383,6 +409,8 @@ class RunnerMainConfig:
             shared_root=shared_root,
             default_instance_role=instance_role,
             default_team_auth_path=team_auth_path,
+            default_input_source_dir=input_source_dir,
+            default_input_claims_dir=input_claims_dir,
             default_task_max_attempts=task_max_attempts,
         )
         if not flow_specs:
@@ -400,6 +428,8 @@ class RunnerMainConfig:
                         instance_role=instance_role,
                     ),
                     mailbox_business_key="",
+                    input_source_dir=str(input_source_dir or "").strip(),
+                    input_claims_dir=str(input_claims_dir or "").strip(),
                     concurrency_limit=_default_flow_concurrency_limit_for_role(instance_role),
                 ),
             )

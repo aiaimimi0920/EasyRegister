@@ -204,6 +204,8 @@ def worker_loop(
         normalized_role = str(selected_flow_spec.instance_role or "").strip().lower()
         openai_oauth_pool_dir = Path(selected_flow_spec.openai_oauth_pool_dir).resolve()
         _ensure_directory(openai_oauth_pool_dir)
+        input_source_dir = str(selected_flow_spec.input_source_dir or "").strip()
+        input_claims_dir = str(selected_flow_spec.input_claims_dir or "").strip()
         free_local_selected = False
         if normalized_role in {"main", "continue"}:
             artifact_config = _artifact_routing_config(output_root=output_root)
@@ -262,6 +264,8 @@ def worker_loop(
                 "teamInviteEnabled": bool(selected_team_auth_path),
                 "openaiOauthPoolDir": str(openai_oauth_pool_dir),
                 "smallSuccessPoolDir": str(openai_oauth_pool_dir),
+                "inputSourceDir": input_source_dir,
+                "inputClaimsDir": input_claims_dir,
                 "freeLocalSelected": free_local_selected,
             }
         )
@@ -282,6 +286,8 @@ def worker_loop(
                 output_dir=str(run_output_dir),
                 team_auth_path=selected_team_auth_path or None,
                 team_invite_enabled=bool(selected_team_auth_path),
+                input_source_dir=input_source_dir or None,
+                input_claims_dir=input_claims_dir or None,
                 openai_oauth_pool_dir=str(openai_oauth_pool_dir),
                 flow_path=str(selected_flow_spec.flow_path or "").strip() or None,
                 task_max_attempts=selected_flow_spec.task_max_attempts or task_max_attempts or None,

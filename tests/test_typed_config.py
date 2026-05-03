@@ -58,6 +58,7 @@ class TypedConfigTests(unittest.TestCase):
                 "REGISTER_MAILBOX_TTL_SECONDS": "120",
                 "REGISTER_MAILBOX_RECREATE_PREALLOCATED": "true",
                 "REGISTER_FREE_STOP_AFTER_VALIDATE": "true",
+                "REGISTER_DST_LOGIN_ENTRY_URL": "https://auth.openai.com/log-in-or-create-account",
             },
             clear=True,
         ):
@@ -69,6 +70,7 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual("120", config.mailbox_ttl_seconds)
         self.assertTrue(config.mailbox_recreate_preallocated)
         self.assertTrue(config.free_stop_after_validate)
+        self.assertEqual("https://auth.openai.com/log-in-or-create-account", config.login_entry_url)
 
     def test_runner_main_config_resolves_paths_and_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

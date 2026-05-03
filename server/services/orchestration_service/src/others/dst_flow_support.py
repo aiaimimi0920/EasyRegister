@@ -74,8 +74,17 @@ def step_output_ok(*, step_type: str, step_output: Any) -> tuple[bool, str]:
                 return True, ""
             return False, str(step_output.get("detail") or "release_mailbox_failed").strip()
         return False, "release_mailbox_invalid_output"
+    if normalized_step_type == "release_mailbox_sessions_by_email":
+        if isinstance(step_output, dict) and bool(step_output.get("ok")):
+            return True, ""
+        return False, str(
+            (step_output or {}).get("detail")
+            or (step_output or {}).get("status")
+            or "release_mailbox_sessions_by_email_failed"
+        ).strip()
     if normalized_step_type in {
         "fill_team_pre_pool",
+        "acquire_configured_input_file",
         "acquire_team_mother_artifact",
         "acquire_team_member_candidates",
         "collect_team_pool_artifacts",

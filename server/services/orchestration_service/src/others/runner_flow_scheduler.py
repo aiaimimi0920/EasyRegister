@@ -33,6 +33,8 @@ def flow_spec_summary(spec: RunnerFlowSpec) -> dict[str, Any]:
         "openaiOauthPoolDir": str(spec.openai_oauth_pool_dir),
         "smallSuccessPoolDir": str(spec.openai_oauth_pool_dir),
         "mailboxBusinessKey": str(spec.mailbox_business_key or "").strip().lower(),
+        "inputSourceDir": str(spec.input_source_dir or "").strip(),
+        "inputClaimsDir": str(spec.input_claims_dir or "").strip(),
     }
 
 
@@ -135,6 +137,16 @@ def flow_spec_runnable_state(
             **summary,
             "ready": False,
             "reason": "concurrency_limit_reached",
+        }
+    configured_input_source_dir = str(spec.input_source_dir or "").strip()
+    if configured_input_source_dir:
+        input_source_dir = Path(configured_input_source_dir).expanduser().resolve()
+        ready = _path_has_json_files(input_source_dir)
+        return {
+            **summary,
+            "ready": ready,
+            "reason": "input_source_dir_ready" if ready else "input_source_dir_empty",
+            "inputSourceDir": str(input_source_dir),
         }
     if normalized_role == "continue":
         ready = _path_has_json_files(spec.openai_oauth_pool_dir)

@@ -347,6 +347,8 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
                 task_max_attempts=0,
                 openai_oauth_pool_dir=continue_pool_dir,
                 mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
             )
             selected, selection = runner_flow_scheduler.choose_runnable_flow_spec(
                 flow_specs=(spec,),
@@ -372,6 +374,8 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
                 task_max_attempts=0,
                 openai_oauth_pool_dir=continue_pool_dir,
                 mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
             )
             selected, selection = runner_flow_scheduler.choose_runnable_flow_spec(
                 flow_specs=(spec,),
@@ -401,6 +405,8 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
                 task_max_attempts=0,
                 openai_oauth_pool_dir=pending_dir,
                 mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
             )
             continue_spec = RunnerFlowSpec(
                 name="continue-openai",
@@ -411,6 +417,8 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
                 task_max_attempts=0,
                 openai_oauth_pool_dir=continue_pool_dir,
                 mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
             )
 
             selected, selection = runner_flow_scheduler.choose_runnable_flow_spec(
@@ -438,6 +446,8 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
                 task_max_attempts=0,
                 openai_oauth_pool_dir=pending_dir,
                 mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
                 concurrency_limit=1,
             )
             selected, selection = runner_flow_scheduler.choose_runnable_flow_spec(
@@ -459,6 +469,8 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
             task_max_attempts=0,
             openai_oauth_pool_dir=Path("C:/tmp/openai"),
             mailbox_business_key="openai",
+            input_source_dir="",
+            input_claims_dir="",
             concurrency_limit=2,
         )
         counts: dict[str, int] = {}

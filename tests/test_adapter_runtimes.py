@@ -116,6 +116,49 @@ class EasyEmailRuntimeTests(unittest.TestCase):
         self.assertTrue(result["released"])
         self.assertEqual("deleted", result["detail"])
 
+    def test_release_mailbox_sessions_by_email_reports_cleanup_summary(self) -> None:
+        with mock.patch.object(easyemail_runtime, "ensure_easyemail_runtime_defaults"):
+            with mock.patch.object(
+                easyemail_runtime,
+                "release_mailbox_sessions_by_email",
+                return_value=[
+                    {
+                        "sessionId": "sess-1",
+                        "email": "user@example.com",
+                        "release": {"released": True, "detail": "deleted"},
+                    },
+                    {
+                        "sessionId": "sess-2",
+                        "email": "user@example.com",
+                        "release": {"released": False, "detail": "not_found"},
+                    },
+                ],
+            ) as release_sessions:
+                result = easyemail_runtime.dispatch_easyemail_step(
+                    step_type="release_mailbox_sessions_by_email",
+                    step_input={
+                        "email_address": "user@example.com",
+                        "reason": "openai_login_recover",
+                    },
+                )
+
+        release_sessions.assert_called_once()
+        self.assertTrue(result["ok"])
+        self.assertEqual("released_sessions", result["status"])
+        self.assertEqual(2, result["matched_session_count"])
+        self.assertEqual(2, result["released_count"])
+        self.assertEqual(0, result["failed_count"])
+
+    def test_release_mailbox_sessions_by_email_rejects_missing_email(self) -> None:
+        with mock.patch.object(easyemail_runtime, "ensure_easyemail_runtime_defaults"):
+            result = easyemail_runtime.dispatch_easyemail_step(
+                step_type="release_mailbox_sessions_by_email",
+                step_input={},
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual("invalid_email_address", result["detail"])
+
 
 class RuntimeProxySupportTests(unittest.TestCase):
     def test_runtime_reachable_proxy_url_rewrites_localhost_when_runtime_host_is_set(self) -> None:

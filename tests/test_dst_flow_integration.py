@@ -13,9 +13,87 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 import dst_flow  # noqa: E402
+from others import easyemail_runtime  # noqa: E402
 
 
 class DstFlowIntegrationTests(unittest.TestCase):
+    def test_run_dst_flow_once_claims_configured_input_file_and_releases_mailbox_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_dir = Path(tmp_dir) / "input"
+            input_dir.mkdir(parents=True, exist_ok=True)
+            source_path = input_dir / "seed.json"
+            source_path.write_text(
+                json.dumps(
+                    {
+                        "email": "user@example.com",
+                        "mailbox_ref": "mailcreate:test",
+                        "session_id": "session-1",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "id": "openai-login-v1",
+                            "platform": "openai-login",
+                            "steps": [
+                                {
+                                    "id": "claim-input-file",
+                                    "type": "acquire_configured_input_file",
+                                    "metadata": {"owner": "orchestration"},
+                                    "input": {"input_source_dir": "{{task.input_source_dir}}"},
+                                    "saveAs": "input_artifact",
+                                },
+                                {
+                                    "id": "release-mailbox-sessions-by-email",
+                                    "type": "release_mailbox_sessions_by_email",
+                                    "metadata": {"owner": "easyemail"},
+                                    "input": {"email_address": "{{input_artifact.email}}"},
+                                    "saveAs": "mailbox_recovery",
+                                },
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(easyemail_runtime, "ensure_easyemail_runtime_defaults"):
+                with mock.patch.object(
+                    easyemail_runtime,
+                    "release_mailbox_sessions_by_email",
+                    return_value=[
+                        {
+                            "sessionId": "session-1",
+                            "email": "user@example.com",
+                            "release": {"released": True, "detail": "deleted"},
+                        }
+                    ],
+                ) as release_sessions:
+                    result = dst_flow.run_dst_flow_once(
+                        output_dir=str(Path(tmp_dir) / "out"),
+                        input_source_dir=str(input_dir),
+                        flow_path=flow_path,
+                    )
+                    claimed_path = Path(result.outputs["claim-input-file"]["claimed_path"])
+                    self.assertTrue(claimed_path.is_file())
+                    self.assertFalse(source_path.exists())
+
+        self.assertTrue(result.ok)
+        self.assertEqual("claimed", result.outputs["claim-input-file"]["status"])
+        self.assertEqual("user@example.com", result.outputs["claim-input-file"]["email"])
+        release_sessions.assert_called_once_with(
+            email_address="user@example.com",
+            provider_type_key="",
+            reason="",
+            limit=200,
+        )
+        self.assertEqual("released_sessions", result.outputs["release-mailbox-sessions-by-email"]["status"])
+        self.assertEqual(1, result.outputs["release-mailbox-sessions-by-email"]["released_count"])
+
     def test_run_dst_flow_once_executes_temp_flow_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             flow_path = Path(tmp_dir) / "temp-flow.json"
@@ -132,6 +210,57 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual("openai", result.to_dict()["taskContext"]["mailboxBusinessKey"])
         self.assertEqual([("acquire_mailbox", {"business_key": "openai"})], calls)
+
+    def test_run_dst_flow_once_propagates_independent_login_entry_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "id": "openai-login-v1",
+                            "platform": "openai-login",
+                            "steps": [
+                                {
+                                    "id": "initialize-login",
+                                    "type": "initialize_chatgpt_login_session",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"login_entry_url": "{{task.login_entry_url}}"},
+                                    "saveAs": "login_session",
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            calls: list[tuple[str, dict[str, object]]] = []
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                calls.append((step_type, dict(step_input)))
+                return {"ok": True, "status": "completed"}
+
+            with mock.patch.dict(dst_flow.OWNER_DISPATCHERS, {"easyprotocol": _dispatcher}, clear=True):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            "https://auth.openai.com/log-in-or-create-account",
+            result.to_dict()["taskContext"]["loginEntryUrl"],
+        )
+        self.assertEqual(
+            [
+                (
+                    "initialize_chatgpt_login_session",
+                    {"login_entry_url": "https://auth.openai.com/log-in-or-create-account"},
+                )
+            ],
+            calls,
+        )
 
     def test_run_dst_flow_once_retries_invite_after_proxy_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

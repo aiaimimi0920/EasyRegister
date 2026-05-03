@@ -31,6 +31,9 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the unified top-level DST flow.")
     parser.add_argument("--output-dir", default="", help="Optional output directory.")
     parser.add_argument("--team-auth", default="", help="Optional team auth json path.")
+    parser.add_argument("--input-source-dir", default="", help="Optional configured input source directory.")
+    parser.add_argument("--input-claims-dir", default="", help="Optional configured input claims directory.")
+    parser.add_argument("--login-entry-url", default="", help="Optional independent DST login entry url.")
     parser.add_argument("--email", default="", help="Optional preallocated mailbox email.")
     parser.add_argument("--session-id", default="", help="Optional preallocated mailbox session id.")
     parser.add_argument("--mailbox-ref", default="", help="Optional preallocated mailbox ref.")
@@ -55,6 +58,9 @@ def main() -> int:
     result = run_dst_flow_once(
         output_dir=str(args.output_dir or "").strip() or None,
         team_auth_path=str(args.team_auth or "").strip() or None,
+        input_source_dir=str(args.input_source_dir or "").strip() or None,
+        input_claims_dir=str(args.input_claims_dir or "").strip() or None,
+        login_entry_url=str(args.login_entry_url or "").strip() or None,
         preallocated_email=str(args.email or "").strip() or None,
         preallocated_session_id=str(args.session_id or "").strip() or None,
         preallocated_mailbox_ref=str(args.mailbox_ref or "").strip() or None,

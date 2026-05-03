@@ -13,7 +13,7 @@ from others.storage import load_json_payload
 
 ensure_local_bundle_imports()
 
-from shared_mailbox.easy_email_client import recover_mailbox_capacity, release_mailbox
+from shared_mailbox.easy_email_client import recover_mailbox_capacity, release_mailbox, release_mailbox_sessions_by_email
 
 
 def write_team_flow_update(*, source_path: Path, updater: Any) -> dict[str, Any]:
@@ -89,6 +89,19 @@ def normalize_preserve_codes(value: Any) -> set[str]:
     if not raw:
         return set()
     return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def mailbox_release_result_ok(release_result: Any) -> bool:
+    if not isinstance(release_result, dict):
+        return False
+    if release_result.get("released") is True:
+        return True
+    detail = str(release_result.get("detail") or "").strip().lower()
+    return detail in {
+        "deleted",
+        "not_found",
+        "already_deleted",
+    }
 
 
 def dispatch_easyemail_step(*, step_type: str, step_input: dict[str, Any]) -> dict[str, Any]:
@@ -180,6 +193,104 @@ def dispatch_easyemail_step(*, step_type: str, step_input: dict[str, Any]) -> di
             },
         )
         return result
+
+    if normalized_step_type == "release_mailbox_sessions_by_email":
+        ensure_easyemail_runtime_defaults()
+        email_address = str(
+            step_input.get("email_address")
+            or step_input.get("emailAddress")
+            or step_input.get("email")
+            or ""
+        ).strip()
+        provider_type_key = str(
+            step_input.get("provider_type_key")
+            or step_input.get("providerTypeKey")
+            or step_input.get("provider")
+            or ""
+        ).strip().lower()
+        reason = str(step_input.get("reason") or "").strip()
+        limit = int(float(str(step_input.get("limit") or 200).strip() or "200"))
+        if not email_address:
+            return {
+                "ok": False,
+                "status": "invalid_email_address",
+                "detail": "invalid_email_address",
+                "email": "",
+                "provider": provider_type_key,
+                "matched_session_count": 0,
+                "released_count": 0,
+                "failed_count": 0,
+                "results": [],
+            }
+        last_exc: BaseException | None = None
+        results: list[dict[str, Any]] | None = None
+        for attempt_index in range(1, 4):
+            try:
+                results = list(
+                    release_mailbox_sessions_by_email(
+                        email_address=email_address,
+                        provider_type_key=provider_type_key,
+                        reason=reason,
+                        limit=limit,
+                    )
+                    or []
+                )
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt_index >= 3 or not should_retry_release_error(exc):
+                    break
+                time.sleep(1.5 * attempt_index)
+        if results is None:
+            return {
+                "ok": False,
+                "status": "release_mailbox_sessions_by_email_failed",
+                "detail": str(last_exc or "release_mailbox_sessions_by_email_failed"),
+                "email": email_address,
+                "provider": provider_type_key,
+                "matched_session_count": 0,
+                "released_count": 0,
+                "failed_count": 1,
+                "results": [],
+            }
+        released_count = 0
+        failed_results: list[dict[str, Any]] = []
+        for item in results:
+            release_result = item.get("release") if isinstance(item, dict) else None
+            if mailbox_release_result_ok(release_result):
+                released_count += 1
+                continue
+            failed_results.append(item if isinstance(item, dict) else {"release": release_result})
+        status = (
+            "released_sessions"
+            if results and not failed_results
+            else "no_matching_sessions"
+            if not results
+            else "release_partial_failure"
+        )
+        detail = (
+            status
+            if not failed_results
+            else str(
+                (
+                    failed_results[0].get("release")
+                    if isinstance(failed_results[0], dict)
+                    else {}
+                ).get("detail")
+                or "release_partial_failure"
+            ).strip()
+        )
+        return {
+            "ok": not failed_results,
+            "status": status,
+            "detail": detail,
+            "email": email_address,
+            "provider": provider_type_key,
+            "matched_session_count": len(results),
+            "released_count": released_count,
+            "failed_count": len(failed_results),
+            "results": results,
+        }
 
     if normalized_step_type == "recover_mailbox_capacity":
         ensure_easyemail_runtime_defaults()
