@@ -260,6 +260,17 @@ python -m infinite_runner
 powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\deploy-host.ps1"
 ```
 
+根级部署入口现在也支持 owner-only runtime bootstrap，两种形式都可以：
+
+- `-ImportCode <decrypted-import-code>`
+- `-BootstrapFile <easyregister-r2-bootstrap.json>`
+
+如果你的 owner 私钥不是 raw base64，而是固定口令文本，那么对应公钥可以这样推导：
+
+```powershell
+python .\scripts\easyregister-import-code.py derive-public-key --private-key-file .\owner-private-key.txt
+```
+
 如果你要覆盖默认上传比例，也可以直接走根级脚本参数，例如：
 
 ```powershell

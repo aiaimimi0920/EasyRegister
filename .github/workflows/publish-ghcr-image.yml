@@ -176,6 +176,144 @@ jobs:
           cache-from: type=gha,scope=easyregister-ghcr
           cache-to: type=gha,mode=max,scope=easyregister-ghcr
 
+      - name: Resolve Runtime Distribution Secrets
+        id: runtime_distribution
+        env:
+          EASYREGISTER_R2_CONFIG_ACCOUNT_ID: ${{ secrets.EASYREGISTER_R2_CONFIG_ACCOUNT_ID }}
+          EASYREGISTER_R2_CONFIG_BUCKET: ${{ secrets.EASYREGISTER_R2_CONFIG_BUCKET }}
+          EASYREGISTER_R2_CONFIG_ENDPOINT: ${{ secrets.EASYREGISTER_R2_CONFIG_ENDPOINT }}
+          EASYREGISTER_R2_CONFIG_RUNTIME_ENV_OBJECT_KEY: ${{ secrets.EASYREGISTER_R2_CONFIG_RUNTIME_ENV_OBJECT_KEY }}
+          EASYREGISTER_R2_CONFIG_MANIFEST_OBJECT_KEY: ${{ secrets.EASYREGISTER_R2_CONFIG_MANIFEST_OBJECT_KEY }}
+          EASYREGISTER_R2_CONFIG_UPLOAD_ACCESS_KEY_ID: ${{ secrets.EASYREGISTER_R2_CONFIG_UPLOAD_ACCESS_KEY_ID }}
+          EASYREGISTER_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY: ${{ secrets.EASYREGISTER_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY }}
+          EASYREGISTER_R2_CONFIG_READ_ACCESS_KEY_ID: ${{ secrets.EASYREGISTER_R2_CONFIG_READ_ACCESS_KEY_ID }}
+          EASYREGISTER_R2_CONFIG_READ_SECRET_ACCESS_KEY: ${{ secrets.EASYREGISTER_R2_CONFIG_READ_SECRET_ACCESS_KEY }}
+          EASYREGISTER_IMPORT_CODE_OWNER_PUBLIC_KEY: ${{ secrets.EASYREGISTER_IMPORT_CODE_OWNER_PUBLIC_KEY }}
+        shell: pwsh
+        run: |
+          $r2Enabled = $true
+          foreach ($name in @(
+            'EASYREGISTER_R2_CONFIG_ACCOUNT_ID',
+            'EASYREGISTER_R2_CONFIG_BUCKET',
+            'EASYREGISTER_R2_CONFIG_RUNTIME_ENV_OBJECT_KEY',
+            'EASYREGISTER_R2_CONFIG_MANIFEST_OBJECT_KEY',
+            'EASYREGISTER_R2_CONFIG_UPLOAD_ACCESS_KEY_ID',
+            'EASYREGISTER_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY'
+          )) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item -Path "Env:$name" -ErrorAction SilentlyContinue).Value)) {
+              $r2Enabled = $false
+              break
+            }
+          }
+
+          $importEnabled = $r2Enabled
+          foreach ($name in @(
+            'EASYREGISTER_R2_CONFIG_READ_ACCESS_KEY_ID',
+            'EASYREGISTER_R2_CONFIG_READ_SECRET_ACCESS_KEY',
+            'EASYREGISTER_IMPORT_CODE_OWNER_PUBLIC_KEY'
+          )) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item -Path "Env:$name" -ErrorAction SilentlyContinue).Value)) {
+              $importEnabled = $false
+              break
+            }
+          }
+
+          "r2_enabled=$($r2Enabled.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "import_enabled=$($importEnabled.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Upload Runtime Env To R2
+        if: steps.runtime_distribution.outputs.r2_enabled == 'true'
+        id: runtime_config_upload
+        env:
+          EASYREGISTER_R2_CONFIG_ACCOUNT_ID: ${{ secrets.EASYREGISTER_R2_CONFIG_ACCOUNT_ID }}
+          EASYREGISTER_R2_CONFIG_BUCKET: ${{ secrets.EASYREGISTER_R2_CONFIG_BUCKET }}
+          EASYREGISTER_R2_CONFIG_ENDPOINT: ${{ secrets.EASYREGISTER_R2_CONFIG_ENDPOINT }}
+          EASYREGISTER_R2_CONFIG_RUNTIME_ENV_OBJECT_KEY: ${{ secrets.EASYREGISTER_R2_CONFIG_RUNTIME_ENV_OBJECT_KEY }}
+          EASYREGISTER_R2_CONFIG_MANIFEST_OBJECT_KEY: ${{ secrets.EASYREGISTER_R2_CONFIG_MANIFEST_OBJECT_KEY }}
+          EASYREGISTER_R2_CONFIG_UPLOAD_ACCESS_KEY_ID: ${{ secrets.EASYREGISTER_R2_CONFIG_UPLOAD_ACCESS_KEY_ID }}
+          EASYREGISTER_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY: ${{ secrets.EASYREGISTER_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY }}
+        shell: pwsh
+        run: |
+          $manifestPath = Join-Path $PWD 'easyregister-runtime-r2-config-manifest.json'
+          .\scripts\upload-runtime-r2-config.ps1 `
+            -RuntimeEnvPath $env:EASYREGISTER_RUNTIME_ENV_PATH `
+            -AccountId $env:EASYREGISTER_R2_CONFIG_ACCOUNT_ID `
+            -Bucket $env:EASYREGISTER_R2_CONFIG_BUCKET `
+            -AccessKeyId $env:EASYREGISTER_R2_CONFIG_UPLOAD_ACCESS_KEY_ID `
+            -SecretAccessKey $env:EASYREGISTER_R2_CONFIG_UPLOAD_SECRET_ACCESS_KEY `
+            -RuntimeEnvObjectKey $env:EASYREGISTER_R2_CONFIG_RUNTIME_ENV_OBJECT_KEY `
+            -ManifestObjectKey $env:EASYREGISTER_R2_CONFIG_MANIFEST_OBJECT_KEY `
+            -Endpoint $env:EASYREGISTER_R2_CONFIG_ENDPOINT `
+            -ReleaseVersion '${{ steps.release_meta.outputs.version }}' `
+            -ManifestOutput $manifestPath
+          "path=$manifestPath" >> $env:GITHUB_OUTPUT
+
+      - name: Generate Encrypted Import Code
+        if: steps.runtime_distribution.outputs.import_enabled == 'true'
+        id: import_code
+        env:
+          EASYREGISTER_R2_CONFIG_ACCOUNT_ID: ${{ secrets.EASYREGISTER_R2_CONFIG_ACCOUNT_ID }}
+          EASYREGISTER_R2_CONFIG_BUCKET: ${{ secrets.EASYREGISTER_R2_CONFIG_BUCKET }}
+          EASYREGISTER_R2_CONFIG_ENDPOINT: ${{ secrets.EASYREGISTER_R2_CONFIG_ENDPOINT }}
+          EASYREGISTER_R2_CONFIG_MANIFEST_OBJECT_KEY: ${{ secrets.EASYREGISTER_R2_CONFIG_MANIFEST_OBJECT_KEY }}
+          EASYREGISTER_R2_CONFIG_READ_ACCESS_KEY_ID: ${{ secrets.EASYREGISTER_R2_CONFIG_READ_ACCESS_KEY_ID }}
+          EASYREGISTER_R2_CONFIG_READ_SECRET_ACCESS_KEY: ${{ secrets.EASYREGISTER_R2_CONFIG_READ_SECRET_ACCESS_KEY }}
+          EASYREGISTER_IMPORT_CODE_OWNER_PUBLIC_KEY: ${{ secrets.EASYREGISTER_IMPORT_CODE_OWNER_PUBLIC_KEY }}
+          EASYREGISTER_IMPORT_CODE_SYNC_ENABLED: ${{ secrets.EASYREGISTER_IMPORT_CODE_SYNC_ENABLED }}
+          EASYREGISTER_IMPORT_CODE_SYNC_INTERVAL_SECONDS: ${{ secrets.EASYREGISTER_IMPORT_CODE_SYNC_INTERVAL_SECONDS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sync_flag="--sync-enabled"
+          if [[ -n "${EASYREGISTER_IMPORT_CODE_SYNC_ENABLED:-}" ]]; then
+            normalized="$(echo "${EASYREGISTER_IMPORT_CODE_SYNC_ENABLED}" | tr '[:upper:]' '[:lower:]')"
+            if [[ "${normalized}" == "0" || "${normalized}" == "false" || "${normalized}" == "no" || "${normalized}" == "off" ]]; then
+              sync_flag="--no-sync-enabled"
+            fi
+          fi
+
+          sync_interval=7200
+          if [[ -n "${EASYREGISTER_IMPORT_CODE_SYNC_INTERVAL_SECONDS:-}" ]]; then
+            sync_interval="${EASYREGISTER_IMPORT_CODE_SYNC_INTERVAL_SECONDS}"
+          fi
+
+          python scripts/easyregister-import-code.py encode \
+            --account-id "${EASYREGISTER_R2_CONFIG_ACCOUNT_ID}" \
+            --bucket "${EASYREGISTER_R2_CONFIG_BUCKET}" \
+            --manifest-object-key "${EASYREGISTER_R2_CONFIG_MANIFEST_OBJECT_KEY}" \
+            --access-key-id "${EASYREGISTER_R2_CONFIG_READ_ACCESS_KEY_ID}" \
+            --secret-access-key "${EASYREGISTER_R2_CONFIG_READ_SECRET_ACCESS_KEY}" \
+            --endpoint "${EASYREGISTER_R2_CONFIG_ENDPOINT}" \
+            "${sync_flag}" \
+            --sync-interval-seconds "${sync_interval}" \
+            --release-version "${{ steps.release_meta.outputs.version }}" \
+            --json-output \
+            --output easyregister-import-code.bundle.json
+
+          python scripts/easyregister-import-code.py encrypt \
+            --bundle-file easyregister-import-code.bundle.json \
+            --public-key "${EASYREGISTER_IMPORT_CODE_OWNER_PUBLIC_KEY}" \
+            --metadata-json "{\"releaseVersion\":\"${{ steps.release_meta.outputs.version }}\",\"imageRef\":\"${{ steps.release_meta.outputs.image_ref }}\",\"manifestObjectKey\":\"${EASYREGISTER_R2_CONFIG_MANIFEST_OBJECT_KEY}\"}" \
+            --output easyregister-import-code.encrypted.json
+
+          echo "bundle_path=easyregister-import-code.bundle.json" >> "${GITHUB_OUTPUT}"
+          echo "encrypted_path=easyregister-import-code.encrypted.json" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload Runtime Config Distribution Manifest
+        if: steps.runtime_distribution.outputs.r2_enabled == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: easyregister-runtime-r2-config-manifest
+          path: ${{ steps.runtime_config_upload.outputs.path }}
+
+      - name: Upload Encrypted Import Code
+        if: steps.runtime_distribution.outputs.import_enabled == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: easyregister-import-code-encrypted
+          path: ${{ steps.import_code.outputs.encrypted_path }}
+
       - name: Publish Summary
         shell: bash
         run: |
@@ -189,4 +327,11 @@ jobs:
             echo "- runtime env source: \`deploy/easyregister.runtime.env.example + GitHub secrets\`"
             echo "- optional full env secret: \`EASYREGISTER_RUNTIME_ENV_B64\`"
             echo "- optional GHCR auth secrets: \`EASYREGISTER_PUBLISH_GHCR_USERNAME\`, \`EASYREGISTER_PUBLISH_GHCR_TOKEN\`"
+            if [[ "${{ steps.runtime_distribution.outputs.r2_enabled }}" == "true" ]]; then
+              echo "- runtime R2 manifest: \`${{ secrets.EASYREGISTER_R2_CONFIG_MANIFEST_OBJECT_KEY }}\`"
+            fi
+            if [[ "${{ steps.runtime_distribution.outputs.import_enabled }}" == "true" ]]; then
+              echo "- import code artifact: \`easyregister-import-code-encrypted\`"
+              echo "- decrypt locally with: \`python scripts/easyregister-import-code.py decrypt --encrypted-file <downloaded-json> --private-key-file <owner-private-key.txt> --import-code-only\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

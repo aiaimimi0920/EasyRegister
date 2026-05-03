@@ -1,5 +1,7 @@
 param(
     [string]$OutputDirHost = "",
+    [string]$ImportCode = "",
+    [string]$BootstrapFile = "",
     [string]$ComposeFile = "",
     [string]$MailboxServiceBaseUrl = "http://easy-email:8080",
     [string]$MailboxServiceApiKey = "J7L+RCwLIBEcMZHzz0rXjm4oyR9rymq9",
@@ -43,6 +45,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$deployBoundParameters = @{}
+foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+    $deployBoundParameters[[string]$entry.Key] = $true
+}
 
 $defaultEasyProxyBaseUrl = "http://easy-proxy:29888"
 $defaultDashboardControlToken = "easyregister-dashboard-local-token"
@@ -101,6 +107,28 @@ function Write-ComposeEnvFile {
         New-Item -ItemType Directory -Force -Path $parent | Out-Null
     }
     Set-Content -LiteralPath $Path -Value $lines -Encoding ASCII
+}
+
+function Read-DotEnvFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $values = @{}
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('#') -or -not $line.Contains('=')) {
+            continue
+        }
+        $key, $value = $line.Split('=', 2)
+        $normalizedKey = $key.Trim()
+        if ([string]::IsNullOrWhiteSpace($normalizedKey)) {
+            continue
+        }
+        $values[$normalizedKey] = $value
+    }
+    return $values
 }
 
 function Get-RepoArchiveUrlValue {
@@ -243,38 +271,120 @@ $resolvedComposeFile = if ([string]::IsNullOrWhiteSpace($ComposeFile)) {
     Resolve-AbsolutePath -Path $ComposeFile -BaseDir $launcherRoot
 }
 
+if (-not [string]::IsNullOrWhiteSpace($ImportCode) -and -not [string]::IsNullOrWhiteSpace($BootstrapFile)) {
+    throw 'Specify either ImportCode or BootstrapFile, not both.'
+}
+
+$bootstrapRoot = Resolve-AbsolutePath -Path '.bootstrap' -BaseDir $launcherRoot
+$bootstrapPath = Join-Path $bootstrapRoot 'easyregister-r2-bootstrap.json'
+$importedRuntimeEnvPath = Join-Path $bootstrapRoot 'easyregister.runtime.imported.env'
+$importedRuntimeValues = @{}
+
+if (-not [string]::IsNullOrWhiteSpace($ImportCode) -or -not [string]::IsNullOrWhiteSpace($BootstrapFile)) {
+    New-Item -ItemType Directory -Force -Path $bootstrapRoot | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($ImportCode)) {
+        & (Join-Path $repoRoot 'scripts\write-runtime-r2-bootstrap.ps1') `
+            -ImportCode $ImportCode `
+            -OutputPath $bootstrapPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to materialize EasyRegister bootstrap file from import code with exit code $LASTEXITCODE"
+        }
+    } else {
+        $resolvedBootstrapFile = Resolve-AbsolutePath -Path $BootstrapFile -BaseDir $launcherRoot
+        if (-not (Test-Path -LiteralPath $resolvedBootstrapFile)) {
+            throw "Bootstrap file not found: $resolvedBootstrapFile"
+        }
+        Copy-Item -LiteralPath $resolvedBootstrapFile -Destination $bootstrapPath -Force
+    }
+
+    & python (Join-Path $repoRoot 'scripts\bootstrap-runtime-config.py') `
+        --bootstrap-path $bootstrapPath `
+        --runtime-env-path $importedRuntimeEnvPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to download EasyRegister runtime env from bootstrap with exit code $LASTEXITCODE"
+    }
+    $importedRuntimeValues = Read-DotEnvFile -Path $importedRuntimeEnvPath
+}
+
+function Resolve-EnvValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ParameterName,
+        [Parameter(Mandatory = $true)]
+        [string]$RuntimeKey,
+        [string]$Fallback = ''
+    )
+
+    if ($deployBoundParameters.ContainsKey($ParameterName)) {
+        return [string](Get-Variable -Name $ParameterName -ValueOnly)
+    }
+    if ($importedRuntimeValues.ContainsKey($RuntimeKey)) {
+        return [string]$importedRuntimeValues[$RuntimeKey]
+    }
+    return $Fallback
+}
+
+$resolvedMailboxServiceBaseUrl = Resolve-EnvValue -ParameterName 'MailboxServiceBaseUrl' -RuntimeKey 'MAILBOX_SERVICE_BASE_URL' -Fallback 'http://easy-email:8080'
+$resolvedMailboxServiceApiKey = Resolve-EnvValue -ParameterName 'MailboxServiceApiKey' -RuntimeKey 'MAILBOX_SERVICE_API_KEY' -Fallback 'J7L+RCwLIBEcMZHzz0rXjm4oyR9rymq9'
+$resolvedEasyProxyBaseUrl = Resolve-EnvValue -ParameterName 'EasyProxyBaseUrl' -RuntimeKey 'EASY_PROXY_BASE_URL' -Fallback 'http://easy-proxy:29888'
+$resolvedEasyProxyApiKey = Resolve-EnvValue -ParameterName 'EasyProxyApiKey' -RuntimeKey 'EASY_PROXY_API_KEY' -Fallback 'YP9l2DecuS_MRhARQu5v829VFOWKar7S'
+$resolvedWorkerCount = Resolve-EnvValue -ParameterName 'WorkerCount' -RuntimeKey 'REGISTER_WORKER_COUNT' -Fallback '10'
+$resolvedMainConcurrencyLimit = Resolve-EnvValue -ParameterName 'MainConcurrencyLimit' -RuntimeKey 'REGISTER_MAIN_CONCURRENCY_LIMIT' -Fallback '5'
+$resolvedContinueConcurrencyLimit = Resolve-EnvValue -ParameterName 'ContinueConcurrencyLimit' -RuntimeKey 'REGISTER_CONTINUE_CONCURRENCY_LIMIT' -Fallback '2'
+$resolvedTeamConcurrencyLimit = Resolve-EnvValue -ParameterName 'TeamConcurrencyLimit' -RuntimeKey 'REGISTER_TEAM_CONCURRENCY_LIMIT' -Fallback '1'
+$resolvedOpenaiUploadPercent = Resolve-EnvValue -ParameterName 'OpenaiUploadPercent' -RuntimeKey 'REGISTER_OPENAI_UPLOAD_PERCENT' -Fallback '0'
+$resolvedCodexFreeUploadPercent = Resolve-EnvValue -ParameterName 'CodexFreeUploadPercent' -RuntimeKey 'REGISTER_CODEX_FREE_UPLOAD_PERCENT' -Fallback '0'
+$resolvedCodexTeamUploadPercent = Resolve-EnvValue -ParameterName 'CodexTeamUploadPercent' -RuntimeKey 'REGISTER_CODEX_TEAM_UPLOAD_PERCENT' -Fallback '0'
+$resolvedCodexPlusUploadPercent = Resolve-EnvValue -ParameterName 'CodexPlusUploadPercent' -RuntimeKey 'REGISTER_CODEX_PLUS_UPLOAD_PERCENT' -Fallback '0'
+$resolvedEasyProtocolBaseUrl = if ($importedRuntimeValues.ContainsKey('EASY_PROTOCOL_BASE_URL')) { [string]$importedRuntimeValues['EASY_PROTOCOL_BASE_URL'] } else { [string]$env:EASY_PROTOCOL_BASE_URL }
+$resolvedEasyProtocolControlToken = if ($importedRuntimeValues.ContainsKey('EASY_PROTOCOL_CONTROL_TOKEN')) { [string]$importedRuntimeValues['EASY_PROTOCOL_CONTROL_TOKEN'] } else { [string]$env:EASY_PROTOCOL_CONTROL_TOKEN }
+$resolvedDashboardListen = if ($importedRuntimeValues.ContainsKey('REGISTER_DASHBOARD_LISTEN')) { [string]$importedRuntimeValues['REGISTER_DASHBOARD_LISTEN'] } else { [string]$env:REGISTER_DASHBOARD_LISTEN }
+$resolvedDashboardAllowRemote = if ($importedRuntimeValues.ContainsKey('REGISTER_DASHBOARD_ALLOW_REMOTE')) { [string]$importedRuntimeValues['REGISTER_DASHBOARD_ALLOW_REMOTE'] } else { [string]$env:REGISTER_DASHBOARD_ALLOW_REMOTE }
+
 $env:REGISTER_OUTPUT_DIR_HOST = $resolvedOutputDirHost
 $env:REGISTER_TEAM_AUTH_DIR_HOST = $TeamAuthDirHost
 $env:REGISTER_DASHBOARD_PORT_HOST = $DashboardPortHost
-$env:REGISTER_WORKER_COUNT = [string]$WorkerCount
-$env:REGISTER_MAIN_CONCURRENCY_LIMIT = [string]$MainConcurrencyLimit
-$env:REGISTER_CONTINUE_CONCURRENCY_LIMIT = [string]$ContinueConcurrencyLimit
-$env:REGISTER_TEAM_CONCURRENCY_LIMIT = [string]$TeamConcurrencyLimit
-$env:MAILBOX_SERVICE_BASE_URL = $MailboxServiceBaseUrl
-$env:MAILBOX_SERVICE_API_KEY = $MailboxServiceApiKey
-$env:EASY_PROXY_BASE_URL = $EasyProxyBaseUrl
-$env:EASY_PROXY_API_KEY = $EasyProxyApiKey
+$env:REGISTER_WORKER_COUNT = [string]$resolvedWorkerCount
+$env:REGISTER_MAIN_CONCURRENCY_LIMIT = [string]$resolvedMainConcurrencyLimit
+$env:REGISTER_CONTINUE_CONCURRENCY_LIMIT = [string]$resolvedContinueConcurrencyLimit
+$env:REGISTER_TEAM_CONCURRENCY_LIMIT = [string]$resolvedTeamConcurrencyLimit
+$env:MAILBOX_SERVICE_BASE_URL = $resolvedMailboxServiceBaseUrl
+$env:MAILBOX_SERVICE_API_KEY = $resolvedMailboxServiceApiKey
+$env:EASY_PROXY_BASE_URL = $resolvedEasyProxyBaseUrl
+$env:EASY_PROXY_API_KEY = $resolvedEasyProxyApiKey
 
 if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_EASY_PROXY_BASE_URL)) {
-    $env:EASYREGISTER_TEST_EASY_PROXY_BASE_URL = $EasyProxyBaseUrl
+    $env:EASYREGISTER_TEST_EASY_PROXY_BASE_URL = $resolvedEasyProxyBaseUrl
 }
-if ([string]::IsNullOrWhiteSpace($env:EASY_PROTOCOL_CONTROL_TOKEN)) {
-    $env:EASY_PROTOCOL_CONTROL_TOKEN = $defaultDashboardControlToken
+if ([string]::IsNullOrWhiteSpace($resolvedEasyProtocolControlToken)) {
+    $resolvedEasyProtocolControlToken = $defaultDashboardControlToken
 }
+$env:EASY_PROTOCOL_CONTROL_TOKEN = $resolvedEasyProtocolControlToken
 if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_EASY_PROTOCOL_CONTROL_TOKEN)) {
-    $env:EASYREGISTER_TEST_EASY_PROTOCOL_CONTROL_TOKEN = $defaultDashboardControlToken
+    $env:EASYREGISTER_TEST_EASY_PROTOCOL_CONTROL_TOKEN = $resolvedEasyProtocolControlToken
 }
-if ([string]::IsNullOrWhiteSpace($env:REGISTER_DASHBOARD_LISTEN)) {
-    $env:REGISTER_DASHBOARD_LISTEN = $defaultDashboardListen
+if ([string]::IsNullOrWhiteSpace($resolvedDashboardListen)) {
+    $resolvedDashboardListen = $defaultDashboardListen
 }
+$env:REGISTER_DASHBOARD_LISTEN = $resolvedDashboardListen
 if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_DASHBOARD_LISTEN)) {
-    $env:EASYREGISTER_TEST_DASHBOARD_LISTEN = $defaultDashboardListen
+    $env:EASYREGISTER_TEST_DASHBOARD_LISTEN = $resolvedDashboardListen
 }
-if ([string]::IsNullOrWhiteSpace($env:REGISTER_DASHBOARD_ALLOW_REMOTE)) {
-    $env:REGISTER_DASHBOARD_ALLOW_REMOTE = "true"
+if ([string]::IsNullOrWhiteSpace($resolvedDashboardAllowRemote)) {
+    $resolvedDashboardAllowRemote = "true"
 }
+$env:REGISTER_DASHBOARD_ALLOW_REMOTE = $resolvedDashboardAllowRemote
 if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_DASHBOARD_ALLOW_REMOTE)) {
-    $env:EASYREGISTER_TEST_DASHBOARD_ALLOW_REMOTE = "true"
+    $env:EASYREGISTER_TEST_DASHBOARD_ALLOW_REMOTE = $resolvedDashboardAllowRemote
+}
+if (-not [string]::IsNullOrWhiteSpace($resolvedEasyProtocolBaseUrl)) {
+    $env:EASY_PROTOCOL_BASE_URL = $resolvedEasyProtocolBaseUrl
+}
+elseif ([string]::IsNullOrWhiteSpace($env:EASY_PROTOCOL_BASE_URL)) {
+    $env:EASY_PROTOCOL_BASE_URL = ''
+}
+if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_EASY_PROTOCOL_BASE_URL)) {
+    $env:EASYREGISTER_TEST_EASY_PROTOCOL_BASE_URL = $env:EASY_PROTOCOL_BASE_URL
 }
 
 if (-not [string]::IsNullOrWhiteSpace($Image)) {
@@ -301,38 +411,45 @@ if (-not [string]::IsNullOrWhiteSpace($CodexTeamInputDirHost)) {
 if (-not [string]::IsNullOrWhiteSpace($CodexTeamMotherInputDirHost)) {
     $env:REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST = $CodexTeamMotherInputDirHost
 }
-$env:REGISTER_OPENAI_UPLOAD_PERCENT = [string]$OpenaiUploadPercent
-$env:REGISTER_CODEX_FREE_UPLOAD_PERCENT = [string]$CodexFreeUploadPercent
-$env:REGISTER_CODEX_TEAM_UPLOAD_PERCENT = [string]$CodexTeamUploadPercent
-$env:REGISTER_CODEX_PLUS_UPLOAD_PERCENT = [string]$CodexPlusUploadPercent
+$env:REGISTER_OPENAI_UPLOAD_PERCENT = [string]$resolvedOpenaiUploadPercent
+$env:REGISTER_CODEX_FREE_UPLOAD_PERCENT = [string]$resolvedCodexFreeUploadPercent
+$env:REGISTER_CODEX_TEAM_UPLOAD_PERCENT = [string]$resolvedCodexTeamUploadPercent
+$env:REGISTER_CODEX_PLUS_UPLOAD_PERCENT = [string]$resolvedCodexPlusUploadPercent
 
 $composeEnvFilePath = Join-Path $launcherRoot ".deploy-compose.env"
-Write-ComposeEnvFile -Path $composeEnvFilePath -Values @{
-    REGISTER_OUTPUT_DIR_HOST              = $env:REGISTER_OUTPUT_DIR_HOST
-    REGISTER_TEAM_AUTH_DIR_HOST           = $env:REGISTER_TEAM_AUTH_DIR_HOST
-    REGISTER_DASHBOARD_PORT_HOST          = $env:REGISTER_DASHBOARD_PORT_HOST
-    REGISTER_WORKER_COUNT                 = $env:REGISTER_WORKER_COUNT
-    REGISTER_MAIN_CONCURRENCY_LIMIT       = $env:REGISTER_MAIN_CONCURRENCY_LIMIT
-    REGISTER_CONTINUE_CONCURRENCY_LIMIT   = $env:REGISTER_CONTINUE_CONCURRENCY_LIMIT
-    REGISTER_TEAM_CONCURRENCY_LIMIT       = $env:REGISTER_TEAM_CONCURRENCY_LIMIT
-    MAILBOX_SERVICE_BASE_URL              = $env:MAILBOX_SERVICE_BASE_URL
-    MAILBOX_SERVICE_API_KEY               = $env:MAILBOX_SERVICE_API_KEY
-    EASY_PROXY_BASE_URL                   = $env:EASY_PROXY_BASE_URL
-    EASY_PROXY_API_KEY                    = $env:EASY_PROXY_API_KEY
-    REGISTER_OPENAI_UPLOAD_PERCENT        = $env:REGISTER_OPENAI_UPLOAD_PERCENT
-    REGISTER_CODEX_FREE_UPLOAD_PERCENT    = $env:REGISTER_CODEX_FREE_UPLOAD_PERCENT
-    REGISTER_CODEX_TEAM_UPLOAD_PERCENT    = $env:REGISTER_CODEX_TEAM_UPLOAD_PERCENT
-    REGISTER_CODEX_PLUS_UPLOAD_PERCENT    = $env:REGISTER_CODEX_PLUS_UPLOAD_PERCENT
-    REGISTER_CODEX_FREE_DIR_HOST          = $env:REGISTER_CODEX_FREE_DIR_HOST
-    REGISTER_CODEX_TEAM_DIR_HOST          = $env:REGISTER_CODEX_TEAM_DIR_HOST
-    REGISTER_CODEX_TEAM_INPUT_DIR_HOST    = $env:REGISTER_CODEX_TEAM_INPUT_DIR_HOST
-    REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST = $env:REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST
-    EASY_PROTOCOL_BASE_URL                = $env:EASY_PROTOCOL_BASE_URL
-    EASY_PROTOCOL_CONTROL_TOKEN           = $env:EASY_PROTOCOL_CONTROL_TOKEN
-    REGISTER_DASHBOARD_LISTEN             = $env:REGISTER_DASHBOARD_LISTEN
-    REGISTER_DASHBOARD_ALLOW_REMOTE       = $env:REGISTER_DASHBOARD_ALLOW_REMOTE
-    REGISTER_SERVICE_IMAGE                = $env:REGISTER_SERVICE_IMAGE
+$composeEnvValues = @{}
+foreach ($entry in $importedRuntimeValues.GetEnumerator()) {
+    $composeEnvValues[[string]$entry.Key] = [string]$entry.Value
 }
+foreach ($entry in @{
+    REGISTER_OUTPUT_DIR_HOST                  = $env:REGISTER_OUTPUT_DIR_HOST
+    REGISTER_TEAM_AUTH_DIR_HOST               = $env:REGISTER_TEAM_AUTH_DIR_HOST
+    REGISTER_DASHBOARD_PORT_HOST              = $env:REGISTER_DASHBOARD_PORT_HOST
+    REGISTER_WORKER_COUNT                     = $env:REGISTER_WORKER_COUNT
+    REGISTER_MAIN_CONCURRENCY_LIMIT           = $env:REGISTER_MAIN_CONCURRENCY_LIMIT
+    REGISTER_CONTINUE_CONCURRENCY_LIMIT       = $env:REGISTER_CONTINUE_CONCURRENCY_LIMIT
+    REGISTER_TEAM_CONCURRENCY_LIMIT           = $env:REGISTER_TEAM_CONCURRENCY_LIMIT
+    MAILBOX_SERVICE_BASE_URL                  = $env:MAILBOX_SERVICE_BASE_URL
+    MAILBOX_SERVICE_API_KEY                   = $env:MAILBOX_SERVICE_API_KEY
+    EASY_PROXY_BASE_URL                       = $env:EASY_PROXY_BASE_URL
+    EASY_PROXY_API_KEY                        = $env:EASY_PROXY_API_KEY
+    REGISTER_OPENAI_UPLOAD_PERCENT            = $env:REGISTER_OPENAI_UPLOAD_PERCENT
+    REGISTER_CODEX_FREE_UPLOAD_PERCENT        = $env:REGISTER_CODEX_FREE_UPLOAD_PERCENT
+    REGISTER_CODEX_TEAM_UPLOAD_PERCENT        = $env:REGISTER_CODEX_TEAM_UPLOAD_PERCENT
+    REGISTER_CODEX_PLUS_UPLOAD_PERCENT        = $env:REGISTER_CODEX_PLUS_UPLOAD_PERCENT
+    REGISTER_CODEX_FREE_DIR_HOST              = $env:REGISTER_CODEX_FREE_DIR_HOST
+    REGISTER_CODEX_TEAM_DIR_HOST              = $env:REGISTER_CODEX_TEAM_DIR_HOST
+    REGISTER_CODEX_TEAM_INPUT_DIR_HOST        = $env:REGISTER_CODEX_TEAM_INPUT_DIR_HOST
+    REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST = $env:REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST
+    EASY_PROTOCOL_BASE_URL                    = $env:EASY_PROTOCOL_BASE_URL
+    EASY_PROTOCOL_CONTROL_TOKEN               = $env:EASY_PROTOCOL_CONTROL_TOKEN
+    REGISTER_DASHBOARD_LISTEN                 = $env:REGISTER_DASHBOARD_LISTEN
+    REGISTER_DASHBOARD_ALLOW_REMOTE           = $env:REGISTER_DASHBOARD_ALLOW_REMOTE
+    REGISTER_SERVICE_IMAGE                    = $env:REGISTER_SERVICE_IMAGE
+}.GetEnumerator()) {
+    $composeEnvValues[[string]$entry.Key] = [string]$entry.Value
+}
+Write-ComposeEnvFile -Path $composeEnvFilePath -Values $composeEnvValues
 
 $materializeScript = Join-Path $repoRoot "scripts\materialize-output-links.ps1"
 $materializeParams = @{
