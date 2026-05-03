@@ -71,6 +71,10 @@ def acquire_flow_proxy_lease(
 
     unique_attempts = _resolve_easy_proxy_unique_attempts()
 
+    def _is_local_route_reuse_error(error_text: str) -> bool:
+        normalized = str(error_text or "").strip().lower()
+        return "duplicate_active_route" in normalized or "recent_route_reuse" in normalized
+
     def _try_random_nodes() -> FlowProxyLease | None:
         nonlocal last_error
         attempted_proxy_urls: set[str] = set()
@@ -217,6 +221,7 @@ def acquire_flow_proxy_lease(
                 last_error = exc
                 candidate_lease_id = str((candidate or {}).get("id") or "").strip()
                 candidate_proxy_url = runtime_reachable_proxy_url(str((candidate or {}).get("proxyUrl") or "").strip())
+                local_route_reuse = _is_local_route_reuse_error(str(exc))
                 json_log(
                     {
                         "event": "register_easy_proxy_checkout_failed",
@@ -228,19 +233,22 @@ def acquire_flow_proxy_lease(
                 )
                 if candidate_lease_id:
                     error_code, failure_class, route_confidence = _classify_easy_proxy_error(exc, probe_url=probe_url)
-                    report_usage(
-                        candidate_lease_id,
-                        success=False,
-                        latency_ms=0,
-                        error_code=error_code,
-                        service_key=service_key,
-                        stage=stage,
-                        failure_class=failure_class,
-                        route_confidence=route_confidence,
-                        base_url=management_base,
-                        api_key=api_key,
-                    )
+                    if not local_route_reuse:
+                        report_usage(
+                            candidate_lease_id,
+                            success=False,
+                            latency_ms=0,
+                            error_code=error_code,
+                            service_key=service_key,
+                            stage=stage,
+                            failure_class=failure_class,
+                            route_confidence=route_confidence,
+                            base_url=management_base,
+                            api_key=api_key,
+                        )
                     release_lease(candidate_lease_id, base_url=management_base, api_key=api_key)
+                    if local_route_reuse:
+                        break
                 time.sleep(0.1 * (attempt + 1))
         return None
 

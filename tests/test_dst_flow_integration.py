@@ -671,6 +671,104 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual([("mailbox-ref-1", "mailbox-session-1")], released_mailboxes)
         self.assertEqual([("http://proxy-1", "lease-1")], released_proxies)
 
+    def test_run_dst_flow_once_refresh_proxy_release_keeps_full_proxy_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "acquire-proxy-chain",
+                                    "type": "acquire_proxy_chain",
+                                    "metadata": {"owner": "easyproxy"},
+                                    "saveAs": "proxy_chain",
+                                },
+                                {
+                                    "id": "create-openai-account",
+                                    "type": "create_openai_account",
+                                    "metadata": {
+                                        "owner": "easyprotocol",
+                                        "retry": {
+                                            "maxAttempts": 2,
+                                            "backoffSeconds": 2,
+                                            "retryProfile": "step-proxy-refresh",
+                                            "refreshSavedStates": ["proxy_chain"],
+                                        },
+                                    },
+                                    "input": {
+                                        "proxy_url": "{{proxy_chain.proxy_url}}",
+                                    },
+                                    "saveAs": "create_openai_account",
+                                },
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            released_payloads: list[dict[str, object]] = []
+            proxy_call_count = 0
+
+            def _easyproxy_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                nonlocal proxy_call_count
+                if step_type == "acquire_proxy_chain":
+                    proxy_call_count += 1
+                    return {
+                        "ok": True,
+                        "proxy_url": f"http://proxy-{proxy_call_count}",
+                        "raw_proxy_url": f"http://127.0.0.1:{25000 + proxy_call_count}",
+                        "lease_id": f"lease-{proxy_call_count}",
+                        "unique_key": f"http://proxy-{proxy_call_count}",
+                        "checked_out": True,
+                    }
+                if step_type == "release_proxy_chain":
+                    released_payloads.append(dict(step_input))
+                    return {"released": True, "detail": "released"}
+                raise AssertionError(step_type)
+
+            def _easyprotocol_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type != "create_openai_account":
+                    raise AssertionError(step_type)
+                if proxy_call_count == 1:
+                    raise RuntimeError("Failed to perform, curl: (7) Connection closed abruptly.")
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "storage_path": "/tmp/create-success.json",
+                }
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "easyproxy": _easyproxy_dispatcher,
+                    "easyprotocol": _easyprotocol_dispatcher,
+                },
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(1, len(released_payloads))
+        self.assertIn("proxy_chain", released_payloads[0])
+        self.assertEqual(
+            {
+                "ok": True,
+                "proxy_url": "http://proxy-1",
+                "raw_proxy_url": "http://127.0.0.1:25001",
+                "lease_id": "lease-1",
+                "unique_key": "http://proxy-1",
+                "checked_out": True,
+            },
+            released_payloads[0]["proxy_chain"],
+        )
+
     def test_run_dst_flow_once_retries_chatgpt_login_after_chat_requirements_401(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             flow_path = Path(tmp_dir) / "temp-flow.json"

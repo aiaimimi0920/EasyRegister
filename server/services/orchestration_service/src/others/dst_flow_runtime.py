@@ -42,6 +42,7 @@ def _cleanup_saved_state_before_refresh(*, refresh_statement: DstStatement, stat
             dispatcher(
                 step_type="release_proxy_chain",
                 step_input={
+                    "proxy_chain": dict(existing_output),
                     "proxy_url": proxy_url,
                     "lease_id": lease_id,
                     "error_code": "refresh_retry_state",
