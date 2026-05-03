@@ -29,6 +29,12 @@ The contract for that file is:
 10. The default Docker deployment path must not bind-mount repository source
     files such as `../server` into `/app/server`, because that breaks GHCR
     image verification and lets stale repo-cache content override the image.
+11. The root deploy path must expose these artifact upload percentages as
+    explicit operator-facing configuration, not only as implicit code defaults:
+    - `REGISTER_OPENAI_UPLOAD_PERCENT`
+    - `REGISTER_CODEX_FREE_UPLOAD_PERCENT`
+    - `REGISTER_CODEX_TEAM_UPLOAD_PERCENT`
+    - `REGISTER_CODEX_PLUS_UPLOAD_PERCENT`
 
 Future deploy changes must preserve this contract.
 

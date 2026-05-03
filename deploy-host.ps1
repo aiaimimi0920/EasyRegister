@@ -2,10 +2,14 @@ param(
     [string]$OutputDirHost = "",
     [string]$ComposeFile = "",
     [string]$TeamAuthDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
-    [string]$CodexFreeDirHost = "C:\Users\vmjcv\.cli-proxy-api",
+    [string]$CodexFreeDirHost = "C:\Users\vmjcv\.cli-proxy-api\free",
     [string]$CodexTeamDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
     [string]$CodexTeamInputDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
     [string]$CodexTeamMotherInputDirHost = "",
+    [double]$OpenaiUploadPercent = 0,
+    [double]$CodexFreeUploadPercent = 0,
+    [double]$CodexTeamUploadPercent = 0,
+    [double]$CodexPlusUploadPercent = 0,
     [string]$DashboardPortHost = "19790",
     [string]$ComposeProjectName = "easy-register",
     [ValidateSet("Auto", "Junction", "SymbolicLink")]
@@ -259,6 +263,10 @@ if (-not [string]::IsNullOrWhiteSpace($CodexTeamInputDirHost)) {
 if (-not [string]::IsNullOrWhiteSpace($CodexTeamMotherInputDirHost)) {
     $env:REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST = $CodexTeamMotherInputDirHost
 }
+$env:REGISTER_OPENAI_UPLOAD_PERCENT = [string]$OpenaiUploadPercent
+$env:REGISTER_CODEX_FREE_UPLOAD_PERCENT = [string]$CodexFreeUploadPercent
+$env:REGISTER_CODEX_TEAM_UPLOAD_PERCENT = [string]$CodexTeamUploadPercent
+$env:REGISTER_CODEX_PLUS_UPLOAD_PERCENT = [string]$CodexPlusUploadPercent
 
 $materializeArgs = @(
     "-ExecutionPolicy", "Bypass",

@@ -162,6 +162,41 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
             self.assertEqual("old@example.com", artifact["email"])
             self.assertFalse(seed_path.exists())
 
+    def test_claim_openai_oauth_artifact_prefers_newer_seed_when_multiple_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260502-task000001"
+            source_pool_dir = output_root / "openai" / "failed-once"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            older_seed = source_pool_dir / "older.json"
+            newer_seed = source_pool_dir / "newer.json"
+            payload = (
+                '{"mailboxRef":"mailbox-ref","mailboxSessionId":"session-id",'
+                '"createdAt":"2026-05-01T00:00:00Z","platformOrganization":{"status":"completed"},'
+                '"chatgptLogin":{"status":"completed","workspaceId":"ws_123"},'
+                '"chatgptLoginDetails":{"clientBootstrap":{"authStatus":"logged_in","structure":"personal"}}}'
+            )
+            older_seed.write_text('{"email":"older@example.com",' + payload[1:], encoding="utf-8")
+            newer_seed.write_text('{"email":"newer@example.com",' + payload[1:], encoding="utf-8")
+            older_ts = time.time() - 3600
+            newer_ts = time.time() - 60
+            os.utime(older_seed, (older_ts, older_ts))
+            os.utime(newer_seed, (newer_ts, newer_ts))
+
+            artifact = artifact_pool_claims.claim_openai_oauth_artifact(
+                step_input={
+                    "output_dir": str(run_output_dir),
+                    "pool_dir": str(source_pool_dir),
+                    "worker_label": "worker-01",
+                    "task_index": 1,
+                }
+            )
+
+            self.assertEqual("newer@example.com", artifact["email"])
+            self.assertEqual("newer.json", artifact["original_name"])
+            self.assertTrue(older_seed.exists())
+            self.assertFalse(newer_seed.exists())
+
     def test_fill_team_pre_pool_defaults_target_dir_under_others(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"

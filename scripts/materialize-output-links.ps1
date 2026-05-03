@@ -103,6 +103,28 @@ function Get-LinkKind {
     return "Junction"
 }
 
+function Remove-ExistingDirectoryLink {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    $isReparsePoint = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+    if (-not $isReparsePoint) {
+        throw "Path '$Path' is not a directory link."
+    }
+
+    $cmdResult = cmd /c rmdir "$Path" 2>&1
+    if ($LASTEXITCODE -ne 0 -and (Test-Path -LiteralPath $Path)) {
+        throw "Failed to remove existing directory link '$Path': $cmdResult"
+    }
+}
+
 function Ensure-DirectoryAlias {
     param(
         [Parameter(Mandatory = $true)]
@@ -135,7 +157,7 @@ function Ensure-DirectoryAlias {
             if (-not $ForceReplace) {
                 throw "Existing link '$normalizedLinkPath' points to '$currentTarget', not '$normalizedTargetPath'. Use -Force to replace it."
             }
-            Remove-Item -LiteralPath $normalizedLinkPath -Force
+            Remove-ExistingDirectoryLink -Path $normalizedLinkPath
         } elseif ($existing.PSIsContainer) {
             $entries = @(Get-ChildItem -LiteralPath $normalizedLinkPath -Force)
             if ($entries.Count -gt 0) {

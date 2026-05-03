@@ -236,11 +236,16 @@ python -m infinite_runner
 - 把 `main` / `continue` 的 `team` 输入挂到：
   - `C:\Users\vmjcv\.cli-proxy-api\team`
 - 把用户层输出目录默认映射为：
-  - `codex/free -> C:\Users\vmjcv\.cli-proxy-api`
+- `codex/free -> C:\Users\vmjcv\.cli-proxy-api\free`
   - `codex/team -> C:\Users\vmjcv\.cli-proxy-api\team`
   - `codex/team-input -> C:\Users\vmjcv\.cli-proxy-api\team`
   - `codex/team-mother-input`
     - 默认不做宿主别名映射
+- 显式写入 4 个独立上传比例：
+  - `REGISTER_OPENAI_UPLOAD_PERCENT=0`
+  - `REGISTER_CODEX_FREE_UPLOAD_PERCENT=0`
+  - `REGISTER_CODEX_TEAM_UPLOAD_PERCENT=0`
+  - `REGISTER_CODEX_PLUS_UPLOAD_PERCENT=0`
 - 自动物化目录联接
 - 然后执行 `docker compose up`
 
@@ -248,6 +253,16 @@ python -m infinite_runner
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\deploy-host.ps1"
+```
+
+如果你要覆盖默认上传比例，也可以直接走根级脚本参数，例如：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\deploy-host.ps1" `
+  -OpenaiUploadPercent 0 `
+  -CodexFreeUploadPercent 0 `
+  -CodexTeamUploadPercent 0 `
+  -CodexPlusUploadPercent 0
 ```
 
 如果你要在别的宿主机上改映射，可以直接覆盖脚本参数，例如：
