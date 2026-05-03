@@ -18,6 +18,7 @@ from others.common import (  # noqa: E402
     canonical_free_artifact_name,
     canonical_team_artifact_name,
     env_flag,
+    ensure_directory,
     extract_account_id,
     free_manual_oauth_preserve_codes,
     free_manual_oauth_preserve_enabled,
@@ -204,6 +205,14 @@ class CommonHelpersTests(unittest.TestCase):
 
             self.assertFalse(target.exists())
             self.assertEqual([], list(Path(tmp_dir).glob("*.tmp")))
+
+    def test_ensure_directory_relaxes_directory_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "shared" / "nested"
+            ensure_directory(target)
+            self.assertTrue(target.is_dir())
+            mode = target.stat().st_mode & 0o777
+            self.assertEqual(0o777, mode)
 
 
 if __name__ == "__main__":

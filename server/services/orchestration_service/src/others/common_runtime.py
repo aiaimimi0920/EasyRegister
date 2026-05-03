@@ -26,9 +26,11 @@ def ensure_directory(path: Path) -> None:
         try:
             os.makedirs(target, exist_ok=True)
             if target.is_dir():
+                _relax_directory_permissions(target)
                 return
         except FileExistsError:
             if target.is_dir():
+                _relax_directory_permissions(target)
                 return
             raise
         except FileNotFoundError:
@@ -36,6 +38,15 @@ def ensure_directory(path: Path) -> None:
             continue
         time.sleep(0.02)
     os.makedirs(target, exist_ok=True)
+    _relax_directory_permissions(target)
+
+
+def _relax_directory_permissions(path: Path) -> None:
+    target = Path(path)
+    try:
+        os.chmod(target, 0o777)
+    except Exception:
+        return
 
 
 def json_log(payload: dict[str, Any]) -> None:
