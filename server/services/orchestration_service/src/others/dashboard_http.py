@@ -93,6 +93,7 @@ class DashboardHTTPServer:
         now = utcnow()
         services_root = dashboard_state_root(self._shared_root)
         pipeline_payload: dict[str, Any] = {}
+        flow_payload: dict[str, Any] = {}
         recent_cutoff = now - timedelta(seconds=self._recent_window_seconds)
         recent_uploads: list[dict[str, Any]] = []
 
@@ -133,6 +134,27 @@ class DashboardHTTPServer:
                     "failedWorkers": failed_workers,
                     "workers": workers,
                 }
+                flow_specs = service_state.get("flowSpecs") if isinstance(service_state.get("flowSpecs"), list) else []
+                flow_active_counts: dict[str, int] = {}
+                for worker_state in workers:
+                    if str(worker_state.get("status") or "").strip().lower() != "running":
+                        continue
+                    flow_name = str(worker_state.get("currentFlowName") or "").strip()
+                    if not flow_name:
+                        continue
+                    flow_active_counts[flow_name] = int(flow_active_counts.get(flow_name, 0) or 0) + 1
+                for flow_spec in flow_specs:
+                    if not isinstance(flow_spec, dict):
+                        continue
+                    flow_name = str(flow_spec.get("name") or "").strip()
+                    if not flow_name:
+                        continue
+                    flow_payload[flow_name] = {
+                        "instanceRole": str(flow_spec.get("instanceRole") or "").strip(),
+                        "weight": float(flow_spec.get("weight") or 0.0),
+                        "concurrencyLimit": int(flow_spec.get("concurrencyLimit") or 0),
+                        "activeWorkers": int(flow_active_counts.get(flow_name, 0) or 0),
+                    }
 
         openai_oauth_pool_dir = resolve_openai_oauth_pool_dir(str(self._shared_root))
         openai_oauth_pool_size = len(list(openai_oauth_pool_dir.glob("*.json"))) if openai_oauth_pool_dir.is_dir() else 0
@@ -168,6 +190,7 @@ class DashboardHTTPServer:
         return {
             "generatedAt": now.isoformat(),
             "pipelines": pipeline_payload,
+            "flows": flow_payload,
             "openaiOauthPool": openai_oauth_pool_payload,
             "smallSuccessPool": openai_oauth_pool_payload,
             "recentUploads": {

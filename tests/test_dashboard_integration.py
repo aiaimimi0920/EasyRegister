@@ -32,6 +32,14 @@ class DashboardIntegrationTests(unittest.TestCase):
                 delay_seconds=1.0,
                 worker_stagger_seconds=0.0,
                 openai_oauth_pool_dir=str(shared_root / "openai" / "pending"),
+                flow_specs=[
+                    {
+                        "name": "openai-main",
+                        "instanceRole": "main",
+                        "weight": 5.0,
+                        "concurrencyLimit": 5,
+                    }
+                ],
             )
             service_state.started(pid=1234, max_runs=0)
             worker_state = dashboard_server.WorkerRuntimeState(
@@ -99,3 +107,5 @@ class DashboardIntegrationTests(unittest.TestCase):
         self.assertEqual(1, payload["openaiOauthPool"]["size"])
         self.assertEqual(1, payload["smallSuccessPool"]["size"])
         self.assertEqual("PythonProtocol-1", payload["executors"][0]["service"])
+        self.assertEqual(5, payload["flows"]["openai-main"]["concurrencyLimit"])
+        self.assertEqual(0, payload["flows"]["openai-main"]["activeWorkers"])

@@ -79,6 +79,9 @@ class TypedConfigTests(unittest.TestCase):
                     "REGISTER_OUTPUT_ROOT": str(output_root),
                     "REGISTER_LOOP_DELAY_SECONDS": "1.5",
                     "REGISTER_WORKER_COUNT": "4",
+                    "REGISTER_MAIN_CONCURRENCY_LIMIT": "5",
+                    "REGISTER_CONTINUE_CONCURRENCY_LIMIT": "2",
+                    "REGISTER_TEAM_CONCURRENCY_LIMIT": "1",
                     "REGISTER_INSTANCE_ID": "continue",
                     "EASY_PROTOCOL_BASE_URL": "http://control:9788",
                 },
@@ -94,6 +97,7 @@ class TypedConfigTests(unittest.TestCase):
             self.assertEqual("http://control:9788", config.easy_protocol_base_url)
             self.assertEqual(config.shared_root / "openai" / "pending", config.openai_oauth_pool_dir)
             self.assertEqual(config.shared_root / "codex" / "free", config.free_oauth_pool_dir)
+            self.assertEqual(2, config.flow_specs[0].concurrency_limit)
 
     def test_runner_main_config_parses_mixed_flow_specs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -107,6 +111,8 @@ class TypedConfigTests(unittest.TestCase):
                 {
                     "REGISTER_OUTPUT_ROOT": str(output_root),
                     "REGISTER_INSTANCE_ID": "mixed",
+                    "REGISTER_MAIN_CONCURRENCY_LIMIT": "5",
+                    "REGISTER_CONTINUE_CONCURRENCY_LIMIT": "2",
                     "REGISTER_FLOW_SPECS_JSON": (
                         "["
                         "{\"name\":\"main-openai\",\"path\":\"" + str(flow_main).replace("\\", "\\\\") + "\",\"role\":\"main\",\"weight\":3},"
@@ -120,7 +126,9 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual(2, len(config.flow_specs))
         self.assertEqual("main-openai", config.flow_specs[0].name)
         self.assertEqual("main", config.flow_specs[0].instance_role)
+        self.assertEqual(5, config.flow_specs[0].concurrency_limit)
         self.assertEqual("continue", config.flow_specs[1].instance_role)
+        self.assertEqual(2, config.flow_specs[1].concurrency_limit)
         self.assertEqual(
             config.shared_root / "openai" / "failed-once",
             config.flow_specs[1].openai_oauth_pool_dir,
@@ -143,6 +151,7 @@ class TypedConfigTests(unittest.TestCase):
                     "REGISTER_OUTPUT_ROOT": str(output_root),
                     "REGISTER_INSTANCE_ID": "mixed",
                     "REGISTER_INSTANCE_ROLE": "mixed",
+                    "REGISTER_MAIN_CONCURRENCY_LIMIT": "5",
                     "REGISTER_FLOW_SPECS_JSON": relaxed_specs,
                 },
                 clear=True,
@@ -151,6 +160,7 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual(1, len(config.flow_specs))
         self.assertEqual("openai-main", config.flow_specs[0].name)
         self.assertEqual("main", config.flow_specs[0].instance_role)
+        self.assertEqual(5, config.flow_specs[0].concurrency_limit)
         self.assertEqual(flow_main.resolve(), Path(config.flow_specs[0].flow_path).resolve())
         self.assertEqual(flow_main.resolve(), Path(config.flow_path).resolve())
 

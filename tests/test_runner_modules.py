@@ -350,6 +350,75 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
         self.assertEqual("continue-openai", selected.name)
         self.assertEqual("continue", selection["selected"]["instanceRole"])
 
+    def test_choose_runnable_flow_spec_skips_flow_when_concurrency_limit_reached(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            shared_root = output_root / "shared"
+            pending_dir = shared_root / "openai" / "pending"
+            pending_dir.mkdir(parents=True, exist_ok=True)
+            spec = RunnerFlowSpec(
+                name="main-openai",
+                flow_path="main-flow.json",
+                instance_role="main",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=0,
+                openai_oauth_pool_dir=pending_dir,
+                mailbox_business_key="openai",
+                concurrency_limit=1,
+            )
+            selected, selection = runner_flow_scheduler.choose_runnable_flow_spec(
+                flow_specs=(spec,),
+                output_root=output_root,
+                shared_root=shared_root,
+                active_flow_counts={"main-openai": 1},
+            )
+        self.assertIsNone(selected)
+        self.assertEqual("concurrency_limit_reached", selection["skipped"][0]["reason"])
+
+    def test_flow_slot_reserve_and_release_roundtrip(self) -> None:
+        spec = RunnerFlowSpec(
+            name="continue-openai",
+            flow_path="continue-flow.json",
+            instance_role="continue",
+            weight=1.0,
+            team_auth_path="",
+            task_max_attempts=0,
+            openai_oauth_pool_dir=Path("C:/tmp/openai"),
+            mailbox_business_key="openai",
+            concurrency_limit=2,
+        )
+        counts: dict[str, int] = {}
+        self.assertTrue(
+            runner_flow_scheduler.reserve_flow_slot(
+                spec=spec,
+                active_flow_counts=counts,
+                active_flow_lock=None,
+            )
+        )
+        self.assertEqual({"continue-openai": 1}, counts)
+        self.assertTrue(
+            runner_flow_scheduler.reserve_flow_slot(
+                spec=spec,
+                active_flow_counts=counts,
+                active_flow_lock=None,
+            )
+        )
+        self.assertEqual({"continue-openai": 2}, counts)
+        self.assertFalse(
+            runner_flow_scheduler.reserve_flow_slot(
+                spec=spec,
+                active_flow_counts=counts,
+                active_flow_lock=None,
+            )
+        )
+        runner_flow_scheduler.release_flow_slot(
+            spec=spec,
+            active_flow_counts=counts,
+            active_flow_lock=None,
+        )
+        self.assertEqual({"continue-openai": 1}, counts)
+
 
 class RunnerProcessSupervisorTests(unittest.TestCase):
     def test_task_slots_exhausted_reads_counter_without_lock(self) -> None:
@@ -406,6 +475,8 @@ class RunnerProcessSupervisorTests(unittest.TestCase):
         ctx = SimpleNamespace(
             Event=mock.Mock(return_value=stop_event),
             Value=mock.Mock(return_value=task_counter),
+            Manager=mock.Mock(return_value=SimpleNamespace(dict=lambda: {})),
+            Lock=mock.Mock(return_value=nullcontext()),
         )
         config = SimpleNamespace(
             output_root=Path("C:/tmp/register-output"),

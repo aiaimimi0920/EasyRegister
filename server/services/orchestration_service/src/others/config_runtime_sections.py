@@ -91,6 +91,7 @@ class RunnerFlowSpec:
     task_max_attempts: int
     openai_oauth_pool_dir: Path
     mailbox_business_key: str
+    concurrency_limit: int = 0
 
 
 def _normalize_instance_role(value: Any, *, default: str) -> str:
@@ -108,6 +109,17 @@ def _default_openai_oauth_pool_dir_for_role(
     if normalized_role == "continue":
         return (shared_root / "openai" / "failed-once").resolve()
     return Path(resolve_openai_oauth_pool_dir(str(output_root))).resolve()
+
+
+def _default_flow_concurrency_limit_for_role(instance_role: str) -> int:
+    normalized_role = _normalize_instance_role(instance_role, default="main")
+    if normalized_role == "main":
+        return max(0, env_int("REGISTER_MAIN_CONCURRENCY_LIMIT", 5))
+    if normalized_role == "continue":
+        return max(0, env_int("REGISTER_CONTINUE_CONCURRENCY_LIMIT", 2))
+    if normalized_role == "team":
+        return max(0, env_int("REGISTER_TEAM_CONCURRENCY_LIMIT", 1))
+    return max(0, env_int("REGISTER_DEFAULT_FLOW_CONCURRENCY_LIMIT", 0))
 
 
 def _split_top_level_parts(text: str, delimiter: str) -> list[str]:
@@ -277,6 +289,18 @@ def _parse_runner_flow_specs(
             task_max_attempts = max(0, int(item.get("taskMaxAttempts") or item.get("task_max_attempts") or default_task_max_attempts))
         except Exception:
             task_max_attempts = max(0, int(default_task_max_attempts or 0))
+        try:
+            concurrency_limit = max(
+                0,
+                int(
+                    item.get("concurrencyLimit")
+                    or item.get("concurrency_limit")
+                    or item.get("maxConcurrentTasks")
+                    or _default_flow_concurrency_limit_for_role(instance_role)
+                ),
+            )
+        except Exception:
+            concurrency_limit = _default_flow_concurrency_limit_for_role(instance_role)
         openai_oauth_pool_dir_text = str(
             item.get("openaiOauthPoolDir")
             or item.get("openai_oauth_pool_dir")
@@ -318,6 +342,7 @@ def _parse_runner_flow_specs(
                     or item.get("mailbox_business_key")
                     or ""
                 ).strip().lower(),
+                concurrency_limit=concurrency_limit,
             )
         )
     return tuple(spec for spec in specs if spec.weight > 0.0)
@@ -375,6 +400,7 @@ class RunnerMainConfig:
                         instance_role=instance_role,
                     ),
                     mailbox_business_key="",
+                    concurrency_limit=_default_flow_concurrency_limit_for_role(instance_role),
                 ),
             )
         effective_flow_path = str(flow_path or "").strip() or str(flow_specs[0].flow_path or "").strip()

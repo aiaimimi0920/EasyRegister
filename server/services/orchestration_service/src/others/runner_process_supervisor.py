@@ -57,6 +57,8 @@ def start_worker(
     stop_event: Any,
     task_counter: Any,
     free_oauth_pool_dir_text: str,
+    active_flow_counts: Any,
+    active_flow_lock: Any,
 ) -> Any:
     process = ctx.Process(
         target=worker_loop,
@@ -72,6 +74,8 @@ def start_worker(
             "stop_event": stop_event,
             "task_counter": task_counter,
             "free_oauth_pool_dir_text": free_oauth_pool_dir_text,
+            "active_flow_counts": active_flow_counts,
+            "active_flow_lock": active_flow_lock,
         },
         name=f"register-worker-{worker_id:02d}",
     )
@@ -153,8 +157,11 @@ def main() -> int:
     _ensure_directory(config.free_oauth_pool_dir)
 
     ctx = mp.get_context("spawn")
+    manager = ctx.Manager()
     stop_event = ctx.Event()
     task_counter = ctx.Value("i", 0)
+    active_flow_counts = manager.dict()
+    active_flow_lock = ctx.Lock()
     processes: dict[int, Any] = {}
     dashboard_server = None
     shutdown_requested = False
@@ -215,6 +222,8 @@ def main() -> int:
                 stop_event=stop_event,
                 task_counter=task_counter,
                 free_oauth_pool_dir_text=str(config.free_oauth_pool_dir),
+                active_flow_counts=active_flow_counts,
+                active_flow_lock=active_flow_lock,
             )
             if config.worker_stagger_seconds > 0 and worker_id < config.worker_count:
                 time.sleep(config.worker_stagger_seconds)
@@ -276,6 +285,8 @@ def main() -> int:
                     stop_event=stop_event,
                     task_counter=task_counter,
                     free_oauth_pool_dir_text=str(config.free_oauth_pool_dir),
+                    active_flow_counts=active_flow_counts,
+                    active_flow_lock=active_flow_lock,
                 )
                 if config.worker_stagger_seconds > 0:
                     time.sleep(config.worker_stagger_seconds)
@@ -315,4 +326,8 @@ def main() -> int:
         service_state.stopped(pid=os.getpid(), task_count=task_counter_value(task_counter))
         if dashboard_server is not None:
             dashboard_server.stop()
+        try:
+            manager.shutdown()
+        except Exception:
+            pass
     return 0

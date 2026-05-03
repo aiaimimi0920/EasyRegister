@@ -21,6 +21,9 @@ from others.runner_artifacts import (
 from others.runner_flow_scheduler import (
     choose_runnable_flow_spec as _choose_runnable_flow_spec,
     configured_flow_roles as _configured_flow_roles,
+    release_flow_slot as _release_flow_slot,
+    reserve_flow_slot as _reserve_flow_slot,
+    snapshot_active_flow_counts as _snapshot_active_flow_counts,
 )
 from others.runner_team_auth import (
     release_team_auth_seat_reservations as _team_auth_release_seat_reservations,
@@ -90,6 +93,8 @@ def worker_loop(
     stop_event: Any,
     task_counter: Any,
     free_oauth_pool_dir_text: str,
+    active_flow_counts: Any | None = None,
+    active_flow_lock: Any | None = None,
 ) -> None:
     output_root = Path(output_root_text).resolve()
     shared_root = _shared_root_from_output_root(output_root)
@@ -150,6 +155,10 @@ def worker_loop(
             flow_specs=flow_specs,
             output_root=output_root,
             shared_root=shared_root,
+            active_flow_counts=_snapshot_active_flow_counts(
+                active_flow_counts=active_flow_counts,
+                active_flow_lock=active_flow_lock,
+            ),
         )
         if selected_flow_spec is None:
             sleep_seconds = max(float(delay_seconds or 0.0), 1.0)
@@ -166,8 +175,30 @@ def worker_loop(
             worker_state.sleeping(task_index=int(task_counter.value or 0), seconds=sleep_seconds)
             time.sleep(sleep_seconds)
             continue
+        reserved_flow_slot = _reserve_flow_slot(
+            spec=selected_flow_spec,
+            active_flow_counts=active_flow_counts,
+            active_flow_lock=active_flow_lock,
+        )
+        if not reserved_flow_slot:
+            _json_log(
+                {
+                    "event": "register_flow_slot_busy",
+                    "workerId": worker_label,
+                    "pid": os.getpid(),
+                    "selection": flow_selection,
+                }
+            )
+            worker_state.sleeping(task_index=int(task_counter.value or 0), seconds=1.0)
+            time.sleep(1.0)
+            continue
         task_index = claim_task_index(task_counter=task_counter, max_runs=max_runs)
         if task_index is None:
+            _release_flow_slot(
+                spec=selected_flow_spec,
+                active_flow_counts=active_flow_counts,
+                active_flow_lock=active_flow_lock,
+            )
             break
 
         normalized_role = str(selected_flow_spec.instance_role or "").strip().lower()
@@ -288,6 +319,11 @@ def worker_loop(
                 worker_state=worker_state,
             )
         finally:
+            _release_flow_slot(
+                spec=selected_flow_spec,
+                active_flow_counts=active_flow_counts,
+                active_flow_lock=active_flow_lock,
+            )
             reservation_summary = _team_auth_release_seat_reservations(
                 shared_root=shared_root,
                 reservation=seat_reservation,
