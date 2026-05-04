@@ -134,7 +134,7 @@
   - `cpu.edu.kg`
   - `tmail.bio`
   - `do4.tech`
-- 这批后缀是通过 `REGISTER_MAILBOX_BUSINESS_POLICIES_JSON` 配的，可直接从配置里删掉后恢复使用
+- 这批后缀仍然保留在 `openai` 业务的候选域名池里，只是当前通过 `explicitBlacklistDomains` 临时屏蔽；后续直接从配置里删掉即可恢复使用
 - 当前默认策略下，只有明确命中 `unsupported_email` 这类“业务明确不支持该邮箱域”的结果，才建议进入业务黑名单
 - 像 `cksa.eu.cc` 这种当前阶段高失败、但仍可能偶发通过的域名，默认只做统计，不会因为失败率高就自动进入业务黑名单
 

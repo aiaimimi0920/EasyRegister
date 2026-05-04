@@ -519,7 +519,17 @@ def _normalize_mailbox_business_key(value: Any) -> str:
 
 def _split_mailbox_domains(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
-        return tuple(item.lower() for item in split_csv(value))
+        text = str(value or "").strip()
+        if text.startswith("[") and text.endswith("]"):
+            inner = text[1:-1].strip()
+            if not inner:
+                return ()
+            return tuple(
+                _strip_optional_quotes(item).strip().lower()
+                for item in _split_top_level_parts(inner, ",")
+                if _strip_optional_quotes(item).strip()
+            )
+        return tuple(item.lower() for item in split_csv(text))
     if isinstance(value, (list, tuple, set)):
         normalized: list[str] = []
         for item in value:
@@ -530,6 +540,42 @@ def _split_mailbox_domains(value: Any) -> tuple[str, ...]:
     return ()
 
 
+def _parse_relaxed_mailbox_business_policy_map(text: str) -> dict[str, dict[str, Any]]:
+    raw = str(text or "").strip()
+    if not raw.startswith("{") or not raw.endswith("}"):
+        return {}
+    inner = raw[1:-1].strip()
+    if not inner:
+        return {}
+
+    payload: dict[str, dict[str, Any]] = {}
+    for pair in _split_top_level_parts(inner, ","):
+        split_index = _find_top_level_colon(pair)
+        if split_index <= 0:
+            continue
+        business_key = _strip_optional_quotes(pair[:split_index]).strip()
+        raw_policy = pair[split_index + 1 :].strip()
+        if not business_key or not raw_policy.startswith("{") or not raw_policy.endswith("}"):
+            continue
+        policy_body = raw_policy[1:-1].strip()
+        parsed_policy: dict[str, Any] = {}
+        for policy_pair in _split_top_level_parts(policy_body, ","):
+            policy_split_index = _find_top_level_colon(policy_pair)
+            if policy_split_index <= 0:
+                continue
+            key = _strip_optional_quotes(policy_pair[:policy_split_index]).strip()
+            value_text = policy_pair[policy_split_index + 1 :].strip()
+            if not key:
+                continue
+            if value_text.startswith("[") and value_text.endswith("]"):
+                parsed_policy[key] = _split_mailbox_domains(value_text)
+            else:
+                parsed_policy[key] = _parse_relaxed_scalar(value_text)
+        if parsed_policy:
+            payload[business_key] = parsed_policy
+    return payload
+
+
 def _parse_mailbox_business_policies(raw: str) -> tuple[MailboxBusinessPolicy, ...]:
     text = str(raw or "").strip()
     if not text:
@@ -537,7 +583,7 @@ def _parse_mailbox_business_policies(raw: str) -> tuple[MailboxBusinessPolicy, .
     try:
         payload = json.loads(text)
     except Exception:
-        return ()
+        payload = _parse_relaxed_mailbox_business_policy_map(text)
     if not isinstance(payload, dict):
         return ()
     policies: list[MailboxBusinessPolicy] = []

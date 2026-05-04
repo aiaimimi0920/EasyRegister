@@ -61,7 +61,7 @@ foreach ($entry in $PSBoundParameters.GetEnumerator()) {
 $defaultEasyProxyBaseUrl = "http://easy-proxy:29888"
 $defaultDashboardControlToken = "easyregister-dashboard-local-token"
 $defaultDashboardListen = "0.0.0.0:9790"
-$defaultMailboxBusinessPoliciesJson = '{"openai":{"domainPool":["cnmlgb.de","zhooo.org","zhooo.ggff.net","coolkidsa.ggff.net"],"explicitBlacklistDomains":["coolkid.icu","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"]}}'
+$defaultMailboxBusinessPoliciesJson = '{"openai":{"domainPool":["cnmlgb.de","zhooo.org","zhooo.ggff.net","coolkidsa.ggff.net","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"],"explicitBlacklistDomains":["coolkid.icu","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"]}}'
 
 function Resolve-AbsolutePath {
     param(

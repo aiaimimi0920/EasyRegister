@@ -252,6 +252,39 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual(("zhooo.org", "cnmlgb.de"), openai_policy.domain_pool)
         self.assertEqual(("coolkid.icu",), openai_policy.explicit_blacklist_domains)
 
+    def test_mailbox_runtime_config_parses_relaxed_business_policy_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "domain-state.json"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_POOL": "fallback.test",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST": "fallback-black.test",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        "{openai:{domainPool:[cnmlgb.de,zhooo.org,shaole.me,cpu.edu.kg,tmail.bio,do4.tech],"
+                        "explicitBlacklistDomains:[coolkid.icu,shaole.me,cpu.edu.kg,tmail.bio,do4.tech]}}"
+                    ),
+                },
+                clear=True,
+            ):
+                config = MailboxRuntimeConfig.from_env(
+                    default_ttl_seconds=90,
+                    default_state_path=state_path,
+                    default_business_domain_pool=("a.test", "b.test"),
+                    default_blacklist_min_attempts=20,
+                    default_blacklist_failure_rate=90.0,
+                )
+        openai_policy = config.resolve_business_policy("openai")
+        self.assertEqual(
+            ("cnmlgb.de", "zhooo.org", "shaole.me", "cpu.edu.kg", "tmail.bio", "do4.tech"),
+            openai_policy.domain_pool,
+        )
+        self.assertEqual(
+            ("coolkid.icu", "shaole.me", "cpu.edu.kg", "tmail.bio", "do4.tech"),
+            openai_policy.explicit_blacklist_domains,
+        )
+
     def test_team_auth_runtime_config_normalizes_seat_limits_and_weights(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"
