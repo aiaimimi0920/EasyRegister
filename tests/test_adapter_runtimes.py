@@ -12,7 +12,12 @@ SRC_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "orches
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+PYTHON_SHARED_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "python_shared" / "src"
+if str(PYTHON_SHARED_ROOT) not in sys.path:
+    sys.path.insert(0, str(PYTHON_SHARED_ROOT))
+
 from others import easyemail_runtime, easyprotocol_runtime, runtime_mailbox, runtime_proxy_support  # noqa: E402
+from shared_mailbox import easy_email_client  # noqa: E402
 
 
 class EasyProtocolRuntimeTests(unittest.TestCase):
@@ -184,6 +189,32 @@ class RuntimeProxySupportTests(unittest.TestCase):
 
 
 class RuntimeMailboxTests(unittest.TestCase):
+    def test_mailbox_request_payload_does_not_default_to_high_availability_profile(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_MAILBOX_ROUTING_PROFILE_ID": "",
+                "MAILBOX_PROVIDER_ROUTING_PROFILE_ID": "",
+                "REGISTER_MAILBOX_STRATEGY_MODE_ID": "",
+                "MAILBOX_PROVIDER_STRATEGY_MODE_ID": "",
+                "MAILBOX_STRATEGY_MODE_JSON": "",
+                "REGISTER_INBOX_STRATEGY_MODE_JSON": "",
+            },
+            clear=True,
+        ):
+            with mock.patch.object(easy_email_client, "_wait_mail_service_ready"):
+                payload, provider_key, requested_email = easy_email_client._build_mailbox_request_payload(
+                    provider="auto",
+                    default_host_id="python-register-orchestration",
+                    ttl_seconds=90,
+                )
+
+        self.assertEqual("", provider_key)
+        self.assertEqual("", requested_email)
+        self.assertNotIn("providerRoutingProfileId", payload)
+        self.assertNotIn("providerStrategyModeId", payload)
+        self.assertNotIn("providerGroupSelections", payload)
+
     def test_domain_is_not_blacklisted_by_failure_rate_only(self) -> None:
         with mock.patch.dict(
             os.environ,

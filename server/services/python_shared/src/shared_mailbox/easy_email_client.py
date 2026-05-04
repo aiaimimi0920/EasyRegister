@@ -628,7 +628,7 @@ def _build_mailbox_request_payload(
             provider_routing_profile_id
             or os.environ.get("REGISTER_MAILBOX_ROUTING_PROFILE_ID")
             or os.environ.get("MAILBOX_PROVIDER_ROUTING_PROFILE_ID")
-            or "high-availability"
+            or ""
         ).strip()
         if routing_profile_id:
             payload["providerRoutingProfileId"] = routing_profile_id
