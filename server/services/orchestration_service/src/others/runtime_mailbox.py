@@ -147,6 +147,10 @@ def _resolve_mailbox_explicit_blacklist_domains(*, business_key: str | None = No
     return _mailbox_runtime_config().resolve_business_policy(business_key).explicit_blacklist_domains
 
 
+def _resolve_mailbox_explicit_blacklist_providers(*, business_key: str | None = None) -> tuple[str, ...]:
+    return _mailbox_runtime_config().resolve_business_policy(business_key).explicit_blacklist_providers
+
+
 def _resolve_mailbox_domain_blacklist_min_attempts() -> int:
     return _mailbox_runtime_config().blacklist_min_attempts
 
@@ -240,6 +244,15 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
     provider = _normalize_mailbox_provider(str(getattr(mailbox, "provider", "") or ""))
     email = str(getattr(mailbox, "email", "") or "").strip().lower()
     domain = _mailbox_domain_from_email(email)
+    explicit_provider_blacklist = set(_resolve_mailbox_explicit_blacklist_providers(business_key=resolved_business_key))
+    if provider and provider in explicit_provider_blacklist:
+        return {
+            "reason": "explicit_business_provider_blacklist",
+            "business_key": resolved_business_key,
+            "provider": provider,
+            "domain": domain,
+            "email": email,
+        }
     if not domain:
         return None
 
@@ -247,16 +260,6 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
     if domain in explicit_blacklist:
         return {
             "reason": "explicit_business_blacklist",
-            "business_key": resolved_business_key,
-            "provider": provider,
-            "domain": domain,
-            "email": email,
-        }
-
-    business_domain_pool = set(_resolve_business_mailbox_domain_pool(business_key=resolved_business_key))
-    if business_domain_pool and domain not in business_domain_pool:
-        return {
-            "reason": "outside_business_domain_pool",
             "business_key": resolved_business_key,
             "provider": provider,
             "domain": domain,
@@ -427,33 +430,14 @@ def resolve_mailbox(
         strategy_kwargs=strategy_kwargs,
     )
     try:
-        if planned_provider == "moemail":
-            selected_domain, domain_selection = _select_business_mailbox_domain(
-                business_key=resolved_business_key,
+        if planned_provider:
+            json_log(
+                {
+                    "event": "register_mailbox_provider_planned",
+                    "provider": planned_provider,
+                    "businessKey": resolved_business_key,
+                }
             )
-            if selected_domain:
-                json_log(
-                    {
-                        "event": "register_mailbox_business_domain_selected",
-                        "provider": "moemail",
-                        "domain": selected_domain,
-                        "reason": str(domain_selection.get("reason") or ""),
-                        "eligibleCount": int(domain_selection.get("eligible_count") or 0),
-                        "dynamicBlacklistedCount": len(domain_selection.get("dynamic_blacklisted") or []),
-                        "explicitBlacklistedCount": len(domain_selection.get("explicit_blacklisted") or []),
-                        "businessKey": str(domain_selection.get("business_key") or ""),
-                    }
-                )
-                return _create_mailbox_with_business_policy(
-                    create_fn=lambda: create_mailbox(
-                        provider="moemail",
-                        default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
-                        prefer_raw_self_hosted_ref=True,
-                        ttl_seconds=ttl_seconds,
-                        mailcreate_domain=selected_domain,
-                    ),
-                    business_key=resolved_business_key,
-                )
         return _create_mailbox_with_business_policy(
             create_fn=lambda: create_mailbox(
                 provider="auto",

@@ -511,6 +511,7 @@ class MailboxBusinessPolicy:
     business_key: str
     domain_pool: tuple[str, ...]
     explicit_blacklist_domains: tuple[str, ...]
+    explicit_blacklist_providers: tuple[str, ...]
 
 
 _MAILBOX_DEFAULT_POLICY_KEYS = ("default", "*", "__default__")
@@ -541,6 +542,46 @@ def _split_mailbox_domains(value: Any) -> tuple[str, ...]:
                 normalized.append(text)
         return tuple(normalized)
     return ()
+
+
+def _split_mailbox_providers(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        text = str(value or "").strip()
+        if text.startswith("[") and text.endswith("]"):
+            inner = text[1:-1].strip()
+            if not inner:
+                return ()
+            return tuple(
+                _normalize_mailbox_provider_key(_strip_optional_quotes(item))
+                for item in _split_top_level_parts(inner, ",")
+                if _normalize_mailbox_provider_key(_strip_optional_quotes(item))
+            )
+        return tuple(
+            normalized
+            for normalized in (_normalize_mailbox_provider_key(item) for item in split_csv(text))
+            if normalized
+        )
+    if isinstance(value, (list, tuple, set)):
+        normalized: list[str] = []
+        for item in value:
+            provider_key = _normalize_mailbox_provider_key(item)
+            if provider_key:
+                normalized.append(provider_key)
+        return tuple(normalized)
+    return ()
+
+
+def _normalize_mailbox_provider_key(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    alias_map = {
+        "mail-to-you": "m2u",
+        "mailtoyou": "m2u",
+        "cloudflare-temp-email": "cloudflare_temp_email",
+        "cloudflaretempemail": "cloudflare_temp_email",
+        "tempmail.lol": "tempmail-lol",
+        "tempmaillol": "tempmail-lol",
+    }
+    return alias_map.get(normalized, normalized)
 
 
 def _parse_relaxed_mailbox_business_policy_map(text: str) -> dict[str, dict[str, Any]]:
@@ -606,11 +647,20 @@ def _parse_mailbox_business_policies(raw: str) -> tuple[MailboxBusinessPolicy, .
             or raw_policy.get("domain_blacklist")
             or raw_policy.get("blacklist")
         )
+        explicit_blacklist_providers = _split_mailbox_providers(
+            raw_policy.get("providerBlacklist")
+            or raw_policy.get("provider_blacklist")
+            or raw_policy.get("explicitBlacklistProviders")
+            or raw_policy.get("explicit_blacklist_providers")
+            or raw_policy.get("blacklistProviders")
+            or raw_policy.get("blacklist_providers")
+        )
         policies.append(
             MailboxBusinessPolicy(
                 business_key=business_key,
                 domain_pool=domain_pool,
                 explicit_blacklist_domains=explicit_blacklist_domains,
+                explicit_blacklist_providers=explicit_blacklist_providers,
             )
         )
     return tuple(policies)
@@ -626,6 +676,7 @@ class MailboxRuntimeConfig:
     domain_state_path: Path
     business_domain_pool: tuple[str, ...]
     explicit_blacklist_domains: tuple[str, ...]
+    explicit_blacklist_providers: tuple[str, ...]
     business_policies: tuple[MailboxBusinessPolicy, ...]
     blacklist_min_attempts: int
     blacklist_failure_rate_percent: float
@@ -645,6 +696,7 @@ class MailboxRuntimeConfig:
         domain_state_path = Path(explicit_state_path).expanduser().resolve() if explicit_state_path else default_state_path
         business_domain_pool = tuple(item.lower() for item in split_csv(env_text("REGISTER_MAILBOX_DOMAIN_POOL"))) or default_business_domain_pool
         explicit_blacklist_domains = tuple(item.lower() for item in split_csv(env_text("REGISTER_MAILBOX_DOMAIN_BLACKLIST")))
+        explicit_blacklist_providers = _split_mailbox_providers(env_text("REGISTER_MAILBOX_PROVIDER_BLACKLIST"))
         business_policies = _parse_mailbox_business_policies(env_text("REGISTER_MAILBOX_BUSINESS_POLICIES_JSON"))
         return cls(
             ttl_seconds=max(1, int(float(env_text("REGISTER_MAILBOX_TTL_SECONDS", str(default_ttl_seconds)) or default_ttl_seconds))),
@@ -659,6 +711,7 @@ class MailboxRuntimeConfig:
             domain_state_path=domain_state_path,
             business_domain_pool=business_domain_pool,
             explicit_blacklist_domains=explicit_blacklist_domains,
+            explicit_blacklist_providers=explicit_blacklist_providers,
             business_policies=business_policies,
             blacklist_min_attempts=max(1, env_int("REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS", default_blacklist_min_attempts)),
             blacklist_failure_rate_percent=env_percent_value(
@@ -685,11 +738,13 @@ class MailboxRuntimeConfig:
                     business_key=resolved_business_key,
                     domain_pool=policy.domain_pool,
                     explicit_blacklist_domains=policy.explicit_blacklist_domains,
+                    explicit_blacklist_providers=policy.explicit_blacklist_providers,
                 )
         return MailboxBusinessPolicy(
             business_key=resolved_business_key,
             domain_pool=self.business_domain_pool,
             explicit_blacklist_domains=self.explicit_blacklist_domains,
+            explicit_blacklist_providers=self.explicit_blacklist_providers,
         )
 
 

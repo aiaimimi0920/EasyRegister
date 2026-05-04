@@ -231,9 +231,11 @@ class TypedConfigTests(unittest.TestCase):
                     "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
                     "REGISTER_MAILBOX_DOMAIN_POOL": "fallback.test",
                     "REGISTER_MAILBOX_DOMAIN_BLACKLIST": "fallback-black.test",
+                    "REGISTER_MAILBOX_PROVIDER_BLACKLIST": "m2u, tempmail.lol",
                     "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
                         '{"openai":{"domainPool":["zhooo.org","cnmlgb.de"],'
-                        '"explicitBlacklistDomains":["coolkid.icu"]}}'
+                        '"explicitBlacklistDomains":["coolkid.icu"],'
+                        '"providerBlacklist":["moemail"]}}'
                     ),
                 },
                 clear=True,
@@ -249,8 +251,10 @@ class TypedConfigTests(unittest.TestCase):
         openai_policy = config.resolve_business_policy("openai")
         self.assertEqual(("fallback.test",), fallback_policy.domain_pool)
         self.assertEqual(("fallback-black.test",), fallback_policy.explicit_blacklist_domains)
+        self.assertEqual(("m2u", "tempmail-lol"), fallback_policy.explicit_blacklist_providers)
         self.assertEqual(("zhooo.org", "cnmlgb.de"), openai_policy.domain_pool)
         self.assertEqual(("coolkid.icu",), openai_policy.explicit_blacklist_domains)
+        self.assertEqual(("moemail",), openai_policy.explicit_blacklist_providers)
 
     def test_mailbox_runtime_config_parses_relaxed_business_policy_map(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -263,7 +267,8 @@ class TypedConfigTests(unittest.TestCase):
                     "REGISTER_MAILBOX_DOMAIN_BLACKLIST": "fallback-black.test",
                     "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
                         "{openai:{domainPool:[cnmlgb.de,zhooo.org,shaole.me,cpu.edu.kg,tmail.bio,do4.tech],"
-                        "explicitBlacklistDomains:[coolkid.icu,shaole.me,cpu.edu.kg,tmail.bio,do4.tech]}}"
+                        "explicitBlacklistDomains:[coolkid.icu,shaole.me,cpu.edu.kg,tmail.bio,do4.tech],"
+                        "providerBlacklist:[m2u,tempmail.lol]}}"
                     ),
                 },
                 clear=True,
@@ -284,6 +289,7 @@ class TypedConfigTests(unittest.TestCase):
             ("coolkid.icu", "shaole.me", "cpu.edu.kg", "tmail.bio", "do4.tech"),
             openai_policy.explicit_blacklist_domains,
         )
+        self.assertEqual(("m2u", "tempmail-lol"), openai_policy.explicit_blacklist_providers)
 
     def test_mailbox_runtime_config_uses_default_policy_for_unmapped_business(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -296,7 +302,8 @@ class TypedConfigTests(unittest.TestCase):
                     "REGISTER_MAILBOX_DOMAIN_BLACKLIST": "fallback-black.test",
                     "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
                         '{"default":{"domainPool":["cnmlgb.de","zhooo.org"],'
-                        '"explicitBlacklistDomains":["coolkid.icu","shaole.me"]},'
+                        '"explicitBlacklistDomains":["coolkid.icu","shaole.me"],'
+                        '"providerBlacklist":["m2u"]},'
                         '"openai":{"domainPool":["cnmlgb.de","zhooo.org"],'
                         '"explicitBlacklistDomains":["coolkid.icu","shaole.me"]}}'
                     ),
@@ -313,6 +320,7 @@ class TypedConfigTests(unittest.TestCase):
         other_policy = config.resolve_business_policy("codex-team")
         self.assertEqual(("cnmlgb.de", "zhooo.org"), other_policy.domain_pool)
         self.assertEqual(("coolkid.icu", "shaole.me"), other_policy.explicit_blacklist_domains)
+        self.assertEqual(("m2u",), other_policy.explicit_blacklist_providers)
         self.assertEqual("codex-team", other_policy.business_key)
 
     def test_team_auth_runtime_config_normalizes_seat_limits_and_weights(self) -> None:

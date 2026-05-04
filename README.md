@@ -119,27 +119,27 @@
 - `REGISTER_MAILBOX_ROUTING_PROFILE_ID` 现在只作为可选的 routing profile id 透传给 `EasyEmail`
 - `REGISTER_MAILBOX_BUSINESS_KEY` 现在只作为默认业务标签兜底；真正的业务标签应由具体 DST / task 传入
 - `REGISTER_MAILBOX_DOMAIN_BLACKLIST` 是默认业务策略的显式域名黑名单；任何未单独声明的业务都会继承它
-- `REGISTER_MAILBOX_DOMAIN_POOL` 是默认业务策略的偏好域名池；任何未单独声明的业务都会继承它
-- `REGISTER_MAILBOX_BUSINESS_POLICIES_JSON` 可以在同一个镜像实例里声明多套业务邮箱策略，按业务 key 选不同域名池和黑名单；如果没有命中业务专属规则，会自动回落到 `default` 业务策略
+- `REGISTER_MAILBOX_PROVIDER_BLACKLIST` 是默认业务策略的显式服务商黑名单；任何未单独声明的业务都会继承它
+- `REGISTER_MAILBOX_BUSINESS_POLICIES_JSON` 可以在同一个镜像实例里声明多套业务邮箱策略，按业务 key 选不同域名黑名单和服务商黑名单；如果没有命中业务专属规则，会自动回落到 `default` 业务策略
 
-当前默认部署会把同一套业务域名策略同时下发给默认业务和 `openai` 业务：
+当前默认部署会把同一套业务黑名单策略同时下发给默认业务和 `openai` 业务：
 
 - 没有单独声明业务 key 的 flow，会继承默认业务策略
 - 当前显式声明为 `openai` 的 flow，也会使用同一套策略
 - 运行态统计会按 task / flow 实际携带的 `businessKey` 分桶记录
 - 如果当前业务显式拉黑某个域名，后续申请到该域名会立即释放并重新申请
-- 对所有 mailbox provider，如果实际返回域名不在当前业务配置的域名池里，也会立即丢弃并重申请
+- 如果当前业务显式拉黑某个 mailbox provider，后续申请到该 provider 的邮箱也会立即释放并重新申请
 - 当前仓库默认对当前几个业务统一显式忽略这些邮箱后缀：
   - `coolkid.icu`
   - `shaole.me`
   - `cpu.edu.kg`
   - `tmail.bio`
   - `do4.tech`
-- 这批后缀仍然保留在默认业务和 `openai` 业务的候选域名池里，只是当前通过 `explicitBlacklistDomains` 临时屏蔽；后续直接从配置里删掉即可恢复使用
+- 当前默认没有启用服务商黑名单；如果后续某个业务需要整体禁用 `m2u` / `moemail` / 其他 provider，直接把它写进该业务的 `providerBlacklist` 即可
 - 当前默认策略下，只有明确命中 `unsupported_email` 这类“业务明确不支持该邮箱域”的结果，才建议进入业务黑名单
 - 像 `cksa.eu.cc` 这种当前阶段高失败、但仍可能偶发通过的域名，默认只做统计，不会因为失败率高就自动进入业务黑名单
 
-推荐做法是让每个 DST 在自己的 flow metadata 里声明 `mailbox.businessKey`，然后由统一镜像实例按业务 key 选策略，而不是为每个业务单独做一份“当前 DST 专用镜像”。
+推荐做法是让每个 DST 在自己的 flow metadata 里声明 `mailbox.businessKey`，然后由统一镜像实例按业务 key 选“域名黑名单 + 服务商黑名单”策略，而不是为每个业务单独做一份“当前 DST 专用镜像”。
 
 `high-availability` 是 `EasyEmail` 内部的通用路由档位，不是 `EasyRegister`
 里的业务白名单。当前它会把高可用邮箱优先收敛到 `m2u + moemail`，以后如果你要
