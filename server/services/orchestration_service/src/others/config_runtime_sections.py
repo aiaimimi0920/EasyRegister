@@ -707,7 +707,7 @@ class MailboxRuntimeConfig:
             routing_profile_id=env_first_text(
                 "REGISTER_MAILBOX_ROUTING_PROFILE_ID",
                 "MAILBOX_PROVIDER_ROUTING_PROFILE_ID",
-                default="high-availability",
+                default="",
             ),
             business_key=_normalize_mailbox_business_key(env_text("REGISTER_MAILBOX_BUSINESS_KEY", "openai")) or "openai",
             domain_state_path=domain_state_path,

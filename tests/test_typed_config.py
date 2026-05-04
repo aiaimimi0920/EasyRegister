@@ -222,6 +222,27 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual(state_path.resolve(), config.domain_state_path)
         self.assertEqual(("coolkid.icu", "cksa.eu.cc"), config.explicit_blacklist_domains)
         self.assertEqual(90.0, config.blacklist_failure_rate_percent)
+        self.assertEqual("stable", config.routing_profile_id)
+
+    def test_mailbox_runtime_config_defaults_to_empty_routing_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "domain-state.json"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "openai-signup",
+                },
+                clear=True,
+            ):
+                config = MailboxRuntimeConfig.from_env(
+                    default_ttl_seconds=90,
+                    default_state_path=state_path,
+                    default_business_domain_pool=("a.test", "b.test"),
+                    default_blacklist_min_attempts=20,
+                    default_blacklist_failure_rate=90.0,
+                    default_consecutive_failure_blacklist_threshold=500,
+                )
+        self.assertEqual("", config.routing_profile_id)
 
     def test_mailbox_runtime_config_parses_business_policy_map(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

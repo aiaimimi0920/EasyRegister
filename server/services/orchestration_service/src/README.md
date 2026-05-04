@@ -54,7 +54,7 @@
 当前运行时不再在 `EasyRegister` 本地做 provider 顺序路由。
 
 - 默认直接调用 `EasyEmail` 的 mailbox 能力接口
-- 当前默认请求 `EasyEmail` 的 `high-availability` routing profile
+- 当前未显式设置 `REGISTER_MAILBOX_ROUTING_PROFILE_ID` 时，不再在 `EasyRegister` 侧默认指定 `high-availability`；会直接使用 `EasyEmail` 自己当前的默认 routing 策略
 - 如果没有显式设置 `REGISTER_MAILBOX_STRATEGY_MODE_ID` / `REGISTER_MAILBOX_PROVIDERS`
   就使用 `EasyEmail` 自己的默认 strategy mode
 - `REGISTER_MAILBOX_PROVIDERS` 现在只作为可选的 provider group 过滤条件透传给 `EasyEmail`；留空时不会再在 `EasyRegister` 本地默认收窄到 `m2u + moemail`
