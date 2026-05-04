@@ -285,6 +285,36 @@ class TypedConfigTests(unittest.TestCase):
             openai_policy.explicit_blacklist_domains,
         )
 
+    def test_mailbox_runtime_config_uses_default_policy_for_unmapped_business(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "domain-state.json"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_POOL": "fallback.test",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST": "fallback-black.test",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"default":{"domainPool":["cnmlgb.de","zhooo.org"],'
+                        '"explicitBlacklistDomains":["coolkid.icu","shaole.me"]},'
+                        '"openai":{"domainPool":["cnmlgb.de","zhooo.org"],'
+                        '"explicitBlacklistDomains":["coolkid.icu","shaole.me"]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                config = MailboxRuntimeConfig.from_env(
+                    default_ttl_seconds=90,
+                    default_state_path=state_path,
+                    default_business_domain_pool=("a.test", "b.test"),
+                    default_blacklist_min_attempts=20,
+                    default_blacklist_failure_rate=90.0,
+                )
+        other_policy = config.resolve_business_policy("codex-team")
+        self.assertEqual(("cnmlgb.de", "zhooo.org"), other_policy.domain_pool)
+        self.assertEqual(("coolkid.icu", "shaole.me"), other_policy.explicit_blacklist_domains)
+        self.assertEqual("codex-team", other_policy.business_key)
+
     def test_team_auth_runtime_config_normalizes_seat_limits_and_weights(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"

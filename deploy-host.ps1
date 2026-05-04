@@ -5,6 +5,7 @@ param(
     [string]$ComposeFile = "",
     [string]$MailboxServiceBaseUrl = "http://easy-email:8080",
     [string]$MailboxServiceApiKey = "J7L+RCwLIBEcMZHzz0rXjm4oyR9rymq9",
+    [string]$MailboxDomainPool = "",
     [string]$MailboxDomainBlacklist = "",
     [string]$MailboxBusinessPoliciesJson = "",
     [string]$EasyProxyBaseUrl = "http://easy-proxy:29888",
@@ -61,7 +62,9 @@ foreach ($entry in $PSBoundParameters.GetEnumerator()) {
 $defaultEasyProxyBaseUrl = "http://easy-proxy:29888"
 $defaultDashboardControlToken = "easyregister-dashboard-local-token"
 $defaultDashboardListen = "0.0.0.0:9790"
-$defaultMailboxBusinessPoliciesJson = '{"openai":{"domainPool":["cnmlgb.de","zhooo.org","zhooo.ggff.net","coolkidsa.ggff.net","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"],"explicitBlacklistDomains":["coolkid.icu","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"]}}'
+$defaultMailboxDomainPoolCsv = 'cnmlgb.de,zhooo.org,zhooo.ggff.net,coolkidsa.ggff.net,shaole.me,cpu.edu.kg,tmail.bio,do4.tech'
+$defaultMailboxDomainBlacklistCsv = 'coolkid.icu,shaole.me,cpu.edu.kg,tmail.bio,do4.tech'
+$defaultMailboxBusinessPoliciesJson = '{"default":{"domainPool":["cnmlgb.de","zhooo.org","zhooo.ggff.net","coolkidsa.ggff.net","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"],"explicitBlacklistDomains":["coolkid.icu","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"]},"openai":{"domainPool":["cnmlgb.de","zhooo.org","zhooo.ggff.net","coolkidsa.ggff.net","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"],"explicitBlacklistDomains":["coolkid.icu","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"]}}'
 
 function Resolve-AbsolutePath {
     param(
@@ -472,7 +475,8 @@ function Resolve-EnvValue {
 
 $resolvedMailboxServiceBaseUrl = Resolve-EnvValue -ParameterName 'MailboxServiceBaseUrl' -RuntimeKey 'MAILBOX_SERVICE_BASE_URL' -Fallback 'http://easy-email:8080'
 $resolvedMailboxServiceApiKey = Resolve-EnvValue -ParameterName 'MailboxServiceApiKey' -RuntimeKey 'MAILBOX_SERVICE_API_KEY' -Fallback 'J7L+RCwLIBEcMZHzz0rXjm4oyR9rymq9'
-$resolvedMailboxDomainBlacklist = Resolve-EnvValue -ParameterName 'MailboxDomainBlacklist' -RuntimeKey 'REGISTER_MAILBOX_DOMAIN_BLACKLIST' -Fallback ''
+$resolvedMailboxDomainPool = Resolve-EnvValue -ParameterName 'MailboxDomainPool' -RuntimeKey 'REGISTER_MAILBOX_DOMAIN_POOL' -Fallback $defaultMailboxDomainPoolCsv
+$resolvedMailboxDomainBlacklist = Resolve-EnvValue -ParameterName 'MailboxDomainBlacklist' -RuntimeKey 'REGISTER_MAILBOX_DOMAIN_BLACKLIST' -Fallback $defaultMailboxDomainBlacklistCsv
 $resolvedMailboxBusinessPoliciesJson = Resolve-EnvValue -ParameterName 'MailboxBusinessPoliciesJson' -RuntimeKey 'REGISTER_MAILBOX_BUSINESS_POLICIES_JSON' -Fallback $defaultMailboxBusinessPoliciesJson
 $resolvedEasyProxyBaseUrl = Resolve-EnvValue -ParameterName 'EasyProxyBaseUrl' -RuntimeKey 'EASY_PROXY_BASE_URL' -Fallback 'http://easy-proxy:29888'
 $resolvedEasyProxyApiKey = Resolve-EnvValue -ParameterName 'EasyProxyApiKey' -RuntimeKey 'EASY_PROXY_API_KEY' -Fallback 'YP9l2DecuS_MRhARQu5v829VFOWKar7S'
@@ -503,6 +507,7 @@ $env:REGISTER_CONTINUE_CONCURRENCY_LIMIT = [string]$resolvedContinueConcurrencyL
 $env:REGISTER_TEAM_CONCURRENCY_LIMIT = [string]$resolvedTeamConcurrencyLimit
 $env:MAILBOX_SERVICE_BASE_URL = $resolvedMailboxServiceBaseUrl
 $env:MAILBOX_SERVICE_API_KEY = $resolvedMailboxServiceApiKey
+$env:REGISTER_MAILBOX_DOMAIN_POOL = $resolvedMailboxDomainPool
 $env:REGISTER_MAILBOX_DOMAIN_BLACKLIST = $resolvedMailboxDomainBlacklist
 $env:REGISTER_MAILBOX_BUSINESS_POLICIES_JSON = $resolvedMailboxBusinessPoliciesJson
 $env:EASY_PROXY_BASE_URL = $resolvedEasyProxyBaseUrl
@@ -591,6 +596,7 @@ foreach ($entry in @{
     REGISTER_TEAM_CONCURRENCY_LIMIT           = $env:REGISTER_TEAM_CONCURRENCY_LIMIT
     MAILBOX_SERVICE_BASE_URL                  = $env:MAILBOX_SERVICE_BASE_URL
     MAILBOX_SERVICE_API_KEY                   = $env:MAILBOX_SERVICE_API_KEY
+    REGISTER_MAILBOX_DOMAIN_POOL              = $env:REGISTER_MAILBOX_DOMAIN_POOL
     REGISTER_MAILBOX_DOMAIN_BLACKLIST         = $env:REGISTER_MAILBOX_DOMAIN_BLACKLIST
     REGISTER_MAILBOX_BUSINESS_POLICIES_JSON   = $env:REGISTER_MAILBOX_BUSINESS_POLICIES_JSON
     EASY_PROXY_BASE_URL                       = $env:EASY_PROXY_BASE_URL

@@ -513,6 +513,9 @@ class MailboxBusinessPolicy:
     explicit_blacklist_domains: tuple[str, ...]
 
 
+_MAILBOX_DEFAULT_POLICY_KEYS = ("default", "*", "__default__")
+
+
 def _normalize_mailbox_business_key(value: Any) -> str:
     return str(value or "").strip().lower()
 
@@ -676,6 +679,13 @@ class MailboxRuntimeConfig:
         for policy in self.business_policies:
             if policy.business_key == resolved_business_key:
                 return policy
+        for policy in self.business_policies:
+            if policy.business_key in _MAILBOX_DEFAULT_POLICY_KEYS:
+                return MailboxBusinessPolicy(
+                    business_key=resolved_business_key,
+                    domain_pool=policy.domain_pool,
+                    explicit_blacklist_domains=policy.explicit_blacklist_domains,
+                )
         return MailboxBusinessPolicy(
             business_key=resolved_business_key,
             domain_pool=self.business_domain_pool,
