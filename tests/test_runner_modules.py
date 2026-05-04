@@ -967,6 +967,8 @@ class RunnerWorkerLoopTests(unittest.TestCase):
                 task_max_attempts=3,
                 openai_oauth_pool_dir=output_root / "openai" / "failed-once",
                 mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
             )
             task_counter = SimpleNamespace(value=1, get_lock=lambda: nullcontext())
             worker_state = mock.Mock()
@@ -1004,6 +1006,8 @@ class RunnerWorkerLoopTests(unittest.TestCase):
                 task_max_attempts=3,
                 openai_oauth_pool_dir=flow_pool_dir,
                 mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
             )
             dummy_result = SimpleNamespace(
                 ok=True,
@@ -1064,6 +1068,8 @@ class RunnerWorkerLoopTests(unittest.TestCase):
                 task_max_attempts=2,
                 openai_oauth_pool_dir=flow_pool_dir,
                 mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
             )
             dummy_result = SimpleNamespace(
                 ok=True,
