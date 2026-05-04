@@ -75,6 +75,31 @@ def acquire_flow_proxy_lease(
         normalized = str(error_text or "").strip().lower()
         return "duplicate_active_route" in normalized or "recent_route_reuse" in normalized
 
+    def _should_abort_compat_retry(exc: Exception) -> bool:
+        normalized = str(exc or "").strip().lower()
+        if not normalized:
+            return False
+        if _is_local_route_reuse_error(normalized):
+            return True
+        abort_markers = (
+            "initial_proxy_probe_pending",
+            "no_proxy_provider_route",
+            "provider_instance_unavailable",
+            "proxy route failure",
+            "easy_proxy_probe_failed",
+            "connection reset",
+            "connection refused",
+            "remote end closed",
+            "unexpected eof",
+            "timed out",
+            "i/o timeout",
+            "ssl handshake",
+            "tls handshake",
+            "econnreset",
+            "eof",
+        )
+        return any(marker in normalized for marker in abort_markers)
+
     def _try_random_nodes() -> FlowProxyLease | None:
         nonlocal last_error
         attempted_proxy_urls: set[str] = set()
@@ -247,8 +272,8 @@ def acquire_flow_proxy_lease(
                             api_key=api_key,
                         )
                     release_lease(candidate_lease_id, base_url=management_base, api_key=api_key)
-                    if local_route_reuse:
-                        break
+                if _should_abort_compat_retry(exc):
+                    break
                 time.sleep(0.1 * (attempt + 1))
         return None
 
