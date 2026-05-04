@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +32,7 @@ DEFAULT_REGISTER_MOEMAIL_DOMAIN_POOL = (
 )
 DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS = 20
 DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE = 90.0
+DEFAULT_REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD = 500
 DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS = 4
 
 
@@ -48,6 +48,7 @@ def _mailbox_runtime_config() -> MailboxRuntimeConfig:
         default_business_domain_pool=DEFAULT_REGISTER_MOEMAIL_DOMAIN_POOL,
         default_blacklist_min_attempts=DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS,
         default_blacklist_failure_rate=DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE,
+        default_consecutive_failure_blacklist_threshold=DEFAULT_REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD,
     )
 
 
@@ -135,10 +136,6 @@ def _load_mailbox_domain_state() -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _resolve_business_mailbox_domain_pool(*, business_key: str | None = None) -> tuple[str, ...]:
-    return _mailbox_runtime_config().resolve_business_policy(business_key).domain_pool
-
-
 def resolve_mailbox_business_key(*, business_key: str | None = None) -> str:
     return _mailbox_runtime_config().resolve_business_key(business_key)
 
@@ -157,6 +154,10 @@ def _resolve_mailbox_domain_blacklist_min_attempts() -> int:
 
 def _resolve_mailbox_domain_blacklist_failure_rate() -> float:
     return _mailbox_runtime_config().blacklist_failure_rate_percent
+
+
+def _resolve_mailbox_domain_consecutive_failure_blacklist_threshold() -> int:
+    return _mailbox_runtime_config().consecutive_failure_blacklist_threshold
 
 
 def _mailbox_domain_stats(domain: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> dict[str, Any]:
@@ -182,51 +183,6 @@ def _mailbox_domain_is_business_blacklisted(domain: str, state_payload: dict[str
         return True
     stats = _mailbox_domain_stats(domain, state_payload, business_key=business_key)
     return bool(stats.get("blacklisted"))
-
-
-def _select_business_mailbox_domain(*, business_key: str | None = None) -> tuple[str, dict[str, Any]]:
-    resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
-    domain_pool = list(_resolve_business_mailbox_domain_pool(business_key=resolved_business_key))
-    if not domain_pool:
-        return "", {"reason": "empty_pool", "pool_size": 0, "eligible_count": 0, "dynamic_blacklisted": [], "explicit_blacklisted": []}
-
-    state_payload = _load_mailbox_domain_state()
-    explicit_blacklisted = [
-        domain
-        for domain in domain_pool
-        if domain in set(_resolve_mailbox_explicit_blacklist_domains(business_key=resolved_business_key))
-    ]
-    candidate_pool = [domain for domain in domain_pool if domain not in explicit_blacklisted]
-    if not candidate_pool:
-        return "", {
-            "reason": "empty_pool_after_explicit_blacklist",
-            "pool_size": len(domain_pool),
-            "eligible_count": 0,
-            "dynamic_blacklisted": [],
-            "explicit_blacklisted": explicit_blacklisted,
-            "business_key": resolved_business_key,
-        }
-    dynamic_blacklisted = [
-        domain
-        for domain in candidate_pool
-        if _mailbox_domain_is_business_blacklisted(
-            domain,
-            state_payload,
-            business_key=resolved_business_key,
-        )
-    ]
-    eligible = [domain for domain in candidate_pool if domain not in dynamic_blacklisted]
-    effective_pool = eligible or candidate_pool
-    selected_domain = random.SystemRandom().choice(effective_pool)
-    return selected_domain, {
-        "reason": "eligible_pool" if eligible else "all_dynamic_blacklisted_fallback",
-        "pool_size": len(domain_pool),
-        "eligible_count": len(eligible),
-        "dynamic_blacklisted": dynamic_blacklisted,
-        "explicit_blacklisted": explicit_blacklisted,
-        "business_key": resolved_business_key,
-    }
-
 
 def _resolve_mailbox_business_retry_attempts() -> int:
     return max(1, env_int("REGISTER_MAILBOX_BUSINESS_RETRY_ATTEMPTS", DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS))

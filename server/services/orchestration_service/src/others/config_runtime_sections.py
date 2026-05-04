@@ -680,6 +680,7 @@ class MailboxRuntimeConfig:
     business_policies: tuple[MailboxBusinessPolicy, ...]
     blacklist_min_attempts: int
     blacklist_failure_rate_percent: float
+    consecutive_failure_blacklist_threshold: int
 
     @classmethod
     def from_env(
@@ -690,6 +691,7 @@ class MailboxRuntimeConfig:
         default_business_domain_pool: tuple[str, ...],
         default_blacklist_min_attempts: int,
         default_blacklist_failure_rate: float,
+        default_consecutive_failure_blacklist_threshold: int,
     ) -> "MailboxRuntimeConfig":
         providers = tuple(item.lower() for item in split_csv(env_first_text("REGISTER_MAILBOX_PROVIDERS", "MAILBOX_PROVIDER_CANDIDATES")))
         explicit_state_path = env_text("REGISTER_MAILBOX_DOMAIN_STATE_PATH")
@@ -717,6 +719,13 @@ class MailboxRuntimeConfig:
             blacklist_failure_rate_percent=env_percent_value(
                 "REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE",
                 default_blacklist_failure_rate,
+            ),
+            consecutive_failure_blacklist_threshold=max(
+                1,
+                env_int(
+                    "REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD",
+                    default_consecutive_failure_blacklist_threshold,
+                ),
             ),
         )
 

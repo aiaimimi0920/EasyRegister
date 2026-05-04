@@ -33,6 +33,7 @@ def _mailbox_runtime_config(*, shared_root: Path) -> MailboxRuntimeConfig:
         ),
         default_blacklist_min_attempts=20,
         default_blacklist_failure_rate=90.0,
+        default_consecutive_failure_blacklist_threshold=500,
     )
 
 
@@ -198,6 +199,10 @@ def mailbox_domain_blacklist_failure_rate(*, shared_root: Path) -> float:
     return _mailbox_runtime_config(shared_root=shared_root).blacklist_failure_rate_percent
 
 
+def mailbox_domain_consecutive_failure_blacklist_threshold(*, shared_root: Path) -> int:
+    return _mailbox_runtime_config(shared_root=shared_root).consecutive_failure_blacklist_threshold
+
+
 def mailbox_domain_blacklist_reason(*, result_payload_value: dict[str, Any]) -> str:
     step_errors = result_payload_value.get("stepErrors") if isinstance(result_payload_value, dict) else {}
     if not isinstance(step_errors, dict):
@@ -283,7 +288,7 @@ def record_business_mailbox_domain_outcome(
     provider = str(context.get("provider") or "").strip().lower()
     domain = str(context.get("domain") or "").strip().lower()
     email = str(context.get("email") or "").strip().lower()
-    if provider != "moemail" or not domain:
+    if not domain:
         return None
 
     payload = load_mailbox_domain_stats_state(shared_root=shared_root)
@@ -301,22 +306,29 @@ def record_business_mailbox_domain_outcome(
     attempts = max(0, int(current.get("attempts") or 0)) + 1
     successes = max(0, int(current.get("successes") or 0))
     failures = max(0, int(current.get("failures") or 0))
+    consecutive_failures = max(0, int(current.get("consecutiveFailures") or 0))
     ok = bool(result_payload_value.get("ok"))
     now = datetime.now(timezone.utc).isoformat()
     if ok:
         successes += 1
+        consecutive_failures = 0
     else:
         failures += 1
+        consecutive_failures += 1
     failure_rate = (float(failures) / float(attempts)) * 100.0 if attempts > 0 else 0.0
     blacklist_reason = mailbox_domain_blacklist_reason(result_payload_value=result_payload_value)
     prior_blacklisted = bool(current.get("blacklisted"))
     prior_blacklist_reason = str(current.get("blacklistReason") or "").strip()
+    threshold = mailbox_domain_consecutive_failure_blacklist_threshold(shared_root=shared_root)
+    if not blacklist_reason and consecutive_failures >= threshold:
+        blacklist_reason = "consecutive_failures_threshold"
     blacklisted = prior_blacklisted or bool(blacklist_reason)
     domains[domain] = {
         "provider": provider,
         "attempts": attempts,
         "successes": successes,
         "failures": failures,
+        "consecutiveFailures": consecutive_failures,
         "lastOutcome": "success" if ok else "failure",
         "lastOutcomeAt": now,
         "lastEmail": email,
@@ -328,6 +340,7 @@ def record_business_mailbox_domain_outcome(
     business_payload["businessKey"] = business_key
     business_payload["updatedAt"] = now
     business_payload["explicitBlacklistDomains"] = list(business_policy.explicit_blacklist_domains)
+    business_payload["explicitBlacklistProviders"] = list(business_policy.explicit_blacklist_providers)
     business_payload["domains"] = domains
     businesses[business_key] = business_payload
     payload["updatedAt"] = now
@@ -341,11 +354,13 @@ def record_business_mailbox_domain_outcome(
         "attempts": attempts,
         "successes": successes,
         "failures": failures,
+        "consecutiveFailures": consecutive_failures,
         "failureRate": round(failure_rate, 3),
         "blacklisted": blacklisted,
         "blacklistReason": blacklist_reason or prior_blacklist_reason,
         "minAttempts": mailbox_domain_blacklist_min_attempts(shared_root=shared_root),
         "failureRateThreshold": mailbox_domain_blacklist_failure_rate(shared_root=shared_root),
+        "consecutiveFailureThreshold": threshold,
         "statePath": str(mailbox_domain_stats_path(shared_root=shared_root)),
     }
 

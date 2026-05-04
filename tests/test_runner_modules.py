@@ -758,6 +758,97 @@ class RunnerMailboxTests(unittest.TestCase):
             runner_mailbox.mailbox_domain_blacklist_reason(result_payload_value=generic_payload),
         )
 
+    def test_record_business_mailbox_domain_outcome_tracks_non_moemail_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": False,
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@cnmlgb.de",
+                        "provider": "etempmail",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "create-openai-account": {
+                        "message": "create_account status=400 body={\"error\":{\"code\":\"invalid_request_error\"}}",
+                    }
+                },
+            }
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"explicitBlacklistDomains":["coolkid.icu"],"providerBlacklist":[]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertEqual("etempmail", outcome["provider"])
+            self.assertEqual("cnmlgb.de", outcome["domain"])
+
+    def test_record_business_mailbox_domain_outcome_blacklists_after_consecutive_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": False,
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@cnmlgb.de",
+                        "provider": "moemail",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "create-openai-account": {
+                        "message": "create_account status=400 body={\"error\":{\"code\":\"invalid_request_error\"}}",
+                    }
+                },
+            }
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD": "3",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"explicitBlacklistDomains":["coolkid.icu"],"providerBlacklist":[]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                first = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
+                second = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
+                third = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
+            assert first is not None and second is not None and third is not None
+            self.assertEqual(1, first["consecutiveFailures"])
+            self.assertFalse(first["blacklisted"])
+            self.assertEqual(2, second["consecutiveFailures"])
+            self.assertFalse(second["blacklisted"])
+            self.assertEqual(3, third["consecutiveFailures"])
+            self.assertTrue(third["blacklisted"])
+            self.assertEqual("consecutive_failures_threshold", third["blacklistReason"])
+
     def test_mark_mailbox_capacity_failure_respects_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"

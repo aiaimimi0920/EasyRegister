@@ -213,6 +213,7 @@ class TypedConfigTests(unittest.TestCase):
                     default_business_domain_pool=("a.test", "b.test"),
                     default_blacklist_min_attempts=20,
                     default_blacklist_failure_rate=90.0,
+                    default_consecutive_failure_blacklist_threshold=500,
                 )
         self.assertEqual(("m2u", "moemail"), config.providers)
         self.assertEqual("fast-lane", config.strategy_mode_id)
@@ -246,6 +247,7 @@ class TypedConfigTests(unittest.TestCase):
                     default_business_domain_pool=("a.test", "b.test"),
                     default_blacklist_min_attempts=20,
                     default_blacklist_failure_rate=90.0,
+                    default_consecutive_failure_blacklist_threshold=500,
                 )
         fallback_policy = config.resolve_business_policy()
         openai_policy = config.resolve_business_policy("openai")
@@ -279,6 +281,7 @@ class TypedConfigTests(unittest.TestCase):
                     default_business_domain_pool=("a.test", "b.test"),
                     default_blacklist_min_attempts=20,
                     default_blacklist_failure_rate=90.0,
+                    default_consecutive_failure_blacklist_threshold=500,
                 )
         openai_policy = config.resolve_business_policy("openai")
         self.assertEqual(
@@ -316,6 +319,7 @@ class TypedConfigTests(unittest.TestCase):
                     default_business_domain_pool=("a.test", "b.test"),
                     default_blacklist_min_attempts=20,
                     default_blacklist_failure_rate=90.0,
+                    default_consecutive_failure_blacklist_threshold=500,
                 )
         other_policy = config.resolve_business_policy("codex-team")
         self.assertEqual(("cnmlgb.de", "zhooo.org"), other_policy.domain_pool)
