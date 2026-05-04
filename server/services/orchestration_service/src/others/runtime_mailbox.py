@@ -65,7 +65,7 @@ def ensure_easy_email_env_defaults() -> None:
 def resolve_mailbox_provider_selections() -> tuple[str, ...]:
     providers = _mailbox_runtime_config().providers
     if not providers:
-        return ("m2u", "moemail")
+        return ()
     return tuple(
         normalized
         for normalized in (_normalize_mailbox_provider(item) for item in providers)

@@ -369,3 +369,13 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("good@cnmlgb.de", mailbox.email)
         self.assertEqual(2, create_mailbox.call_count)
         release_mailbox.assert_called_once()
+
+    def test_resolve_mailbox_provider_selections_defaults_to_easyemail_unfiltered(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_MAILBOX_PROVIDERS": "",
+            },
+            clear=True,
+        ):
+            self.assertEqual((), runtime_mailbox.resolve_mailbox_provider_selections())

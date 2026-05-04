@@ -114,7 +114,7 @@
 - 主注册 / 续跑 / team 三类实例默认都直接调用 `EasyEmail` 的 mailbox 能力接口
 - 如果不显式设置邮箱策略相关环境变量，就使用 `EasyEmail` 自己的默认 strategy mode
 - 当前默认会请求 `EasyEmail` 的 `high-availability` routing profile
-- `REGISTER_MAILBOX_PROVIDERS` 现在只作为可选的 provider group 过滤条件透传给 `EasyEmail`
+- `REGISTER_MAILBOX_PROVIDERS` 现在只作为可选的 provider group 过滤条件透传给 `EasyEmail`；如果留空，就不再默认收窄到 `m2u + moemail`，而是交给 `EasyEmail` 当前 routing profile 自己决定
 - `REGISTER_MAILBOX_STRATEGY_MODE_ID` 现在只作为可选的 strategy mode 透传给 `EasyEmail`
 - `REGISTER_MAILBOX_ROUTING_PROFILE_ID` 现在只作为可选的 routing profile id 透传给 `EasyEmail`
 - `REGISTER_MAILBOX_BUSINESS_KEY` 现在只作为默认业务标签兜底；真正的业务标签应由具体 DST / task 传入

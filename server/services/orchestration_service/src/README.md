@@ -56,7 +56,7 @@
 - 当前默认请求 `EasyEmail` 的 `high-availability` routing profile
 - 如果没有显式设置 `REGISTER_MAILBOX_STRATEGY_MODE_ID` / `REGISTER_MAILBOX_PROVIDERS`
   就使用 `EasyEmail` 自己的默认 strategy mode
-- `REGISTER_MAILBOX_PROVIDERS` 现在只作为可选的 provider group 过滤条件透传给 `EasyEmail`
+- `REGISTER_MAILBOX_PROVIDERS` 现在只作为可选的 provider group 过滤条件透传给 `EasyEmail`；留空时不会再在 `EasyRegister` 本地默认收窄到 `m2u + moemail`
 - `REGISTER_MAILBOX_STRATEGY_MODE_ID` 现在只作为可选的 strategy mode 透传给 `EasyEmail`
 - `REGISTER_MAILBOX_ROUTING_PROFILE_ID` 现在只作为可选的 routing profile id 透传给 `EasyEmail`
 
