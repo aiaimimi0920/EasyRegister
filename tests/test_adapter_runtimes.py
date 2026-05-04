@@ -261,3 +261,84 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("good@zhooo.org", mailbox.email)
         self.assertEqual(2, create_mailbox.call_count)
         release_mailbox.assert_called_once()
+
+    def test_mailbox_domain_policy_violation_applies_business_pool_to_m2u(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="m2u",
+            email="blocked@cpu.edu.kg",
+            ref="m2u:test",
+            session_id="m2u-session",
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                "REGISTER_MAILBOX_DOMAIN_POOL": "fallback.test",
+                "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                    '{"openai":{"domainPool":["zhooo.org","cnmlgb.de"],'
+                    '"explicitBlacklistDomains":["coolkid.icu","cpu.edu.kg"]}}'
+                ),
+            },
+            clear=True,
+        ):
+            violation = runtime_mailbox._mailbox_domain_policy_violation(
+                mailbox,
+                business_key="openai",
+            )
+
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertEqual("explicit_business_blacklist", violation["reason"])
+        self.assertEqual("m2u", violation["provider"])
+        self.assertEqual("cpu.edu.kg", violation["domain"])
+
+    def test_resolve_mailbox_retries_m2u_domain_outside_business_pool(self) -> None:
+        first_mailbox = runtime_mailbox.Mailbox(
+            provider="m2u",
+            email="blocked@cpu.edu.kg",
+            ref="m2u:first",
+            session_id="first",
+        )
+        second_mailbox = runtime_mailbox.Mailbox(
+            provider="m2u",
+            email="good@cnmlgb.de",
+            ref="m2u:second",
+            session_id="second",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST": "",
+                    "REGISTER_MAILBOX_DOMAIN_POOL": "fallback.test",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"domainPool":["zhooo.org","cnmlgb.de"],'
+                        '"explicitBlacklistDomains":["coolkid.icu","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                with mock.patch.object(
+                    runtime_mailbox,
+                    "_resolve_planned_mailbox_provider",
+                    return_value="m2u",
+                ):
+                    with mock.patch.object(
+                        runtime_mailbox,
+                        "create_mailbox",
+                        side_effect=[first_mailbox, second_mailbox],
+                    ) as create_mailbox:
+                        with mock.patch.object(runtime_mailbox, "release_mailbox") as release_mailbox:
+                            mailbox = runtime_mailbox.resolve_mailbox(
+                                preallocated_email=None,
+                                preallocated_session_id=None,
+                                preallocated_mailbox_ref=None,
+                                business_key="openai",
+                            )
+
+        self.assertEqual("good@cnmlgb.de", mailbox.email)
+        self.assertEqual(2, create_mailbox.call_count)
+        release_mailbox.assert_called_once()

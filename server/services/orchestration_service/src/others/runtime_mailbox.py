@@ -254,7 +254,7 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
         }
 
     business_domain_pool = set(_resolve_business_mailbox_domain_pool(business_key=resolved_business_key))
-    if provider == "moemail" and business_domain_pool and domain not in business_domain_pool:
+    if business_domain_pool and domain not in business_domain_pool:
         return {
             "reason": "outside_business_domain_pool",
             "business_key": resolved_business_key,
