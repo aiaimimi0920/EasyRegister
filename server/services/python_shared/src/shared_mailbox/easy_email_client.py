@@ -870,7 +870,16 @@ def release_mailbox(
     }
     if str(reason or "").strip():
         payload["reason"] = str(reason or "").strip()
-    return _post_json("/mail/mailboxes/release", payload).get("result") or {}
+    try:
+        return _post_json("/mail/mailboxes/release", payload).get("result") or {}
+    except Exception as exc:
+        message = str(exc or "").strip().lower()
+        if "mailbox_session_not_found" in message or "unknown mailbox session" in message:
+            return {
+                "released": False,
+                "detail": "not_found",
+            }
+        raise
 
 
 def recover_mailbox_capacity(

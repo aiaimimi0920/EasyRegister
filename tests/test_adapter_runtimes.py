@@ -121,6 +121,29 @@ class EasyEmailRuntimeTests(unittest.TestCase):
         self.assertTrue(result["released"])
         self.assertEqual("deleted", result["detail"])
 
+    def test_release_mailbox_treats_missing_session_as_not_found(self) -> None:
+        with mock.patch.object(
+            easyemail_runtime,
+            "release_mailbox",
+            side_effect=RuntimeError(
+                'mail service POST /mail/mailboxes/release failed: HTTP 500 '
+                '[code=MAILBOX_SESSION_NOT_FOUND]: {"code":"MAILBOX_SESSION_NOT_FOUND",'
+                '"error":"Unknown mailbox session: mailbox_123.","message":"Unknown mailbox session: mailbox_123."}'
+            ),
+        ):
+            result = easyemail_runtime.dispatch_easyemail_step(
+                step_type="release_mailbox",
+                step_input={
+                    "provider": "im215",
+                    "mailbox_ref": "im215:test",
+                    "mailbox_session_id": "mailbox_123",
+                },
+            )
+
+        self.assertFalse(result["released"])
+        self.assertEqual("not_found", result["detail"])
+        self.assertEqual("im215", result["provider"])
+
     def test_release_mailbox_sessions_by_email_reports_cleanup_summary(self) -> None:
         with mock.patch.object(easyemail_runtime, "ensure_easyemail_runtime_defaults"):
             with mock.patch.object(
@@ -214,6 +237,20 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertNotIn("providerRoutingProfileId", payload)
         self.assertNotIn("providerStrategyModeId", payload)
         self.assertNotIn("providerGroupSelections", payload)
+
+    def test_release_mailbox_client_treats_missing_session_as_not_found(self) -> None:
+        with mock.patch.object(
+            easy_email_client,
+            "_post_json",
+            side_effect=RuntimeError(
+                'mail service POST /mail/mailboxes/release failed: HTTP 500 '
+                '[code=MAILBOX_SESSION_NOT_FOUND]: {"code":"MAILBOX_SESSION_NOT_FOUND",'
+                '"error":"Unknown mailbox session: mailbox_456.","message":"Unknown mailbox session: mailbox_456."}'
+            ),
+        ):
+            result = easy_email_client.release_mailbox(session_id="mailbox_456", reason="dst_flow_cleanup")
+
+        self.assertEqual({"released": False, "detail": "not_found"}, result)
 
     def test_domain_is_not_blacklisted_by_failure_rate_only(self) -> None:
         with mock.patch.dict(

@@ -42,6 +42,8 @@ def normalize_release_error(exc: BaseException, *, provider: str) -> dict[str, A
         "邮箱不存在或无权限删除" in message
         or "deleteMailboxWeb failed with status 403" in message
         or "delete mailbox web failed with status 403" in lowered
+        or "mailbox_session_not_found" in lowered
+        or "unknown mailbox session" in lowered
         or "not found" in lowered
         or "already deleted" in lowered
     ):
