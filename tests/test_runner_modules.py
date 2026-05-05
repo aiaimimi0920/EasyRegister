@@ -137,6 +137,87 @@ class RunnerArtifactsTests(unittest.TestCase):
                 self.assertTrue(stored_path.is_file())
                 self.assertEqual("codex-free-org-materialized@example.com.json", stored_path.name)
 
+    def test_postprocess_free_success_artifact_uses_finalized_restored_openai_source_for_continue_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted_dir = output_root / "openai" / "converted"
+            converted_dir.mkdir(parents=True, exist_ok=True)
+            restored_openai_path = converted_dir / "small-success.json"
+            restored_openai_path.write_text(
+                json.dumps(
+                    {
+                        "email": "continue@example.com",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                        "createdAt": "2026-05-01T00:00:00Z",
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {"clientBootstrap": {"authStatus": "logged_in", "structure": "personal"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            success_dir = output_root / "others" / "mixed-runs" / "worker-01" / "run-1" / "success"
+            success_dir.mkdir(parents=True, exist_ok=True)
+            codex_success_path = success_dir / "codex-success.json"
+            codex_success_path.write_text(
+                json.dumps(
+                    {
+                        "email": "continue@example.com",
+                        "type": "codex",
+                        "account_id": "d2cca0be-c722-4bb5-9b00-a4af91e20687",
+                        "refresh_token": "refresh",
+                        "access_token": "access",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_FREE_LOCAL_DIR": str(output_root / "codex" / "free"),
+                },
+                clear=True,
+            ):
+                result = SimpleNamespace(
+                    ok=True,
+                    to_dict=lambda: {
+                        "steps": {
+                            "obtain-codex-oauth": "ok",
+                            "validate-free-personal-oauth": "ok",
+                        },
+                        "outputs": {
+                            "acquire-openai-oauth-artifact": {
+                                "source_path": str(output_root / "others" / "openai-oauth-claims" / "missing.json"),
+                                "claimed_path": str(output_root / "others" / "openai-oauth-claims" / "missing.json"),
+                            },
+                            "finalize-openai-oauth-artifact": {
+                                "restored_path": str(restored_openai_path),
+                            },
+                            "obtain-codex-oauth": {
+                                "successPath": str(codex_success_path),
+                                "email": "continue@example.com",
+                                "auth": {
+                                    "account_id": "org-abcdef12-rest",
+                                },
+                            },
+                        },
+                    },
+                )
+                postprocess = runner_artifacts.postprocess_free_success_artifact(
+                    result=result,
+                    output_root=output_root,
+                    worker_label="worker-continue",
+                    task_index=22,
+                    free_local_selected=True,
+                )
+                self.assertTrue(postprocess["ok"])
+                self.assertEqual("stored_local", postprocess["status"])
+                stored_path = Path(str(postprocess["stored_path"]))
+                self.assertTrue(stored_path.is_file())
+                self.assertEqual("codex-free-d2cca0be-continue@example.com.json", stored_path.name)
+
     def test_copy_openai_oauth_artifacts_to_pool_collects_legacy_small_success_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_output_dir = Path(tmp_dir) / "run-1"

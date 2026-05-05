@@ -49,6 +49,24 @@ class ResultArtifactsTests(unittest.TestCase):
             resolved = first_existing_output_path(payload, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES)
             self.assertEqual(path.resolve(), resolved)
 
+    def test_first_existing_output_path_skips_missing_earlier_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            restored = root / "restored.json"
+            restored.write_text("{}", encoding="utf-8")
+            payload = {
+                "outputs": {
+                    "acquire-openai-oauth-artifact": {
+                        "source_path": str(root / "missing-claimed.json"),
+                    },
+                    "finalize-openai-oauth-artifact": {
+                        "restored_path": str(restored),
+                    },
+                }
+            }
+            resolved = first_existing_output_path(payload, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES)
+            self.assertEqual(restored.resolve(), resolved)
+
     def test_normalized_team_pool_artifacts_resolves_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             team_path = Path(tmp_dir) / "member.json"

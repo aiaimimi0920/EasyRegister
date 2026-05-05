@@ -232,6 +232,17 @@ def route_openai_oauth_artifact(
 ) -> dict[str, Any]:
     resolved_source = Path(source_path).resolve()
     artifact_name = str(preferred_name or resolved_source.name).strip() or resolved_source.name
+    destination_dir = Path(destination_dir).resolve()
+    if not move_local:
+        candidate_destination = (destination_dir / artifact_name).resolve()
+        if resolved_source == candidate_destination and resolved_source.exists():
+            return {
+                "ok": True,
+                "route": "local",
+                "object_key": "",
+                "stored_path": str(resolved_source),
+                "target_dir": str(destination_dir),
+            }
     if select_upload_split(percent=upload_percent):
         upload_result = upload_artifact_to_r2(
             source_path=resolved_source,

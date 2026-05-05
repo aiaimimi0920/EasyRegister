@@ -9,6 +9,7 @@ FREE_OPENAI_OAUTH_SOURCE_CANDIDATES: tuple[tuple[str, str], ...] = (
     ("create_openai_account", "storage_path"),
     ("acquire-openai-oauth-artifact", "source_path"),
     ("acquire-openai-oauth-artifact", "claimed_path"),
+    ("finalize-openai-oauth-artifact", "restored_path"),
 )
 
 TEAM_MOTHER_PATH_CANDIDATES: tuple[tuple[str, str], ...] = (
@@ -79,12 +80,10 @@ def first_existing_output_path(
     result_or_payload: Any,
     candidates: list[tuple[str, str]] | tuple[tuple[str, str], ...],
 ) -> Path | None:
-    candidate = first_output_text(result_or_payload, candidates)
-    if not candidate:
-        return None
-    path = Path(candidate).resolve()
-    if path.is_file():
-        return path
+    for candidate in all_output_texts(result_or_payload, candidates):
+        path = Path(candidate).resolve()
+        if path.is_file():
+            return path
     return None
 
 
