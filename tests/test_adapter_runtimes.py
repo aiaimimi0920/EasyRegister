@@ -149,30 +149,46 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             self.assertTrue(expected_path.is_file())
 
     def test_dispatch_obtain_codex_oauth_completes_phone_verification_when_phone_wall_returned(self) -> None:
-        with mock.patch.object(
-            easyprotocol_runtime,
-            "invoke_easyprotocol",
-            side_effect=[
-                {
+        captured_inputs: list[dict[str, object]] = []
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured_inputs.append(dict(step_input))
+            if len(captured_inputs) == 1:
+                return {
                     "ok": True,
                     "status": "phone_verification_required",
                     "phoneVerificationRequired": True,
                     "pageType": "add_phone",
                     "resumeContext": {"flow": "oauth", "token": "resume_123"},
-                },
-                {
+                }
+            if len(captured_inputs) == 2:
+                return {
                     "ok": True,
                     "status": "phone_number_submitted",
                     "pageType": "sms_verification",
                     "resumeContext": {"flow": "oauth", "token": "resume_123"},
-                },
-                {
-                    "ok": True,
-                    "status": "completed",
-                    "successPath": "C:/tmp/codex-free.json",
-                    "userId": "user_123",
-                },
-            ],
+                }
+            return {
+                "ok": True,
+                "status": "completed",
+                "successPath": "C:/tmp/codex-free.json",
+                "userId": "user_123",
+            }
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                    '{"openai":{"enabled":true,"providerBlacklist":["hero_sms"],'
+                    '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
+                    '"countryCodes":["US"],"selectionMode":"available-first"}}'
+                )
+            },
+            clear=False,
+        ), mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
         ), mock.patch.object(
             easyprotocol_runtime.runtime_sms,
             "open_phone_session_for_business",
@@ -196,6 +212,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertTrue(result["phoneVerificationAttempted"])
         self.assertEqual("sms24", result["phoneProvider"])
         self.assertEqual("sms_123", result["phoneSessionId"])
+        self.assertIn("sms_verification", captured_inputs[0])
+        self.assertEqual(["hero_sms"], captured_inputs[0]["sms_verification"]["provider_blacklist"])
+        self.assertFalse(bool(captured_inputs[0]["sms_verification"]["allow_paid"]))
+        self.assertEqual(["us"], captured_inputs[0]["sms_verification"]["country_codes"])
 
 
 class EasyEmailRuntimeTests(unittest.TestCase):

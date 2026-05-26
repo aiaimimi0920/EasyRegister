@@ -53,6 +53,20 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
     }
 
 
+def build_phone_verification_step_input(*, business_key: str | None = None) -> dict[str, Any]:
+    policy = _sms_runtime_config().resolve_business_policy(business_key)
+    return {
+        "enabled": bool(policy.enabled),
+        "business_key": policy.business_key,
+        "provider_blacklist": list(policy.explicit_blacklist_providers),
+        "allow_paid": bool(policy.allow_paid),
+        "allow_reuse": bool(policy.allow_reuse),
+        "max_bindings_per_phone": int(policy.max_bindings_per_phone),
+        "country_codes": list(policy.country_codes),
+        "selection_mode": str(policy.selection_mode or "").strip() or "available-first",
+    }
+
+
 def wait_phone_code_for_session(*, session_id: str, timeout_seconds: int) -> str:
     ensure_easy_sms_env_defaults()
     return wait_sms_code(

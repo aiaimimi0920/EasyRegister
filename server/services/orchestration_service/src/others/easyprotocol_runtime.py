@@ -151,10 +151,11 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
         raise RuntimeError("easyprotocol_step_type_missing")
     if not isinstance(step_input, dict):
         raise RuntimeError("easyprotocol_step_input_invalid")
+    normalized_step_input = dict(step_input)
     if normalized_step_type == "revoke_codex_member":
-        invite_email = str(step_input.get("invite_email") or "").strip()
-        invite_id = str(step_input.get("invite_id") or step_input.get("inviteId") or "").strip()
-        member_user_id = str(step_input.get("member_user_id") or step_input.get("memberUserId") or "").strip()
+        invite_email = str(normalized_step_input.get("invite_email") or "").strip()
+        invite_id = str(normalized_step_input.get("invite_id") or normalized_step_input.get("inviteId") or "").strip()
+        member_user_id = str(normalized_step_input.get("member_user_id") or normalized_step_input.get("memberUserId") or "").strip()
         if not invite_email and not invite_id and not member_user_id:
             return {
                 "ok": True,
@@ -166,25 +167,36 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
                 "status_code": 0,
                 "response": None,
             }
-        error_code = str(step_input.get("error_code") or "").strip()
-        preserve_enabled = is_truthy(step_input.get("preserve_enabled"))
-        preserve_codes = normalize_preserve_codes(step_input.get("preserve_on_error_codes"))
+        error_code = str(normalized_step_input.get("error_code") or "").strip()
+        preserve_enabled = is_truthy(normalized_step_input.get("preserve_enabled"))
+        preserve_codes = normalize_preserve_codes(normalized_step_input.get("preserve_on_error_codes"))
         if preserve_enabled and error_code and error_code in preserve_codes:
             return {
                 "ok": True,
                 "status": "skipped_preserved_for_manual_oauth",
                 "detail": "preserved_for_manual_oauth",
-                "invite_email": str(step_input.get("invite_email") or "").strip(),
+                "invite_email": str(normalized_step_input.get("invite_email") or "").strip(),
                 "team_account_id": "",
                 "team_email": "",
                 "status_code": 0,
                 "response": None,
             }
-    result = invoke_easyprotocol(step_type=normalized_step_type, step_input=step_input)
+    if normalized_step_type == "obtain_codex_oauth":
+        normalized_step_input.setdefault(
+            "sms_verification",
+            runtime_sms.build_phone_verification_step_input(
+                business_key=str(
+                    normalized_step_input.get("business_key")
+                    or normalized_step_input.get("mailbox_business_key")
+                    or "openai"
+                )
+            ),
+        )
+    result = invoke_easyprotocol(step_type=normalized_step_type, step_input=normalized_step_input)
     if normalized_step_type == "obtain_codex_oauth" and isinstance(result, dict):
         result = _maybe_complete_phone_verification_for_oauth(
             initial_result=result,
-            step_input=step_input,
+            step_input=normalized_step_input,
         )
     if isinstance(result, dict):
         return maybe_bridge_step_artifact(
