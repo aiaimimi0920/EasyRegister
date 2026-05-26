@@ -18,9 +18,53 @@ if str(PYTHON_SHARED_ROOT) not in sys.path:
 
 from others import easyemail_runtime, easyprotocol_runtime, runtime_mailbox, runtime_proxy_support  # noqa: E402
 from shared_mailbox import easy_email_client  # noqa: E402
+from shared_sms import easy_sms_client  # noqa: E402
 
 
 class EasyProtocolRuntimeTests(unittest.TestCase):
+    def test_easy_sms_client_open_session_builds_free_first_request(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "SMS_SERVICE_BASE_URL": "http://easy-sms:8080",
+                "SMS_SERVICE_API_KEY": "sms-key",
+            },
+            clear=False,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            return_value={
+                "result": {
+                    "session": {
+                        "id": "sms_123",
+                        "phoneNumberE164": "+15551234567",
+                        "providerKey": "sms24",
+                    }
+                }
+            },
+        ) as post_json:
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=("hero_sms",),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=("us",),
+                selection_mode="available-first",
+            )
+
+        payload = post_json.call_args.args[1]
+        self.assertEqual("openai", payload["businessKey"])
+        self.assertEqual(["hero_sms"], payload["providerBlacklist"])
+        self.assertEqual("free", payload["costTier"])
+        self.assertEqual(False, payload["allowReuse"])
+        self.assertEqual(1, payload["maxBindingsPerPhone"])
+        self.assertEqual(["us"], payload["countryCodes"])
+        self.assertEqual("available-first", payload["selectionMode"])
+        self.assertEqual("sms_123", session.session_id)
+        self.assertEqual("+15551234567", session.phone_number)
+        self.assertEqual("sms24", session.provider_key)
+
     def test_dispatch_revoke_codex_member_skips_when_no_target_identifiers(self) -> None:
         result = easyprotocol_runtime.dispatch_easyprotocol_step(
             step_type="revoke_codex_member",

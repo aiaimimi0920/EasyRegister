@@ -515,6 +515,7 @@ class MailboxBusinessPolicy:
 
 
 _MAILBOX_DEFAULT_POLICY_KEYS = ("default", "*", "__default__")
+_SMS_DEFAULT_POLICY_KEYS = ("default", "*", "__default__")
 
 
 def _normalize_mailbox_business_key(value: Any) -> str:
@@ -754,6 +755,134 @@ class MailboxRuntimeConfig:
             domain_pool=self.business_domain_pool,
             explicit_blacklist_domains=self.explicit_blacklist_domains,
             explicit_blacklist_providers=self.explicit_blacklist_providers,
+        )
+
+
+@dataclass(frozen=True)
+class SmsBusinessPolicy:
+    business_key: str
+    enabled: bool
+    explicit_blacklist_providers: tuple[str, ...]
+    allow_paid: bool
+    allow_reuse: bool
+    max_bindings_per_phone: int
+    country_codes: tuple[str, ...]
+    selection_mode: str
+
+
+def _parse_sms_business_policies(raw: str) -> tuple[SmsBusinessPolicy, ...]:
+    text = str(raw or "").strip()
+    if not text:
+        return ()
+    try:
+        payload = json.loads(text)
+    except Exception:
+        payload = _parse_relaxed_mailbox_business_policy_map(text)
+    if not isinstance(payload, dict):
+        return ()
+    policies: list[SmsBusinessPolicy] = []
+    for raw_business_key, raw_policy in payload.items():
+        business_key = _normalize_mailbox_business_key(raw_business_key)
+        if not business_key or not isinstance(raw_policy, dict):
+            continue
+        enabled_value = raw_policy.get("enabled", False)
+        allow_paid_value = raw_policy.get("allowPaid", raw_policy.get("allow_paid", False))
+        allow_reuse_value = raw_policy.get("allowReuse", raw_policy.get("allow_reuse", False))
+        max_bindings_value = raw_policy.get("maxBindingsPerPhone", raw_policy.get("max_bindings_per_phone", 1))
+        try:
+            max_bindings = max(1, int(max_bindings_value or 1))
+        except Exception:
+            max_bindings = 1
+        policies.append(
+            SmsBusinessPolicy(
+                business_key=business_key,
+                enabled=bool(enabled_value),
+                explicit_blacklist_providers=_split_mailbox_providers(
+                    raw_policy.get("providerBlacklist")
+                    or raw_policy.get("provider_blacklist")
+                    or raw_policy.get("explicitBlacklistProviders")
+                    or raw_policy.get("explicit_blacklist_providers")
+                ),
+                allow_paid=bool(allow_paid_value),
+                allow_reuse=bool(allow_reuse_value),
+                max_bindings_per_phone=max_bindings,
+                country_codes=_split_mailbox_domains(
+                    raw_policy.get("countryCodes")
+                    or raw_policy.get("country_codes")
+                    or raw_policy.get("countries")
+                ),
+                selection_mode=str(
+                    raw_policy.get("selectionMode")
+                    or raw_policy.get("selection_mode")
+                    or "available-first"
+                ).strip()
+                or "available-first",
+            )
+        )
+    return tuple(policies)
+
+
+@dataclass(frozen=True)
+class SmsRuntimeConfig:
+    business_key: str
+    explicit_blacklist_providers: tuple[str, ...]
+    allow_paid: bool
+    allow_reuse: bool
+    max_bindings_per_phone: int
+    country_codes: tuple[str, ...]
+    selection_mode: str
+    business_policies: tuple[SmsBusinessPolicy, ...]
+    state_path: Path
+
+    @classmethod
+    def from_env(cls, *, default_state_path: Path) -> "SmsRuntimeConfig":
+        explicit_state_path = env_text("REGISTER_SMS_STATE_PATH")
+        state_path = Path(explicit_state_path).expanduser().resolve() if explicit_state_path else default_state_path
+        return cls(
+            business_key=_normalize_mailbox_business_key(env_text("REGISTER_SMS_BUSINESS_KEY", "openai")) or "openai",
+            explicit_blacklist_providers=_split_mailbox_providers(env_text("REGISTER_SMS_PROVIDER_BLACKLIST")),
+            allow_paid=env_bool("REGISTER_SMS_ALLOW_PAID", False),
+            allow_reuse=env_bool("REGISTER_SMS_ALLOW_REUSE", False),
+            max_bindings_per_phone=max(1, env_int("REGISTER_SMS_MAX_BINDINGS_PER_PHONE", 1)),
+            country_codes=tuple(item.lower() for item in split_csv(env_text("REGISTER_SMS_COUNTRY_CODES"))),
+            selection_mode=env_text("REGISTER_SMS_SELECTION_MODE", "available-first") or "available-first",
+            business_policies=_parse_sms_business_policies(env_text("REGISTER_SMS_BUSINESS_POLICIES_JSON")),
+            state_path=state_path,
+        )
+
+    def resolve_business_key(self, business_key: str | None = None) -> str:
+        normalized = _normalize_mailbox_business_key(business_key)
+        if normalized:
+            return normalized
+        fallback = _normalize_mailbox_business_key(self.business_key)
+        return fallback or "default"
+
+    def resolve_business_policy(self, business_key: str | None = None) -> SmsBusinessPolicy:
+        resolved_business_key = self.resolve_business_key(business_key)
+        for policy in self.business_policies:
+            if policy.business_key == resolved_business_key:
+                return policy
+        for policy in self.business_policies:
+            if policy.business_key in _SMS_DEFAULT_POLICY_KEYS:
+                return SmsBusinessPolicy(
+                    business_key=resolved_business_key,
+                    enabled=policy.enabled,
+                    explicit_blacklist_providers=policy.explicit_blacklist_providers,
+                    allow_paid=policy.allow_paid,
+                    allow_reuse=policy.allow_reuse,
+                    max_bindings_per_phone=policy.max_bindings_per_phone,
+                    country_codes=policy.country_codes,
+                    selection_mode=policy.selection_mode,
+                )
+        return SmsBusinessPolicy(
+            business_key=resolved_business_key,
+            enabled=False,
+            explicit_blacklist_providers=self.explicit_blacklist_providers,
+            allow_paid=self.allow_paid,
+            allow_reuse=self.allow_reuse,
+            max_bindings_per_phone=self.max_bindings_per_phone,
+            country_codes=self.country_codes,
+            selection_mode=self.selection_mode,
         )
 
 

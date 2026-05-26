@@ -21,6 +21,7 @@ from others.config import (  # noqa: E402
     ProxyRuntimeConfig,
     RunnerMainConfig,
     TeamAuthRuntimeConfig,
+    SmsRuntimeConfig,
     env_percent_value,
     env_ratio,
 )
@@ -29,6 +30,33 @@ from others.paths import resolve_shared_root  # noqa: E402
 
 
 class TypedConfigTests(unittest.TestCase):
+    def test_sms_runtime_config_parses_default_and_openai_business_policies(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_SMS_BUSINESS_KEY": "openai",
+                "REGISTER_SMS_PROVIDER_BLACKLIST": "hero_sms",
+                "REGISTER_SMS_ALLOW_PAID": "false",
+                "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                    '{"default":{"enabled":false,"providerBlacklist":["hero_sms"],"allowPaid":false},'
+                    '"openai":{"enabled":true,"providerBlacklist":["hero_sms","paid_backup"],'
+                    '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
+                    '"countryCodes":["US"],"selectionMode":"available-first"}}'
+                ),
+            },
+            clear=False,
+        ):
+            config = SmsRuntimeConfig.from_env(default_state_path=Path("C:/tmp/register-sms-state.json"))
+
+        policy = config.resolve_business_policy("openai")
+        self.assertTrue(policy.enabled)
+        self.assertEqual(("hero_sms", "paid_backup"), policy.explicit_blacklist_providers)
+        self.assertFalse(policy.allow_paid)
+        self.assertFalse(policy.allow_reuse)
+        self.assertEqual(1, policy.max_bindings_per_phone)
+        self.assertEqual(("us",), policy.country_codes)
+        self.assertEqual("available-first", policy.selection_mode)
+
     def test_dashboard_settings_reads_typed_values(self) -> None:
         with mock.patch.dict(
             os.environ,

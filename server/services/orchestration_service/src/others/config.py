@@ -21,6 +21,7 @@ from others.config_runtime_sections import MailboxRuntimeConfig
 from others.config_runtime_sections import ProxyRuntimeConfig
 from others.config_runtime_sections import RunnerMainConfig
 from others.config_runtime_sections import RunnerFlowSpec
+from others.config_runtime_sections import SmsRuntimeConfig
 from others.config_runtime_sections import TeamAuthRuntimeConfig
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "RunnerMainConfig",
     "RunnerFlowSpec",
     "TeamAuthRuntimeConfig",
+    "SmsRuntimeConfig",
     "_resolve_output_root",
     "_resolve_output_root_text",
     "_resolve_shared_root",
