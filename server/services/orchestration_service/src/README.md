@@ -23,6 +23,8 @@
   EasyProxy 客户端与代理环境辅助
 - `server/services/python_shared/src/shared_mailbox/`
   EasyEmail 客户端封装
+- `server/services/python_shared/src/shared_sms/`
+  EasySms 客户端封装
 
 当前目录已经去掉 `new_protocol_register/` 这一层，文件直接展开在
 `server/services/orchestration_service/src/` 下。
@@ -37,6 +39,14 @@
 - `REGISTER_MAILBOX_PROVIDERS`
 - `REGISTER_MAILBOX_PROVIDER_BLACKLIST`
 - `REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD`
+- `REGISTER_SMS_BUSINESS_KEY`
+- `REGISTER_SMS_PROVIDER_BLACKLIST`
+- `REGISTER_SMS_ALLOW_PAID`
+- `REGISTER_SMS_ALLOW_REUSE`
+- `REGISTER_SMS_MAX_BINDINGS_PER_PHONE`
+- `REGISTER_SMS_COUNTRY_CODES`
+- `REGISTER_SMS_SELECTION_MODE`
+- `REGISTER_SMS_BUSINESS_POLICIES_JSON`
 - `REGISTER_ENABLE_EASY_PROXY`
 - `REGISTER_REQUIRE_EASY_PROXY`
 - `REGISTER_PROXY_HOST_ID`
@@ -68,6 +78,8 @@ provider 的具体能力差异都由 `EasyEmail` 内部处理。对调度层来�
 - 调度层不再根据 provider 名字分支处理 release 成功条件
 - 业务层当前只根据“域名黑名单 + 服务商黑名单”决定是否立即释放邮箱并重试，不再因为域名不在某个白名单池里而拒绝
 - 对同一业务下同一邮箱域名，连续失败达到阈值后会进入运行态动态黑名单；默认阈值为 `500`
+- `obtain_codex_oauth` 现在默认仍先走无手机号路径；只有当 `EasyProtocol` 返回 `phoneVerificationRequired=true` 时，调度层才会调用 `EasySms`
+- 当前开发默认通过 `REGISTER_SMS_PROVIDER_BLACKLIST=hero_sms` 禁用付费 `hero_sms`
 
 协议执行能力已经迁出本目录，当前通过下面的服务边界完成：
 

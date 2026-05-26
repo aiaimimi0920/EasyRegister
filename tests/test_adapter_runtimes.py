@@ -148,6 +148,55 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             self.assertEqual(str(expected_path.resolve()), result["bridged_storage_path"])
             self.assertTrue(expected_path.is_file())
 
+    def test_dispatch_obtain_codex_oauth_completes_phone_verification_when_phone_wall_returned(self) -> None:
+        with mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=[
+                {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123"},
+                },
+                {
+                    "ok": True,
+                    "status": "phone_number_submitted",
+                    "pageType": "sms_verification",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123"},
+                },
+                {
+                    "ok": True,
+                    "status": "completed",
+                    "successPath": "C:/tmp/codex-free.json",
+                    "userId": "user_123",
+                },
+            ],
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            return_value={"sessionId": "sms_123", "phoneNumber": "+15551234567", "providerKey": "sms24"},
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+            return_value="123456",
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ):
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("completed", result["status"])
+        self.assertTrue(result["phoneVerificationAttempted"])
+        self.assertEqual("sms24", result["phoneProvider"])
+        self.assertEqual("sms_123", result["phoneSessionId"])
+
 
 class EasyEmailRuntimeTests(unittest.TestCase):
     def test_release_mailbox_preserve_updates_team_flow_state(self) -> None:

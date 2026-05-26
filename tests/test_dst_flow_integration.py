@@ -443,6 +443,97 @@ class DstFlowIntegrationTests(unittest.TestCase):
             calls,
         )
 
+    def test_run_dst_flow_once_keeps_phone_failure_in_existing_failed_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "obtain-codex-oauth",
+                                    "type": "obtain_codex_oauth",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "saveAs": "obtain_codex_oauth",
+                                }
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                raise RuntimeError("wait_code_timeout")
+
+            with mock.patch.dict(dst_flow.OWNER_DISPATCHERS, {"easyprotocol": _dispatcher}, clear=True):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertFalse(result.ok)
+        self.assertEqual("obtain-codex-oauth", result.error_step)
+        self.assertEqual("wait_code_timeout", result.error)
+
+    def test_run_dst_flow_once_obtain_codex_oauth_can_complete_sms_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "obtain-codex-oauth",
+                                    "type": "obtain_codex_oauth",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "saveAs": "obtain_codex_oauth",
+                                },
+                                {
+                                    "id": "validate-free-personal-oauth",
+                                    "type": "validate_free_personal_oauth",
+                                    "metadata": {"owner": "orchestration"},
+                                    "input": {"oauth_result": "{{obtain_codex_oauth}}"},
+                                    "saveAs": "validate_free_personal_oauth",
+                                },
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "obtain_codex_oauth":
+                    return {
+                        "ok": True,
+                        "status": "completed",
+                        "successPath": "C:/tmp/codex-free.json",
+                        "phoneVerificationAttempted": True,
+                        "phoneProvider": "sms24",
+                    }
+                if step_type == "validate_free_personal_oauth":
+                    return {"ok": True, "status": "personal_oauth_confirmed"}
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {"easyprotocol": _dispatcher, "orchestration": _dispatcher},
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual("sms24", result.outputs["obtain-codex-oauth"]["phoneProvider"])
+        self.assertTrue(result.outputs["obtain-codex-oauth"]["phoneVerificationAttempted"])
+
     def test_run_dst_flow_once_retries_chatgpt_login_after_proxy_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             flow_path = Path(tmp_dir) / "temp-flow.json"

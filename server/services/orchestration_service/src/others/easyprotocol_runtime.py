@@ -9,6 +9,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from others import runtime_sms
+
 
 DEFAULT_EASY_PROTOCOL_BASE_URL = "http://127.0.0.1:19788"
 DEFAULT_EASY_PROTOCOL_OPERATION = "codex.semantic.step"
@@ -179,9 +181,64 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
                 "response": None,
             }
     result = invoke_easyprotocol(step_type=normalized_step_type, step_input=step_input)
+    if normalized_step_type == "obtain_codex_oauth" and isinstance(result, dict):
+        result = _maybe_complete_phone_verification_for_oauth(
+            initial_result=result,
+            step_input=step_input,
+        )
     if isinstance(result, dict):
         return maybe_bridge_step_artifact(
             step_type=normalized_step_type,
             step_result=result,
         )
     return result
+
+
+def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, Any], step_input: dict[str, Any]) -> dict[str, Any]:
+    if not bool(initial_result.get("phoneVerificationRequired")):
+        return initial_result
+
+    phone_session = runtime_sms.open_phone_session_for_business(
+        business_key=str(step_input.get("business_key") or step_input.get("mailbox_business_key") or "openai"),
+    )
+    resume_context = dict(initial_result.get("resumeContext") or {})
+    try:
+        invoke_easyprotocol(
+            step_type="submit_phone_verification_number",
+            step_input={
+                "source_path": step_input.get("source_path"),
+                "resume_context": resume_context,
+                "phone_number": phone_session["phoneNumber"],
+                "phone_session_id": phone_session["sessionId"],
+            },
+        )
+        sms_code = runtime_sms.wait_phone_code_for_session(
+            session_id=phone_session["sessionId"],
+            timeout_seconds=180,
+        )
+        final_result = invoke_easyprotocol(
+            step_type="submit_phone_verification_code",
+            step_input={
+                "source_path": step_input.get("source_path"),
+                "resume_context": resume_context,
+                "sms_code": sms_code,
+                "phone_session_id": phone_session["sessionId"],
+            },
+        )
+        runtime_sms.report_phone_outcome_for_session(
+            session_id=phone_session["sessionId"],
+            outcome="success",
+            detail="codex_oauth_completed",
+        )
+    except Exception as exc:
+        runtime_sms.report_phone_outcome_for_session(
+            session_id=phone_session["sessionId"],
+            outcome="failure",
+            detail=str(exc),
+        )
+        raise
+    if isinstance(final_result, dict):
+        final_result["phoneVerificationAttempted"] = True
+        final_result["phoneProvider"] = phone_session["providerKey"]
+        final_result["phoneSessionId"] = phone_session["sessionId"]
+    return final_result
