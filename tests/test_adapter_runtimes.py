@@ -16,7 +16,7 @@ PYTHON_SHARED_ROOT = Path(__file__).resolve().parents[1] / "server" / "services"
 if str(PYTHON_SHARED_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_SHARED_ROOT))
 
-from others import easyemail_runtime, easyprotocol_runtime, runtime_mailbox, runtime_proxy_support  # noqa: E402
+from others import easyemail_runtime, easyprotocol_runtime, local_config, runtime_mailbox, runtime_proxy_support  # noqa: E402
 from shared_mailbox import easy_email_client  # noqa: E402
 from shared_sms import easy_sms_client  # noqa: E402
 
@@ -25,14 +25,18 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
     def test_easy_sms_client_open_session_builds_free_first_request(self) -> None:
         with mock.patch.dict(
             os.environ,
-            {
-                "SMS_SERVICE_BASE_URL": "http://easy-sms:8080",
-                "SMS_SERVICE_API_KEY": "sms-key",
-            },
-            clear=False,
-        ), mock.patch.object(
-            easy_sms_client,
-            "_post_json",
+        {
+            "SMS_SERVICE_BASE_URL": "http://easy-sms:8080",
+            "SMS_SERVICE_API_KEY": "sms-key",
+        },
+        clear=False,
+    ), mock.patch.object(
+        easy_sms_client,
+        "_wait_sms_service_ready",
+        return_value=None,
+    ), mock.patch.object(
+        easy_sms_client,
+        "_post_json",
             return_value={
                 "result": {
                     "session": {
@@ -64,6 +68,33 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms_123", session.session_id)
         self.assertEqual("+15551234567", session.phone_number)
         self.assertEqual("sms24", session.provider_key)
+
+    def test_easy_sms_client_wait_code_polls_until_value(self) -> None:
+        with mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            side_effect=[
+                {"code": {}},
+                {"code": {"value": "123456"}},
+            ],
+        ), mock.patch("shared_sms.easy_sms_client.time.sleep", return_value=None):
+            code = easy_sms_client.wait_sms_code(session_id="sms_123", timeout_seconds=10)
+
+        self.assertEqual("123456", code)
+
+    def test_read_easysms_server_api_key_reads_direct_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            easysms_dir = root / "EasySms"
+            easysms_dir.mkdir(parents=True, exist_ok=True)
+            (easysms_dir / "config.yaml").write_text('apiKey: "sms-secret"\n', encoding="utf-8")
+            start_path = root / "project" / "dummy.py"
+            start_path.parent.mkdir(parents=True, exist_ok=True)
+            start_path.write_text("", encoding="utf-8")
+
+            api_key = local_config.read_easysms_server_api_key(start_path=start_path)
+
+        self.assertEqual("sms-secret", api_key)
 
     def test_dispatch_revoke_codex_member_skips_when_no_target_identifiers(self) -> None:
         result = easyprotocol_runtime.dispatch_easyprotocol_step(
