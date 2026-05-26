@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import time
+from datetime import datetime, timezone
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -15,6 +16,12 @@ from typing import Any
 DEFAULT_SMS_SERVICE_READY_TIMEOUT_SECONDS = 90
 DEFAULT_SMS_SERVICE_READY_PROBE_INTERVAL_SECONDS = 2
 DEFAULT_SMS_SERVICE_REQUEST_ATTEMPTS = 3
+SUPPORTED_SMS_SELECTION_MODES = {
+    "price-first",
+    "success-first",
+    "stock-first",
+    "balanced",
+}
 
 
 @dataclass(frozen=True)
@@ -203,6 +210,76 @@ def _get_json(path: str) -> dict[str, Any]:
     return _sms_service_request(method="GET", path=path)
 
 
+def _first_country_code(country_codes: tuple[str, ...]) -> str:
+    for item in country_codes:
+        normalized = str(item or "").strip()
+        if normalized:
+            return normalized
+    return ""
+
+
+def _normalize_selection_mode(selection_mode: str) -> str:
+    normalized = str(selection_mode or "").strip().lower()
+    if normalized in SUPPORTED_SMS_SELECTION_MODES:
+        return normalized
+    return ""
+
+
+def _is_retryable_provider_open_error(exc: Exception) -> bool:
+    normalized = str(exc or "").strip().lower()
+    return any(
+        token in normalized
+        for token in (
+            "currently unavailable",
+            "no eligible public numbers",
+            "no available public numbers",
+            "empty directory response",
+            "provider temporarily unavailable",
+        )
+    )
+
+
+def _query_provider_selection_candidates(
+    *,
+    provider_blacklist: tuple[str, ...],
+    allow_paid: bool,
+    country_codes: tuple[str, ...],
+) -> list[str]:
+    query = {
+        "costTier": "paid" if allow_paid else "free",
+        "limit": "20",
+    }
+    first_country_code = _first_country_code(country_codes)
+    if first_country_code:
+        query["countryCode"] = first_country_code
+    plan_response = _get_json(
+        "/sms/query/providers/selection-plan?" + urllib.parse.urlencode(query)
+    )
+    raw_candidates = plan_response.get("candidates") or []
+    candidates: list[str] = []
+    blacklist = {str(item or "").strip().lower() for item in provider_blacklist if str(item or "").strip()}
+    for raw_candidate in raw_candidates:
+        if not isinstance(raw_candidate, dict):
+            continue
+        provider_key = str(raw_candidate.get("providerKey") or "").strip().lower()
+        if not provider_key or provider_key in blacklist:
+            continue
+        candidates.append(provider_key)
+    if candidates:
+        return candidates
+    providers_response = _get_json(
+        "/sms/query/providers?" + urllib.parse.urlencode({"costTier": query["costTier"]})
+    )
+    for raw_provider in providers_response.get("providers") or []:
+        if not isinstance(raw_provider, dict):
+            continue
+        provider_key = str(raw_provider.get("key") or "").strip().lower()
+        if not provider_key or provider_key in blacklist:
+            continue
+        candidates.append(provider_key)
+    return candidates
+
+
 def _wait_sms_service_ready() -> None:
     deadline = time.time() + _sms_service_ready_timeout_seconds()
     interval_seconds = _sms_service_ready_probe_interval_seconds()
@@ -230,29 +307,54 @@ def open_sms_session(
     selection_mode: str,
 ) -> SmsSession:
     _wait_sms_service_ready()
-    response = _post_json(
-        "/sms/sessions/open",
-        {
-            "businessKey": str(business_key or "").strip(),
-            "providerBlacklist": list(provider_blacklist),
-            "costTier": "paid" if allow_paid else "free",
-            "allowReuse": bool(allow_reuse),
-            "maxBindingsPerPhone": max(1, int(max_bindings_per_phone or 1)),
-            "countryCodes": list(country_codes),
-            "selectionMode": str(selection_mode or "").strip() or "available-first",
-        },
+    selection_candidates = _query_provider_selection_candidates(
+        provider_blacklist=provider_blacklist,
+        allow_paid=allow_paid,
+        country_codes=country_codes,
     )
-    session = dict((response.get("result") or {}).get("session") or {})
-    session_id = str(session.get("id") or "").strip()
-    phone_number = str(session.get("phoneNumberE164") or session.get("phoneNumber") or "").strip()
-    provider_key = str(session.get("providerKey") or "").strip().lower()
-    if not session_id or not phone_number:
-        raise RuntimeError("sms service returned invalid sms session")
-    return SmsSession(
-        session_id=session_id,
-        phone_number=phone_number,
-        provider_key=provider_key,
-    )
+    base_payload: dict[str, Any] = {
+        "businessKey": str(business_key or "").strip(),
+        "costTier": "paid" if allow_paid else "free",
+        "allowReuse": bool(allow_reuse),
+        "maxBindingsPerPhone": max(1, int(max_bindings_per_phone or 1)),
+    }
+    if selection_candidates:
+        candidate_provider_keys = list(selection_candidates)
+    else:
+        candidate_provider_keys = [""]
+    first_country_code = _first_country_code(country_codes)
+    if first_country_code:
+        base_payload["countryCode"] = first_country_code
+    normalized_selection_mode = _normalize_selection_mode(selection_mode)
+    last_error: Exception | None = None
+    for provider_key_candidate in candidate_provider_keys:
+        request_payload = dict(base_payload)
+        normalized_provider_key = str(provider_key_candidate or "").strip().lower()
+        if normalized_provider_key:
+            request_payload["providerKey"] = normalized_provider_key
+        if normalized_selection_mode and normalized_provider_key == "hero_sms":
+            request_payload["selectionMode"] = normalized_selection_mode
+        try:
+            response = _post_json("/sms/sessions/open", request_payload)
+        except Exception as exc:
+            last_error = exc
+            if normalized_provider_key and _is_retryable_provider_open_error(exc):
+                continue
+            raise
+        session = dict(response.get("session") or (response.get("result") or {}).get("session") or {})
+        session_id = str(session.get("id") or "").strip()
+        phone_number = str(session.get("phoneNumberE164") or session.get("phoneNumber") or "").strip()
+        provider_key = str(session.get("providerKey") or "").strip().lower()
+        if session_id and phone_number:
+            return SmsSession(
+                session_id=session_id,
+                phone_number=phone_number,
+                provider_key=provider_key,
+            )
+        last_error = RuntimeError("sms service returned invalid sms session")
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("sms service returned invalid sms session")
 
 
 def wait_sms_code(*, session_id: str, timeout_seconds: int) -> str:
@@ -271,12 +373,19 @@ def wait_sms_code(*, session_id: str, timeout_seconds: int) -> str:
 
 
 def report_sms_outcome(*, session_id: str, outcome: str, detail: str = "") -> dict[str, Any]:
+    normalized_outcome = str(outcome or "").strip().lower()
+    success = normalized_outcome in {"success", "ok", "completed"}
+    payload: dict[str, Any] = {
+        "sessionId": str(session_id or "").strip(),
+        "success": success,
+        "detail": str(detail or "").strip(),
+        "source": "easyregister",
+        "observedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    if not success:
+        payload["failureReason"] = normalized_outcome or "failure"
     response = _post_json(
         "/sms/sessions/report-outcome",
-        {
-            "sessionId": str(session_id or "").strip(),
-            "outcome": str(outcome or "").strip(),
-            "detail": str(detail or "").strip(),
-        },
+        payload,
     )
     return dict(response.get("result") or {})

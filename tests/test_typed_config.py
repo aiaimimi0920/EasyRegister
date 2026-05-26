@@ -41,7 +41,7 @@ class TypedConfigTests(unittest.TestCase):
                     '{"default":{"enabled":false,"providerBlacklist":["hero_sms"],"allowPaid":false},'
                     '"openai":{"enabled":true,"providerBlacklist":["hero_sms","paid_backup"],'
                     '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
-                    '"countryCodes":["US"],"selectionMode":"available-first"}}'
+                    '"countryCodes":["US"],"selectionMode":"balanced"}}'
                 ),
             },
             clear=False,
@@ -55,7 +55,7 @@ class TypedConfigTests(unittest.TestCase):
         self.assertFalse(policy.allow_reuse)
         self.assertEqual(1, policy.max_bindings_per_phone)
         self.assertEqual(("us",), policy.country_codes)
-        self.assertEqual("available-first", policy.selection_mode)
+        self.assertEqual("balanced", policy.selection_mode)
 
     def test_sms_runtime_config_falls_back_to_default_policy(self) -> None:
         with mock.patch.dict(
@@ -67,7 +67,7 @@ class TypedConfigTests(unittest.TestCase):
                 "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
                     '{"default":{"enabled":true,"providerBlacklist":["hero_sms"],'
                     '"allowPaid":false,"allowReuse":true,"maxBindingsPerPhone":2,'
-                    '"countryCodes":["CA"],"selectionMode":"available-first"}}'
+                    '"countryCodes":["CA"],"selectionMode":"balanced"}}'
                 ),
             },
             clear=False,
@@ -82,7 +82,23 @@ class TypedConfigTests(unittest.TestCase):
         self.assertTrue(policy.allow_reuse)
         self.assertEqual(2, policy.max_bindings_per_phone)
         self.assertEqual(("ca",), policy.country_codes)
-        self.assertEqual("available-first", policy.selection_mode)
+        self.assertEqual("balanced", policy.selection_mode)
+
+    def test_sms_runtime_config_ignores_invalid_selection_mode(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_SMS_SELECTION_MODE": "available-first",
+                "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                    '{"openai":{"enabled":true,"providerBlacklist":["hero_sms"],"selectionMode":"available-first"}}'
+                ),
+            },
+            clear=False,
+        ):
+            config = SmsRuntimeConfig.from_env(default_state_path=Path("C:/tmp/register-sms-state.json"))
+
+        self.assertEqual("", config.selection_mode)
+        self.assertEqual("", config.resolve_business_policy("openai").selection_mode)
 
     def test_dashboard_settings_reads_typed_values(self) -> None:
         with mock.patch.dict(

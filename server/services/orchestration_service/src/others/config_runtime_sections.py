@@ -770,6 +770,13 @@ class SmsBusinessPolicy:
     selection_mode: str
 
 
+def _normalize_sms_selection_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"price-first", "success-first", "stock-first", "balanced"}:
+        return normalized
+    return ""
+
+
 def _parse_sms_business_policies(raw: str) -> tuple[SmsBusinessPolicy, ...]:
     text = str(raw or "").strip()
     if not text:
@@ -811,12 +818,10 @@ def _parse_sms_business_policies(raw: str) -> tuple[SmsBusinessPolicy, ...]:
                     or raw_policy.get("country_codes")
                     or raw_policy.get("countries")
                 ),
-                selection_mode=str(
+                selection_mode=_normalize_sms_selection_mode(
                     raw_policy.get("selectionMode")
                     or raw_policy.get("selection_mode")
-                    or "available-first"
-                ).strip()
-                or "available-first",
+                ),
             )
         )
     return tuple(policies)
@@ -845,7 +850,7 @@ class SmsRuntimeConfig:
             allow_reuse=env_bool("REGISTER_SMS_ALLOW_REUSE", False),
             max_bindings_per_phone=max(1, env_int("REGISTER_SMS_MAX_BINDINGS_PER_PHONE", 1)),
             country_codes=tuple(item.lower() for item in split_csv(env_text("REGISTER_SMS_COUNTRY_CODES"))),
-            selection_mode=env_text("REGISTER_SMS_SELECTION_MODE", "available-first") or "available-first",
+            selection_mode=_normalize_sms_selection_mode(env_text("REGISTER_SMS_SELECTION_MODE")),
             business_policies=_parse_sms_business_policies(env_text("REGISTER_SMS_BUSINESS_POLICIES_JSON")),
             state_path=state_path,
         )

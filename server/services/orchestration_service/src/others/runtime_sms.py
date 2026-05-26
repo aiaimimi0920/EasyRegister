@@ -63,7 +63,7 @@ def build_phone_verification_step_input(*, business_key: str | None = None) -> d
         "allow_reuse": bool(policy.allow_reuse),
         "max_bindings_per_phone": int(policy.max_bindings_per_phone),
         "country_codes": list(policy.country_codes),
-        "selection_mode": str(policy.selection_mode or "").strip() or "available-first",
+        "selection_mode": str(policy.selection_mode or "").strip(),
     }
 
 

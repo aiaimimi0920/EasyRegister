@@ -80,6 +80,7 @@ provider 的具体能力差异都由 `EasyEmail` 内部处理。对调度层来�
 - 对同一业务下同一邮箱域名，连续失败达到阈值后会进入运行态动态黑名单；默认阈值为 `500`
 - `obtain_codex_oauth` 现在默认仍先走无手机号路径；只有当 `EasyProtocol` 返回 `phoneVerificationRequired=true` 时，调度层才会调用 `EasySms`
 - 当前开发默认通过 `REGISTER_SMS_PROVIDER_BLACKLIST=hero_sms` 禁用付费 `hero_sms`
+- `REGISTER_SMS_SELECTION_MODE` 仅在后续显式走 `hero_sms` 这类付费短信 provider 时才有意义；当前默认值使用 `balanced` 以保持与 `EasySms` 原生 API 的合法枚举一致
 
 协议执行能力已经迁出本目录，当前通过下面的服务边界完成：
 

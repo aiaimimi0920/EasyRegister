@@ -36,17 +36,24 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         return_value=None,
     ), mock.patch.object(
         easy_sms_client,
+        "_get_json",
+        return_value={
+            "candidates": [
+                {"providerKey": "hero_sms"},
+                {"providerKey": "sms24"},
+            ]
+        },
+    ), mock.patch.object(
+        easy_sms_client,
         "_post_json",
-            return_value={
-                "result": {
-                    "session": {
-                        "id": "sms_123",
-                        "phoneNumberE164": "+15551234567",
-                        "providerKey": "sms24",
-                    }
-                }
-            },
-        ) as post_json:
+        return_value={
+            "session": {
+                "id": "sms_123",
+                "phoneNumber": "+15551234567",
+                "providerKey": "sms24",
+            }
+        },
+    ) as post_json:
             session = easy_sms_client.open_sms_session(
                 business_key="openai",
                 provider_blacklist=("hero_sms",),
@@ -59,15 +66,127 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
         payload = post_json.call_args.args[1]
         self.assertEqual("openai", payload["businessKey"])
-        self.assertEqual(["hero_sms"], payload["providerBlacklist"])
         self.assertEqual("free", payload["costTier"])
         self.assertEqual(False, payload["allowReuse"])
         self.assertEqual(1, payload["maxBindingsPerPhone"])
-        self.assertEqual(["us"], payload["countryCodes"])
-        self.assertEqual("available-first", payload["selectionMode"])
+        self.assertEqual("sms24", payload["providerKey"])
+        self.assertEqual("us", payload["countryCode"])
+        self.assertNotIn("providerBlacklist", payload)
+        self.assertNotIn("countryCodes", payload)
+        self.assertNotIn("selectionMode", payload)
         self.assertEqual("sms_123", session.session_id)
         self.assertEqual("+15551234567", session.phone_number)
         self.assertEqual("sms24", session.provider_key)
+
+    def test_easy_sms_client_report_outcome_uses_native_payload(self) -> None:
+        with mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            return_value={"result": {"recorded": True}},
+        ) as post_json:
+            result = easy_sms_client.report_sms_outcome(
+                session_id="sms_123",
+                outcome="failure",
+                detail="wait_code_timeout",
+            )
+
+        payload = post_json.call_args.args[1]
+        self.assertEqual("sms_123", payload["sessionId"])
+        self.assertFalse(payload["success"])
+        self.assertEqual("failure", payload["failureReason"])
+        self.assertEqual("wait_code_timeout", payload["detail"])
+        self.assertEqual("easyregister", payload["source"])
+        self.assertIn("observedAt", payload)
+        self.assertEqual({"recorded": True}, result)
+
+    def test_easy_sms_client_preserves_supported_paid_selection_mode(self) -> None:
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            return_value={"candidates": [{"providerKey": "hero_sms"}]},
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            return_value={
+                "session": {
+                    "id": "sms_123",
+                    "phoneNumber": "+15551234567",
+                    "providerKey": "hero_sms",
+                }
+            },
+        ) as post_json:
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=True,
+                allow_reuse=True,
+                max_bindings_per_phone=1,
+                country_codes=(),
+                selection_mode="balanced",
+            )
+
+        payload = post_json.call_args.args[1]
+        self.assertEqual("hero_sms", payload["providerKey"])
+        self.assertEqual("paid", payload["costTier"])
+        self.assertTrue(payload["allowReuse"])
+        self.assertEqual("balanced", payload["selectionMode"])
+        self.assertEqual("hero_sms", session.provider_key)
+
+    def test_easy_sms_client_retries_next_provider_when_selected_candidate_is_unavailable(self) -> None:
+        post_payloads: list[dict[str, object]] = []
+
+        def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            post_payloads.append(dict(payload))
+            provider_key = str(payload.get("providerKey") or "")
+            if provider_key == "receive_smss":
+                raise RuntimeError(
+                    'sms service POST /sms/sessions/open failed: HTTP 503 '
+                    '[code=Provider "receive_smss" is currently unavailable: '
+                    'No eligible public numbers were available for a synthetic activation session.]'
+                )
+            return {
+                "session": {
+                    "id": "sms_124",
+                    "phoneNumber": "+15557654321",
+                    "providerKey": provider_key,
+                }
+            }
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            return_value={
+                "candidates": [
+                    {"providerKey": "receive_smss"},
+                    {"providerKey": "sms24"},
+                ]
+            },
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=_post,
+        ):
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=(),
+                selection_mode="balanced",
+            )
+
+        self.assertEqual(["receive_smss", "sms24"], [payload["providerKey"] for payload in post_payloads])
+        self.assertEqual("sms24", session.provider_key)
+        self.assertEqual("sms_124", session.session_id)
 
     def test_easy_sms_client_wait_code_polls_until_value(self) -> None:
         with mock.patch.object(
@@ -181,7 +300,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
                     '{"openai":{"enabled":true,"providerBlacklist":["hero_sms"],'
                     '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
-                    '"countryCodes":["US"],"selectionMode":"available-first"}}'
+                    '"countryCodes":["US"],"selectionMode":"balanced"}}'
                 )
             },
             clear=False,
@@ -216,6 +335,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual(["hero_sms"], captured_inputs[0]["sms_verification"]["provider_blacklist"])
         self.assertFalse(bool(captured_inputs[0]["sms_verification"]["allow_paid"]))
         self.assertEqual(["us"], captured_inputs[0]["sms_verification"]["country_codes"])
+        self.assertEqual("balanced", captured_inputs[0]["sms_verification"]["selection_mode"])
 
 
 class EasyEmailRuntimeTests(unittest.TestCase):
