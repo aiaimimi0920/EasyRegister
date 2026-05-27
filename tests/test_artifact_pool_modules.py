@@ -63,6 +63,48 @@ class ArtifactPoolCommonTests(unittest.TestCase):
 
 
 class ArtifactPoolClaimsTests(unittest.TestCase):
+    def test_validate_free_personal_oauth_preserves_terminal_phone_rejection_as_small_success_failure(self) -> None:
+        result = artifact_pool_claims.validate_free_personal_oauth(
+            step_input={
+                "oauth_result": {
+                    "phoneVerificationAttempted": True,
+                    "phoneVerificationTerminal": True,
+                    "phoneVerificationTerminalCode": "phone_number_in_use",
+                    "phoneVerificationTerminalMessage": "Phone number already in use.",
+                    "phoneProvider": "smstome",
+                    "phoneSessionId": "sms_session_123",
+                }
+            }
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual("phone_number_in_use", result["code"])
+        self.assertEqual("phone_verification_terminal_small_success", result["status"])
+        self.assertEqual("phone_verification_terminal_small_success", result["detail"])
+        self.assertTrue(result["phone_verification_attempted"])
+        self.assertEqual("smstome", result["phone_provider"])
+        self.assertEqual("sms_session_123", result["phone_session_id"])
+
+    def test_validate_free_personal_oauth_preserves_phone_submission_without_code_as_small_success_failure(self) -> None:
+        result = artifact_pool_claims.validate_free_personal_oauth(
+            step_input={
+                "oauth_result": {
+                    "phoneVerificationAttempted": True,
+                    "phoneVerificationSubmitted": True,
+                    "phoneVerificationFailureStage": "wait_sms_code",
+                    "phoneVerificationFailureDetail": "wait_code_timeout",
+                    "phoneProvider": "onlinesim",
+                    "phoneSessionId": "sms_session_456",
+                }
+            }
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual("phone_verification_submitted_small_success", result["code"])
+        self.assertEqual("phone_verification_submitted_small_success", result["status"])
+        self.assertEqual("wait_sms_code", result["phone_failure_stage"])
+        self.assertEqual("onlinesim", result["phone_provider"])
+
     def test_claim_openai_oauth_artifact_skips_email_when_codex_success_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"

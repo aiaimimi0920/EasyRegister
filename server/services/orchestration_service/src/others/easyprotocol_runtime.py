@@ -214,8 +214,10 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
         business_key=str(step_input.get("business_key") or step_input.get("mailbox_business_key") or "openai"),
     )
     resume_context = dict(initial_result.get("resumeContext") or {})
+    phone_number_submitted = False
+    phone_failure_stage = "submit_phone_verification_number"
     try:
-        invoke_easyprotocol(
+        phone_number_result = invoke_easyprotocol(
             step_type="submit_phone_verification_number",
             step_input={
                 "source_path": step_input.get("source_path"),
@@ -224,10 +226,53 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
                 "phone_session_id": phone_session["sessionId"],
             },
         )
+        if isinstance(phone_number_result, dict):
+            updated_resume_context = phone_number_result.get("resumeContext")
+            if isinstance(updated_resume_context, dict) and updated_resume_context:
+                resume_context = dict(updated_resume_context)
+            if bool(phone_number_result.get("phoneVerificationTerminal")):
+                terminal_code = str(phone_number_result.get("phoneVerificationTerminalCode") or "").strip()
+                terminal_message = str(phone_number_result.get("phoneVerificationTerminalMessage") or "").strip()
+                runtime_sms.report_phone_outcome_for_session(
+                    session_id=phone_session["sessionId"],
+                    outcome="failure",
+                    detail=terminal_code or terminal_message or "phone_verification_terminal",
+                )
+                return {
+                    "ok": True,
+                    "status": str(phone_number_result.get("status") or "phone_verification_terminal").strip()
+                    or "phone_verification_terminal",
+                    "successPath": str(
+                        initial_result.get("successPath")
+                        or initial_result.get("sourcePath")
+                        or step_input.get("source_path")
+                        or ""
+                    ).strip(),
+                    "sourcePath": str(
+                        step_input.get("source_path")
+                        or initial_result.get("sourcePath")
+                        or initial_result.get("successPath")
+                        or ""
+                    ).strip(),
+                    "pageType": str(phone_number_result.get("pageType") or "").strip() or "add_phone",
+                    "resumeContext": dict(resume_context),
+                    "phoneVerificationAttempted": True,
+                    "phoneVerificationAccepted": False,
+                    "phoneVerificationTerminal": True,
+                    "phoneVerificationTerminalCode": terminal_code,
+                    "phoneVerificationTerminalMessage": terminal_message,
+                    "phoneVerificationTerminalStatusCode": phone_number_result.get("phoneVerificationTerminalStatusCode"),
+                    "phoneProvider": phone_session["providerKey"],
+                    "phoneSessionId": phone_session["sessionId"],
+                    "phoneNumber": phone_session["phoneNumber"],
+                }
+            phone_number_submitted = True
+            phone_failure_stage = "wait_sms_code"
         sms_code = runtime_sms.wait_phone_code_for_session(
             session_id=phone_session["sessionId"],
             timeout_seconds=180,
         )
+        phone_failure_stage = "submit_phone_verification_code"
         final_result = invoke_easyprotocol(
             step_type="submit_phone_verification_code",
             step_input={
@@ -248,6 +293,33 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
             outcome="failure",
             detail=str(exc),
         )
+        if phone_number_submitted:
+            return {
+                "ok": True,
+                "status": "phone_verification_submitted_small_success",
+                "successPath": str(
+                    initial_result.get("successPath")
+                    or initial_result.get("sourcePath")
+                    or step_input.get("source_path")
+                    or ""
+                ).strip(),
+                "sourcePath": str(
+                    step_input.get("source_path")
+                    or initial_result.get("sourcePath")
+                    or initial_result.get("successPath")
+                    or ""
+                ).strip(),
+                "pageType": str((resume_context or {}).get("pageType") or "").strip() or "add_phone",
+                "resumeContext": dict(resume_context),
+                "phoneVerificationAttempted": True,
+                "phoneVerificationSubmitted": True,
+                "phoneVerificationAccepted": False,
+                "phoneVerificationFailureStage": phone_failure_stage,
+                "phoneVerificationFailureDetail": str(exc),
+                "phoneProvider": phone_session["providerKey"],
+                "phoneSessionId": phone_session["sessionId"],
+                "phoneNumber": phone_session["phoneNumber"],
+            }
         raise
     if isinstance(final_result, dict):
         final_result["phoneVerificationAttempted"] = True

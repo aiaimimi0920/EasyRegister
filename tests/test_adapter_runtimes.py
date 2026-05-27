@@ -285,7 +285,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                     "ok": True,
                     "status": "phone_number_submitted",
                     "pageType": "sms_verification",
-                    "resumeContext": {"flow": "oauth", "token": "resume_123"},
+                    "resumeContext": {"flow": "oauth", "token": "resume_123_step2"},
                 }
             return {
                 "ok": True,
@@ -336,6 +336,116 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertFalse(bool(captured_inputs[0]["sms_verification"]["allow_paid"]))
         self.assertEqual(["us"], captured_inputs[0]["sms_verification"]["country_codes"])
         self.assertEqual("balanced", captured_inputs[0]["sms_verification"]["selection_mode"])
+        self.assertEqual("resume_123", captured_inputs[1]["resume_context"]["token"])
+        self.assertEqual("resume_123_step2", captured_inputs[2]["resume_context"]["token"])
+
+    def test_dispatch_obtain_codex_oauth_treats_terminal_phone_verification_as_intermediate_result(self) -> None:
+        captured_inputs: list[dict[str, object]] = []
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured_inputs.append(dict(step_input))
+            if len(captured_inputs) == 1:
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            return {
+                "ok": True,
+                "status": "phone_verification_terminal",
+                "pageType": "add_phone",
+                "resumeContext": {"flow": "oauth", "token": "resume_123_step2"},
+                "phoneVerificationAttempted": True,
+                "phoneVerificationTerminal": True,
+                "phoneVerificationTerminalCode": "phone_number_in_use",
+                "phoneVerificationTerminalMessage": "Phone number already in use.",
+                "phoneVerificationTerminalStatusCode": 403,
+            }
+
+        with mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            return_value={"sessionId": "sms_123", "phoneNumber": "+15551234567", "providerKey": "sms24"},
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+        ) as wait_phone_code, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ) as report_phone_outcome:
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("phone_verification_terminal", result["status"])
+        self.assertTrue(result["phoneVerificationAttempted"])
+        self.assertTrue(result["phoneVerificationTerminal"])
+        self.assertEqual("phone_number_in_use", result["phoneVerificationTerminalCode"])
+        self.assertEqual("sms24", result["phoneProvider"])
+        wait_phone_code.assert_not_called()
+        report_phone_outcome.assert_called_once()
+
+    def test_dispatch_obtain_codex_oauth_treats_submitted_phone_then_code_wait_failure_as_intermediate_result(self) -> None:
+        captured_inputs: list[dict[str, object]] = []
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured_inputs.append(dict(step_input))
+            if len(captured_inputs) == 1:
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            return {
+                "ok": True,
+                "status": "phone_number_submitted",
+                "pageType": "add_phone",
+                "resumeContext": {"flow": "oauth", "token": "resume_123_step2"},
+            }
+
+        with mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            return_value={"sessionId": "sms_123", "phoneNumber": "+15551234567", "providerKey": "sms24"},
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+            side_effect=RuntimeError("wait_code_timeout"),
+        ) as wait_phone_code, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ) as report_phone_outcome:
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("phone_verification_submitted_small_success", result["status"])
+        self.assertTrue(result["phoneVerificationAttempted"])
+        self.assertTrue(result["phoneVerificationSubmitted"])
+        self.assertEqual("wait_sms_code", result["phoneVerificationFailureStage"])
+        self.assertEqual("sms24", result["phoneProvider"])
+        wait_phone_code.assert_called_once()
+        report_phone_outcome.assert_called_once()
 
 
 class EasyEmailRuntimeTests(unittest.TestCase):

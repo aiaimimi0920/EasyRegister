@@ -457,6 +457,48 @@ def validate_free_personal_oauth(*, step_input: dict[str, Any]) -> dict[str, Any
             "organizations": organizations,
         }
 
+    oauth_result_dict = oauth_result if isinstance(oauth_result, dict) else {}
+    terminal_code = str(oauth_result_dict.get("phoneVerificationTerminalCode") or "").strip()
+    if bool(oauth_result_dict.get("phoneVerificationTerminal")) and terminal_code in {
+        "phone_number_in_use",
+        "phone_max_usage_exceeded",
+        "rate_limit_exceeded",
+    }:
+        return {
+            "ok": False,
+            "status": "phone_verification_terminal_small_success",
+            "code": terminal_code,
+            "detail": "phone_verification_terminal_small_success",
+            "oauth_account_id": oauth_account_id,
+            "team_account_id": team_account_id,
+            "validation_mode": "phone_verification_terminal_small_success",
+            "chatgpt_plan_type": plan_type,
+            "organizations": organizations,
+            "phone_verification_attempted": True,
+            "phone_verification_terminal": True,
+            "phone_provider": str(oauth_result_dict.get("phoneProvider") or "").strip(),
+            "phone_session_id": str(oauth_result_dict.get("phoneSessionId") or "").strip(),
+            "phone_terminal_message": str(oauth_result_dict.get("phoneVerificationTerminalMessage") or "").strip(),
+        }
+    if bool(oauth_result_dict.get("phoneVerificationSubmitted")):
+        return {
+            "ok": False,
+            "status": "phone_verification_submitted_small_success",
+            "code": "phone_verification_submitted_small_success",
+            "detail": "phone_verification_submitted_small_success",
+            "oauth_account_id": oauth_account_id,
+            "team_account_id": team_account_id,
+            "validation_mode": "phone_verification_submitted_small_success",
+            "chatgpt_plan_type": plan_type,
+            "organizations": organizations,
+            "phone_verification_attempted": True,
+            "phone_verification_submitted": True,
+            "phone_provider": str(oauth_result_dict.get("phoneProvider") or "").strip(),
+            "phone_session_id": str(oauth_result_dict.get("phoneSessionId") or "").strip(),
+            "phone_failure_stage": str(oauth_result_dict.get("phoneVerificationFailureStage") or "").strip(),
+            "phone_failure_detail": str(oauth_result_dict.get("phoneVerificationFailureDetail") or "").strip(),
+        }
+
     return {
         "ok": False,
         "status": ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING,
