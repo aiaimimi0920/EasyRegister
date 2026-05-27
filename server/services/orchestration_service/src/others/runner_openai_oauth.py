@@ -570,83 +570,83 @@ def postprocess_free_success_artifact(
 
     artifact_path = _free_success_artifact_path(result=result)
     materialized_artifact_path: Path | None = None
-    openai_source_path = first_existing_output_path(result_payload_value, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES)
-    if artifact_path is None or not artifact_path.is_file():
-        materialized_artifact_path = _materialize_free_success_artifact_from_output(
-            result=result,
+    try:
+        openai_source_path = first_existing_output_path(result_payload_value, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES)
+        if artifact_path is None or not artifact_path.is_file():
+            materialized_artifact_path = _materialize_free_success_artifact_from_output(
+                result=result,
+                output_root=output_root,
+            )
+            artifact_path = materialized_artifact_path
+        if artifact_path is None or not artifact_path.is_file() or openai_source_path is None or not openai_source_path.is_file():
+            return {"ok": False, "status": "missing_free_artifact", "cleanup_run_output": False}
+        prepared_artifact = prepare_free_artifact(source_path=artifact_path)
+        openai_target_dir = resolve_openai_oauth_success_pool_dir(output_root=output_root)
+        openai_upload_selected = select_upload_split(percent=routing_config.openai_upload_percent)
+        codex_upload_selected = select_upload_split(percent=routing_config.codex_free_upload_percent)
+        openai_should_upload = openai_upload_selected or codex_upload_selected
+
+        openai_route_result = route_openai_oauth_artifact(
+            source_path=openai_source_path,
+            destination_dir=openai_target_dir,
             output_root=output_root,
+            target_folder="openai/converted",
+            upload_percent=100.0 if openai_should_upload else 0.0,
+            preferred_name=openai_source_path.name,
+            move_local=False,
         )
-        artifact_path = materialized_artifact_path
-    if artifact_path is None or not artifact_path.is_file() or openai_source_path is None or not openai_source_path.is_file():
-        return {"ok": False, "status": "missing_free_artifact", "cleanup_run_output": False}
-    prepared_artifact = prepare_free_artifact(source_path=artifact_path)
-    openai_target_dir = resolve_openai_oauth_success_pool_dir(output_root=output_root)
-    openai_upload_selected = select_upload_split(percent=routing_config.openai_upload_percent)
-    codex_upload_selected = select_upload_split(percent=routing_config.codex_free_upload_percent)
-    openai_should_upload = openai_upload_selected or codex_upload_selected
+        if not bool(openai_route_result.get("ok")):
+            return {
+                "ok": False,
+                "status": "openai_upload_failed",
+                "cleanup_run_output": False,
+                "detail": str(openai_route_result.get("detail") or "upload_failed"),
+            }
 
-    openai_route_result = route_openai_oauth_artifact(
-        source_path=openai_source_path,
-        destination_dir=openai_target_dir,
-        output_root=output_root,
-        target_folder="openai/converted",
-        upload_percent=100.0 if openai_should_upload else 0.0,
-        preferred_name=openai_source_path.name,
-        move_local=False,
-    )
-    if not bool(openai_route_result.get("ok")):
-        return {
-            "ok": False,
-            "status": "openai_upload_failed",
-            "cleanup_run_output": False,
-            "detail": str(openai_route_result.get("detail") or "upload_failed"),
-        }
+        codex_target_dir = resolve_free_oauth_pool_dir(output_root=output_root)
+        if codex_upload_selected:
+            route_result = route_prepared_artifact(
+                prepared_artifact,
+                local_dir=None,
+                move_local=False,
+                overwrite_existing=True,
+                target_folder="codex/free",
+                upload_fn=upload_artifact_to_r2,
+                staging_dir=(output_root / "others" / "codex-free-upload-staging"),
+            )
+            if not bool(route_result.get("ok")):
+                return {
+                    "ok": False,
+                    "status": "free_upload_failed",
+                    "cleanup_run_output": False,
+                    "detail": str(route_result.get("detail") or "upload_failed"),
+                    "transient_path": str(route_result.get("staged_path") or ""),
+                }
+            return {
+                "ok": True,
+                "status": "uploaded_deleted",
+                "cleanup_run_output": True,
+                "pool_dir": str(codex_target_dir),
+                "openaiRoute": openai_route_result,
+                "transient_path": str(route_result.get("staged_path") or ""),
+            }
 
-    codex_target_dir = resolve_free_oauth_pool_dir(output_root=output_root)
-    if codex_upload_selected:
         route_result = route_prepared_artifact(
             prepared_artifact,
-            local_dir=None,
+            local_dir=codex_target_dir,
             move_local=False,
             overwrite_existing=True,
             target_folder="codex/free",
             upload_fn=upload_artifact_to_r2,
-            staging_dir=(output_root / "others" / "codex-free-upload-staging"),
         )
-        if not bool(route_result.get("ok")):
-            return {
-                "ok": False,
-                "status": "free_upload_failed",
-                "cleanup_run_output": False,
-                "detail": str(route_result.get("detail") or "upload_failed"),
-                "transient_path": str(route_result.get("staged_path") or ""),
-            }
-        if materialized_artifact_path is not None:
-            delete_artifact_quiet(materialized_artifact_path)
         return {
             "ok": True,
-            "status": "uploaded_deleted",
+            "status": "stored_local",
             "cleanup_run_output": True,
-            "pool_dir": str(codex_target_dir),
+            "stored_path": str(route_result.get("stored_path") or ""),
+            "target_dir": str(codex_target_dir),
             "openaiRoute": openai_route_result,
-            "transient_path": str(route_result.get("staged_path") or ""),
         }
-
-    route_result = route_prepared_artifact(
-        prepared_artifact,
-        local_dir=codex_target_dir,
-        move_local=False,
-        overwrite_existing=True,
-        target_folder="codex/free",
-        upload_fn=upload_artifact_to_r2,
-    )
-    if materialized_artifact_path is not None:
-        delete_artifact_quiet(materialized_artifact_path)
-    return {
-        "ok": True,
-        "status": "stored_local",
-        "cleanup_run_output": True,
-        "stored_path": str(route_result.get("stored_path") or ""),
-        "target_dir": str(codex_target_dir),
-        "openaiRoute": openai_route_result,
-    }
+    finally:
+        if materialized_artifact_path is not None:
+            delete_artifact_quiet(materialized_artifact_path)

@@ -136,6 +136,55 @@ class RunnerArtifactsTests(unittest.TestCase):
                 stored_path = Path(str(postprocess["stored_path"]))
                 self.assertTrue(stored_path.is_file())
                 self.assertEqual("codex-free-org-materialized@example.com.json", stored_path.name)
+                self.assertEqual(
+                    [],
+                    list((output_root / "codex" / "free" / "_materialized").glob("*.json")),
+                )
+
+    def test_postprocess_free_success_artifact_cleans_materialized_temp_on_missing_openai_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_FREE_LOCAL_DIR": str(output_root / "codex" / "free"),
+                    "REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0",
+                },
+                clear=True,
+            ):
+                result = SimpleNamespace(
+                    ok=True,
+                    to_dict=lambda: {
+                        "steps": {
+                            "validate-free-personal-oauth": "ok",
+                        },
+                        "outputs": {
+                            "obtain-codex-oauth": {
+                                "email": "missing-source@example.com",
+                                "access_token": "token",
+                                "refresh_token": "refresh",
+                                "auth": {
+                                    "account_id": "org-abcdef12-rest",
+                                },
+                            }
+                        },
+                    },
+                )
+                postprocess = runner_artifacts.postprocess_free_success_artifact(
+                    result=result,
+                    output_root=output_root,
+                    worker_label="worker-01",
+                    task_index=2,
+                    free_local_selected=True,
+                )
+
+            self.assertFalse(postprocess["ok"])
+            self.assertEqual("missing_free_artifact", postprocess["status"])
+            self.assertEqual(
+                [],
+                list((output_root / "codex" / "free" / "_materialized").glob("*.json")),
+            )
 
     def test_postprocess_free_success_artifact_uses_finalized_restored_openai_source_for_continue_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
