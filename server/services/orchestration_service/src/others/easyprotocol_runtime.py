@@ -233,6 +233,12 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
             if bool(phone_number_result.get("phoneVerificationTerminal")):
                 terminal_code = str(phone_number_result.get("phoneVerificationTerminalCode") or "").strip()
                 terminal_message = str(phone_number_result.get("phoneVerificationTerminalMessage") or "").strip()
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number=phone_session["phoneNumber"],
+                    provider_key=phone_session["providerKey"],
+                    terminal_code=terminal_code,
+                    terminal_message=terminal_message,
+                )
                 runtime_sms.report_phone_outcome_for_session(
                     session_id=phone_session["sessionId"],
                     outcome="failure",
