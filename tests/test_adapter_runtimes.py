@@ -403,6 +403,39 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms_good", session.session_id)
         self.assertEqual("+33774749623", session.phone_number)
 
+    def test_easy_sms_client_does_not_catalog_fallback_when_selection_plan_is_fully_country_blacklisted(self) -> None:
+        def _get(path: str) -> dict[str, object]:
+            if path.startswith("/sms/query/providers/selection-plan?"):
+                return {"candidates": [{"providerKey": "onlinesim"}]}
+            if path.startswith("/sms/query/providers?"):
+                raise AssertionError("catalog fallback should not run after provider-country exhaustion")
+            return {}
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            side_effect=_get,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=AssertionError("blacklisted country should not be opened"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "sms_no_unblocked_provider_country_candidates"):
+                easy_sms_client.open_sms_session(
+                    business_key="openai",
+                    provider_blacklist=(),
+                    allow_paid=False,
+                    allow_reuse=False,
+                    max_bindings_per_phone=1,
+                    country_codes=("+31",),
+                    selection_mode="balanced",
+                    provider_country_blacklist=("onlinesim|+31",),
+                )
+
     def test_easy_sms_client_wait_code_polls_until_value(self) -> None:
         with mock.patch.object(
             easy_sms_client,

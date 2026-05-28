@@ -374,9 +374,11 @@ def open_sms_session(
     blocked_provider_country_pairs = _normalize_provider_country_blacklist(provider_country_blacklist)
     country_candidates = _country_code_candidates(country_codes)
     last_error: Exception | None = None
+    opened_session_attempts = 0
+    provider_country_skip_count = 0
 
     def _try_provider_candidates(provider_keys: list[str]) -> SmsSession | None:
-        nonlocal last_error
+        nonlocal last_error, opened_session_attempts, provider_country_skip_count
         for provider_key_candidate in provider_keys:
             normalized_provider_key = str(provider_key_candidate or "").strip().lower()
             for country_code_candidate in country_candidates:
@@ -385,6 +387,7 @@ def open_sms_session(
                     and country_code_candidate
                     and (normalized_provider_key, country_code_candidate) in blocked_provider_country_pairs
                 ):
+                    provider_country_skip_count += 1
                     continue
                 request_payload = dict(base_payload)
                 if country_code_candidate:
@@ -393,6 +396,7 @@ def open_sms_session(
                     request_payload["providerKey"] = normalized_provider_key
                 if normalized_selection_mode and normalized_provider_key == "hero_sms":
                     request_payload["selectionMode"] = normalized_selection_mode
+                opened_session_attempts += 1
                 try:
                     response = _post_json("/sms/sessions/open", request_payload)
                 except Exception as exc:
@@ -419,6 +423,8 @@ def open_sms_session(
     selected_session = _try_provider_candidates(candidate_provider_keys)
     if selected_session is not None:
         return selected_session
+    if selection_candidates and opened_session_attempts == 0 and provider_country_skip_count > 0:
+        raise RuntimeError("sms_no_unblocked_provider_country_candidates")
     if selection_candidates:
         fallback_provider_keys = _query_provider_catalog_candidates(
             provider_blacklist=provider_blacklist,
