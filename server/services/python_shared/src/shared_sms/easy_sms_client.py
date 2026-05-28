@@ -290,9 +290,16 @@ def _query_provider_selection_candidates(
         provider_key = str(raw_candidate.get("providerKey") or "").strip().lower()
         if not provider_key or provider_key in blacklist:
             continue
+        if raw_candidate.get("available") is False:
+            continue
+        health_state = str(raw_candidate.get("healthState") or "").strip().lower()
+        if health_state == "empty":
+            continue
         candidates.append(provider_key)
     if candidates:
         return candidates
+    if raw_candidates:
+        return []
     return _query_provider_catalog_candidates(
         provider_blacklist=provider_blacklist,
         allow_paid=allow_paid,

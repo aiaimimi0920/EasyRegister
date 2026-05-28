@@ -189,6 +189,26 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms24", session.provider_key)
         self.assertEqual("sms_124", session.session_id)
 
+    def test_easy_sms_client_filters_empty_selection_plan_providers(self) -> None:
+        with mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            return_value={
+                "candidates": [
+                    {"providerKey": "onlinesim", "available": True, "healthState": "healthy"},
+                    {"providerKey": "sms24", "available": True, "healthState": "empty"},
+                    {"providerKey": "receive_smss", "available": False, "healthState": "degraded"},
+                ]
+            },
+        ):
+            candidates = easy_sms_client._query_provider_selection_candidates(
+                provider_blacklist=(),
+                allow_paid=False,
+                country_codes=("+44",),
+            )
+
+        self.assertEqual(["onlinesim"], candidates)
+
     def test_easy_sms_client_falls_back_to_provider_catalog_when_selection_plan_is_exhausted(self) -> None:
         post_payloads: list[dict[str, object]] = []
 
