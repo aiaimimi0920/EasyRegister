@@ -19,6 +19,10 @@ DEFAULT_EASY_SMS_BASE_URL = "http://localhost:18083"
 DEFAULT_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS = 24 * 60 * 60
 DEFAULT_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS = 30 * 60
 DEFAULT_SMS_SESSION_LOCAL_RETRY_ATTEMPTS = 6
+PHONE_SCOPED_TERMINAL_CODES = {
+    "phone_number_in_use",
+    "phone_max_usage_exceeded",
+}
 
 
 def _sms_runtime_config() -> SmsRuntimeConfig:
@@ -51,6 +55,10 @@ def _write_sms_state(*, payload: dict[str, Any], config: SmsRuntimeConfig | None
     write_json_atomic(resolved_config.state_path, payload, include_pid=True, cleanup_temp=True)
 
 
+def _is_phone_scoped_terminal_code(terminal_code: str) -> bool:
+    return str(terminal_code or "").strip().lower() in PHONE_SCOPED_TERMINAL_CODES
+
+
 def _prune_sms_state(*, payload: dict[str, Any], now_ts: float | None = None) -> dict[str, Any]:
     effective_now_ts = float(now_ts or time.time())
     normalized = {
@@ -63,6 +71,8 @@ def _prune_sms_state(*, payload: dict[str, Any], now_ts: float | None = None) ->
         for raw_key, raw_value in bucket.items():
             key = str(raw_key or "").strip()
             if not key or not isinstance(raw_value, dict):
+                continue
+            if bucket_key == "providers" and _is_phone_scoped_terminal_code(str(raw_value.get("reason") or "")):
                 continue
             try:
                 blocked_until_ts = float(raw_value.get("blockedUntilTs") or 0.0)
@@ -131,7 +141,7 @@ def record_terminal_phone_outcome(
             "blockedUntil": phone_until.isoformat().replace("+00:00", "Z"),
             "blockedUntilTs": phone_until.timestamp(),
         }
-    if normalized_provider:
+    if normalized_provider and not _is_phone_scoped_terminal_code(normalized_code):
         provider_until = now + timedelta(seconds=_resolve_sms_terminal_provider_blacklist_seconds())
         payload.setdefault("providers", {})[normalized_provider] = {
             "reason": normalized_code,

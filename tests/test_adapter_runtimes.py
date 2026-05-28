@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -247,6 +248,67 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("onlinesim", session.provider_key)
         self.assertEqual("sms_125", session.session_id)
 
+    def test_easy_sms_client_uses_provider_catalog_when_selection_plan_is_empty(self) -> None:
+        post_payloads: list[dict[str, object]] = []
+
+        def _get(path: str) -> dict[str, object]:
+            if path.startswith("/sms/query/providers/selection-plan?"):
+                return {"candidates": []}
+            if path.startswith("/sms/query/providers?"):
+                return {
+                    "providers": [
+                        {"key": "receive_smss"},
+                        {"key": "onlinesim"},
+                    ]
+                }
+            return {}
+
+        def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            post_payloads.append(dict(payload))
+            provider_key = str(payload.get("providerKey") or "")
+            if provider_key == "receive_smss":
+                raise RuntimeError(
+                    'sms service POST /sms/sessions/open failed: HTTP 503 '
+                    '[code=Provider "receive_smss" is currently unavailable: '
+                    'No eligible public numbers were available for a synthetic activation session.]'
+                )
+            if provider_key == "onlinesim":
+                return {
+                    "session": {
+                        "id": "sms_126",
+                        "phoneNumber": "+46720085698",
+                        "providerKey": provider_key,
+                    }
+                }
+            raise AssertionError(f"unexpected provider open payload: {payload!r}")
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            side_effect=_get,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=_post,
+        ):
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=("+46",),
+                selection_mode="balanced",
+            )
+
+        self.assertEqual(["receive_smss", "onlinesim"], [payload["providerKey"] for payload in post_payloads])
+        self.assertEqual("onlinesim", session.provider_key)
+        self.assertEqual("sms_126", session.session_id)
+
     def test_easy_sms_client_rotates_country_codes_when_phone_is_blacklisted(self) -> None:
         post_payloads: list[dict[str, object]] = []
 
@@ -469,8 +531,8 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 "resumeContext": {"flow": "oauth", "token": "resume_123_step2"},
                 "phoneVerificationAttempted": True,
                 "phoneVerificationTerminal": True,
-                "phoneVerificationTerminalCode": "phone_number_in_use",
-                "phoneVerificationTerminalMessage": "Phone number already in use.",
+                "phoneVerificationTerminalCode": "rate_limit_exceeded",
+                "phoneVerificationTerminalMessage": "Too many phone verification attempts.",
                 "phoneVerificationTerminalStatusCode": 403,
             }
 
@@ -503,16 +565,104 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("phone_verification_terminal", result["status"])
         self.assertTrue(result["phoneVerificationAttempted"])
         self.assertTrue(result["phoneVerificationTerminal"])
-        self.assertEqual("phone_number_in_use", result["phoneVerificationTerminalCode"])
+        self.assertEqual("rate_limit_exceeded", result["phoneVerificationTerminalCode"])
         self.assertEqual("sms24", result["phoneProvider"])
         wait_phone_code.assert_not_called()
         record_terminal_phone_outcome.assert_called_once_with(
             phone_number="+15551234567",
             provider_key="sms24",
+            terminal_code="rate_limit_exceeded",
+            terminal_message="Too many phone verification attempts.",
+        )
+        report_phone_outcome.assert_called_once()
+
+    def test_dispatch_obtain_codex_oauth_retries_phone_scoped_terminal_with_next_number(self) -> None:
+        captured_inputs: list[dict[str, object]] = []
+        phone_sessions = [
+            {"sessionId": "sms_1", "phoneNumber": "+46720085698", "providerKey": "onlinesim"},
+            {"sessionId": "sms_2", "phoneNumber": "+33774749623", "providerKey": "onlinesim"},
+        ]
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured_inputs.append({"step_type": step_type, **dict(step_input)})
+            if step_type == "obtain_codex_oauth":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            if step_type == "submit_phone_verification_number" and step_input.get("phone_session_id") == "sms_1":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_terminal",
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123_retry"},
+                    "phoneVerificationAttempted": True,
+                    "phoneVerificationTerminal": True,
+                    "phoneVerificationTerminalCode": "phone_number_in_use",
+                    "phoneVerificationTerminalMessage": "Phone number already in use.",
+                    "phoneVerificationTerminalStatusCode": 400,
+                }
+            if step_type == "submit_phone_verification_number" and step_input.get("phone_session_id") == "sms_2":
+                return {
+                    "ok": True,
+                    "status": "phone_number_submitted",
+                    "pageType": "sms_verification",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123_sms", "pageType": "sms_verification"},
+                }
+            raise AssertionError(f"unexpected invoke: {step_type} {step_input!r}")
+
+        with mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            side_effect=phone_sessions,
+        ) as open_phone_session_for_business, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+            side_effect=RuntimeError("wait_code_timeout"),
+        ) as wait_phone_code, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "record_terminal_phone_outcome",
+            return_value={"ok": True},
+        ) as record_terminal_phone_outcome, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ) as report_phone_outcome:
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("phone_verification_submitted_small_success", result["status"])
+        self.assertEqual("sms_2", result["phoneSessionId"])
+        self.assertEqual("+33774749623", result["phoneNumber"])
+        self.assertEqual("wait_sms_code", result["phoneVerificationFailureStage"])
+        self.assertEqual(2, open_phone_session_for_business.call_count)
+        self.assertEqual(
+            ["sms_1", "sms_2"],
+            [
+                item["phone_session_id"]
+                for item in captured_inputs
+                if item["step_type"] == "submit_phone_verification_number"
+            ],
+        )
+        wait_phone_code.assert_called_once_with(session_id="sms_2", timeout_seconds=180)
+        record_terminal_phone_outcome.assert_called_once_with(
+            phone_number="+46720085698",
+            provider_key="onlinesim",
             terminal_code="phone_number_in_use",
             terminal_message="Phone number already in use.",
         )
-        report_phone_outcome.assert_called_once()
+        self.assertEqual(2, report_phone_outcome.call_count)
 
     def test_open_phone_session_for_business_skips_blacklisted_phone_by_rotating_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -569,6 +719,74 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             outcome="failure",
             detail="blacklisted_phone_number",
         )
+
+    def test_record_terminal_phone_outcome_keeps_used_number_block_phone_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "3600",
+                    "REGISTER_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS": "3600",
+                },
+                clear=False,
+            ):
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number="+46720085698",
+                    provider_key="onlinesim",
+                    terminal_code="phone_number_in_use",
+                    terminal_message="Phone number already in use.",
+                )
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertIn("+46720085698", payload["phones"])
+        self.assertEqual("phone_number_in_use", payload["phones"]["+46720085698"]["reason"])
+        self.assertNotIn("onlinesim", payload["providers"])
+
+    def test_open_phone_session_for_business_ignores_legacy_phone_scoped_provider_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+            state_path.write_text(
+                '{"phones":{},"providers":{"onlinesim":{'
+                '"blockedUntilTs":9999999999,'
+                '"reason":"phone_number_in_use",'
+                '"phoneNumber":"+46720085698"'
+                "}}}",
+                encoding="utf-8",
+            )
+            captured_blacklists: list[tuple[str, ...]] = []
+
+            def _open_sms_session(**kwargs):
+                captured_blacklists.append(tuple(kwargs["provider_blacklist"]))
+                return easy_sms_client.SmsSession(
+                    session_id="sms_1",
+                    phone_number="+33774749623",
+                    provider_key="onlinesim",
+                )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"enabled":true,"providerBlacklist":["hero_sms"],'
+                        '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
+                        '"countryCodes":[],"selectionMode":"balanced"}}'
+                    ),
+                },
+                clear=False,
+            ), mock.patch.object(
+                runtime_sms,
+                "open_sms_session",
+                side_effect=_open_sms_session,
+            ):
+                session = runtime_sms.open_phone_session_for_business(business_key="openai")
+
+        self.assertEqual("sms_1", session["sessionId"])
+        self.assertEqual(("hero_sms",), captured_blacklists[0])
 
     def test_dispatch_obtain_codex_oauth_treats_submitted_phone_then_code_wait_failure_as_intermediate_result(self) -> None:
         captured_inputs: list[dict[str, object]] = []
