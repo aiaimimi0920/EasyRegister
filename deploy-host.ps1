@@ -10,6 +10,16 @@ param(
     [string]$MailboxProviderBlacklist = "",
     [int]$MailboxDomainConsecutiveFailureBlacklistThreshold = 500,
     [string]$MailboxBusinessPoliciesJson = "",
+    [string]$SmsServiceBaseUrl = "http://easy-sms:8080",
+    [string]$SmsServiceApiKey = "",
+    [string]$SmsBusinessKey = "",
+    [string]$SmsProviderBlacklist = "",
+    [string]$SmsAllowPaid = "",
+    [string]$SmsAllowReuse = "",
+    [string]$SmsMaxBindingsPerPhone = "",
+    [string]$SmsCountryCodes = "",
+    [string]$SmsSelectionMode = "",
+    [string]$SmsBusinessPoliciesJson = "",
     [string]$EasyProxyBaseUrl = "http://easy-proxy:29888",
     [string]$EasyProxyApiKey = "YP9l2DecuS_MRhARQu5v829VFOWKar7S",
     [string]$TeamAuthDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
@@ -26,6 +36,8 @@ param(
     [double]$CodexTeamUploadPercent = 0,
     [double]$CodexPlusUploadPercent = 0,
     [string]$DashboardPortHost = "19790",
+    [ValidateSet("true", "false")]
+    [string]$DashboardEnabled = "true",
     [string]$ComposeProjectName = "easy-register",
     [string]$ContainerName = "easy-register",
     [string]$InstanceId = "easy-register",
@@ -62,11 +74,21 @@ foreach ($entry in $PSBoundParameters.GetEnumerator()) {
 }
 
 $defaultEasyProxyBaseUrl = "http://easy-proxy:29888"
+$defaultDashboardEnabled = "true"
 $defaultDashboardControlToken = "easyregister-dashboard-local-token"
 $defaultDashboardListen = "0.0.0.0:9790"
 $defaultMailboxDomainBlacklistCsv = 'coolkid.icu,shaole.me,cpu.edu.kg,tmail.bio,do4.tech'
 $defaultMailboxProviderBlacklistCsv = ''
 $defaultMailboxBusinessPoliciesJson = '{"default":{"explicitBlacklistDomains":["coolkid.icu","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"],"providerBlacklist":[]},"openai":{"explicitBlacklistDomains":["coolkid.icu","shaole.me","cpu.edu.kg","tmail.bio","do4.tech"],"providerBlacklist":[]}}'
+$defaultSmsServiceBaseUrl = "http://easy-sms:8080"
+$defaultSmsBusinessKey = "openai"
+$defaultSmsProviderBlacklist = "hero_sms"
+$defaultSmsAllowPaid = "false"
+$defaultSmsAllowReuse = "false"
+$defaultSmsMaxBindingsPerPhone = "1"
+$defaultSmsCountryCodes = ""
+$defaultSmsSelectionMode = "balanced"
+$defaultSmsBusinessPoliciesJson = '{"default":{"enabled":false,"providerBlacklist":["hero_sms"],"allowPaid":false},"openai":{"enabled":true,"providerBlacklist":["hero_sms"],"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,"countryCodes":[],"selectionMode":"balanced"}}'
 
 function Resolve-AbsolutePath {
     param(
@@ -463,14 +485,23 @@ function Resolve-EnvValue {
         [string]$ParameterName,
         [Parameter(Mandatory = $true)]
         [string]$RuntimeKey,
-        [string]$Fallback = ''
+        [string]$Fallback = '',
+        [switch]$UseFallbackWhenBlank
     )
 
     if ($deployBoundParameters.ContainsKey($ParameterName)) {
-        return [string](Get-Variable -Name $ParameterName -ValueOnly)
+        $value = [string](Get-Variable -Name $ParameterName -ValueOnly)
+        if ($UseFallbackWhenBlank -and [string]::IsNullOrWhiteSpace($value)) {
+            return $Fallback
+        }
+        return $value
     }
     if ($importedRuntimeValues.ContainsKey($RuntimeKey)) {
-        return [string]$importedRuntimeValues[$RuntimeKey]
+        $value = [string]$importedRuntimeValues[$RuntimeKey]
+        if ($UseFallbackWhenBlank -and [string]::IsNullOrWhiteSpace($value)) {
+            return $Fallback
+        }
+        return $value
     }
     return $Fallback
 }
@@ -482,6 +513,16 @@ $resolvedMailboxDomainBlacklist = Resolve-EnvValue -ParameterName 'MailboxDomain
 $resolvedMailboxProviderBlacklist = Resolve-EnvValue -ParameterName 'MailboxProviderBlacklist' -RuntimeKey 'REGISTER_MAILBOX_PROVIDER_BLACKLIST' -Fallback $defaultMailboxProviderBlacklistCsv
 $resolvedMailboxDomainConsecutiveFailureBlacklistThreshold = Resolve-EnvValue -ParameterName 'MailboxDomainConsecutiveFailureBlacklistThreshold' -RuntimeKey 'REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD' -Fallback '500'
 $resolvedMailboxBusinessPoliciesJson = Resolve-EnvValue -ParameterName 'MailboxBusinessPoliciesJson' -RuntimeKey 'REGISTER_MAILBOX_BUSINESS_POLICIES_JSON' -Fallback $defaultMailboxBusinessPoliciesJson
+$resolvedSmsServiceBaseUrl = Resolve-EnvValue -ParameterName 'SmsServiceBaseUrl' -RuntimeKey 'SMS_SERVICE_BASE_URL' -Fallback $defaultSmsServiceBaseUrl -UseFallbackWhenBlank
+$resolvedSmsServiceApiKey = Resolve-EnvValue -ParameterName 'SmsServiceApiKey' -RuntimeKey 'SMS_SERVICE_API_KEY' -Fallback ''
+$resolvedSmsBusinessKey = Resolve-EnvValue -ParameterName 'SmsBusinessKey' -RuntimeKey 'REGISTER_SMS_BUSINESS_KEY' -Fallback $defaultSmsBusinessKey -UseFallbackWhenBlank
+$resolvedSmsProviderBlacklist = Resolve-EnvValue -ParameterName 'SmsProviderBlacklist' -RuntimeKey 'REGISTER_SMS_PROVIDER_BLACKLIST' -Fallback $defaultSmsProviderBlacklist -UseFallbackWhenBlank
+$resolvedSmsAllowPaid = Resolve-EnvValue -ParameterName 'SmsAllowPaid' -RuntimeKey 'REGISTER_SMS_ALLOW_PAID' -Fallback $defaultSmsAllowPaid -UseFallbackWhenBlank
+$resolvedSmsAllowReuse = Resolve-EnvValue -ParameterName 'SmsAllowReuse' -RuntimeKey 'REGISTER_SMS_ALLOW_REUSE' -Fallback $defaultSmsAllowReuse -UseFallbackWhenBlank
+$resolvedSmsMaxBindingsPerPhone = Resolve-EnvValue -ParameterName 'SmsMaxBindingsPerPhone' -RuntimeKey 'REGISTER_SMS_MAX_BINDINGS_PER_PHONE' -Fallback $defaultSmsMaxBindingsPerPhone -UseFallbackWhenBlank
+$resolvedSmsCountryCodes = Resolve-EnvValue -ParameterName 'SmsCountryCodes' -RuntimeKey 'REGISTER_SMS_COUNTRY_CODES' -Fallback $defaultSmsCountryCodes
+$resolvedSmsSelectionMode = Resolve-EnvValue -ParameterName 'SmsSelectionMode' -RuntimeKey 'REGISTER_SMS_SELECTION_MODE' -Fallback $defaultSmsSelectionMode -UseFallbackWhenBlank
+$resolvedSmsBusinessPoliciesJson = Resolve-EnvValue -ParameterName 'SmsBusinessPoliciesJson' -RuntimeKey 'REGISTER_SMS_BUSINESS_POLICIES_JSON' -Fallback $defaultSmsBusinessPoliciesJson -UseFallbackWhenBlank
 $resolvedEasyProxyBaseUrl = Resolve-EnvValue -ParameterName 'EasyProxyBaseUrl' -RuntimeKey 'EASY_PROXY_BASE_URL' -Fallback 'http://easy-proxy:29888'
 $resolvedEasyProxyApiKey = Resolve-EnvValue -ParameterName 'EasyProxyApiKey' -RuntimeKey 'EASY_PROXY_API_KEY' -Fallback 'YP9l2DecuS_MRhARQu5v829VFOWKar7S'
 $resolvedWorkerCount = Resolve-EnvValue -ParameterName 'WorkerCount' -RuntimeKey 'REGISTER_WORKER_COUNT' -Fallback '10'
@@ -494,6 +535,13 @@ $resolvedCodexTeamUploadPercent = Resolve-EnvValue -ParameterName 'CodexTeamUplo
 $resolvedCodexPlusUploadPercent = Resolve-EnvValue -ParameterName 'CodexPlusUploadPercent' -RuntimeKey 'REGISTER_CODEX_PLUS_UPLOAD_PERCENT' -Fallback '0'
 $resolvedEasyProtocolBaseUrl = if ($importedRuntimeValues.ContainsKey('EASY_PROTOCOL_BASE_URL')) { [string]$importedRuntimeValues['EASY_PROTOCOL_BASE_URL'] } else { [string]$env:EASY_PROTOCOL_BASE_URL }
 $resolvedEasyProtocolControlToken = if ($importedRuntimeValues.ContainsKey('EASY_PROTOCOL_CONTROL_TOKEN')) { [string]$importedRuntimeValues['EASY_PROTOCOL_CONTROL_TOKEN'] } else { [string]$env:EASY_PROTOCOL_CONTROL_TOKEN }
+$resolvedDashboardEnabled = if ($deployBoundParameters.ContainsKey('DashboardEnabled')) {
+    [string]$DashboardEnabled
+} elseif (-not [string]::IsNullOrWhiteSpace($env:REGISTER_DASHBOARD_ENABLED)) {
+    [string]$env:REGISTER_DASHBOARD_ENABLED
+} else {
+    $defaultDashboardEnabled
+}
 $resolvedDashboardListen = if ($importedRuntimeValues.ContainsKey('REGISTER_DASHBOARD_LISTEN')) { [string]$importedRuntimeValues['REGISTER_DASHBOARD_LISTEN'] } else { [string]$env:REGISTER_DASHBOARD_LISTEN }
 $resolvedDashboardAllowRemote = if ($importedRuntimeValues.ContainsKey('REGISTER_DASHBOARD_ALLOW_REMOTE')) { [string]$importedRuntimeValues['REGISTER_DASHBOARD_ALLOW_REMOTE'] } else { [string]$env:REGISTER_DASHBOARD_ALLOW_REMOTE }
 
@@ -516,6 +564,16 @@ $env:REGISTER_MAILBOX_DOMAIN_BLACKLIST = $resolvedMailboxDomainBlacklist
 $env:REGISTER_MAILBOX_PROVIDER_BLACKLIST = $resolvedMailboxProviderBlacklist
 $env:REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD = [string]$resolvedMailboxDomainConsecutiveFailureBlacklistThreshold
 $env:REGISTER_MAILBOX_BUSINESS_POLICIES_JSON = $resolvedMailboxBusinessPoliciesJson
+$env:SMS_SERVICE_BASE_URL = $resolvedSmsServiceBaseUrl
+$env:SMS_SERVICE_API_KEY = $resolvedSmsServiceApiKey
+$env:REGISTER_SMS_BUSINESS_KEY = $resolvedSmsBusinessKey
+$env:REGISTER_SMS_PROVIDER_BLACKLIST = $resolvedSmsProviderBlacklist
+$env:REGISTER_SMS_ALLOW_PAID = $resolvedSmsAllowPaid
+$env:REGISTER_SMS_ALLOW_REUSE = $resolvedSmsAllowReuse
+$env:REGISTER_SMS_MAX_BINDINGS_PER_PHONE = $resolvedSmsMaxBindingsPerPhone
+$env:REGISTER_SMS_COUNTRY_CODES = $resolvedSmsCountryCodes
+$env:REGISTER_SMS_SELECTION_MODE = $resolvedSmsSelectionMode
+$env:REGISTER_SMS_BUSINESS_POLICIES_JSON = $resolvedSmsBusinessPoliciesJson
 $env:EASY_PROXY_BASE_URL = $resolvedEasyProxyBaseUrl
 $env:EASY_PROXY_API_KEY = $resolvedEasyProxyApiKey
 
@@ -532,6 +590,7 @@ if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_EASY_PROTOCOL_CONTROL_TO
 if ([string]::IsNullOrWhiteSpace($resolvedDashboardListen)) {
     $resolvedDashboardListen = $defaultDashboardListen
 }
+$env:REGISTER_DASHBOARD_ENABLED = $resolvedDashboardEnabled
 $env:REGISTER_DASHBOARD_LISTEN = $resolvedDashboardListen
 if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_DASHBOARD_LISTEN)) {
     $env:EASYREGISTER_TEST_DASHBOARD_LISTEN = $resolvedDashboardListen
@@ -607,6 +666,16 @@ foreach ($entry in @{
     REGISTER_MAILBOX_PROVIDER_BLACKLIST       = $env:REGISTER_MAILBOX_PROVIDER_BLACKLIST
     REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD = $env:REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD
     REGISTER_MAILBOX_BUSINESS_POLICIES_JSON   = $env:REGISTER_MAILBOX_BUSINESS_POLICIES_JSON
+    SMS_SERVICE_BASE_URL                      = $env:SMS_SERVICE_BASE_URL
+    SMS_SERVICE_API_KEY                       = $env:SMS_SERVICE_API_KEY
+    REGISTER_SMS_BUSINESS_KEY                 = $env:REGISTER_SMS_BUSINESS_KEY
+    REGISTER_SMS_PROVIDER_BLACKLIST           = $env:REGISTER_SMS_PROVIDER_BLACKLIST
+    REGISTER_SMS_ALLOW_PAID                   = $env:REGISTER_SMS_ALLOW_PAID
+    REGISTER_SMS_ALLOW_REUSE                  = $env:REGISTER_SMS_ALLOW_REUSE
+    REGISTER_SMS_MAX_BINDINGS_PER_PHONE       = $env:REGISTER_SMS_MAX_BINDINGS_PER_PHONE
+    REGISTER_SMS_COUNTRY_CODES                = $env:REGISTER_SMS_COUNTRY_CODES
+    REGISTER_SMS_SELECTION_MODE               = $env:REGISTER_SMS_SELECTION_MODE
+    REGISTER_SMS_BUSINESS_POLICIES_JSON       = $env:REGISTER_SMS_BUSINESS_POLICIES_JSON
     EASY_PROXY_BASE_URL                       = $env:EASY_PROXY_BASE_URL
     EASY_PROXY_API_KEY                        = $env:EASY_PROXY_API_KEY
     REGISTER_OPENAI_UPLOAD_PERCENT            = $env:REGISTER_OPENAI_UPLOAD_PERCENT
@@ -619,6 +688,7 @@ foreach ($entry in @{
     REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST = $env:REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST
     EASY_PROTOCOL_BASE_URL                    = $env:EASY_PROTOCOL_BASE_URL
     EASY_PROTOCOL_CONTROL_TOKEN               = $env:EASY_PROTOCOL_CONTROL_TOKEN
+    REGISTER_DASHBOARD_ENABLED                = $env:REGISTER_DASHBOARD_ENABLED
     REGISTER_DASHBOARD_LISTEN                 = $env:REGISTER_DASHBOARD_LISTEN
     REGISTER_DASHBOARD_ALLOW_REMOTE           = $env:REGISTER_DASHBOARD_ALLOW_REMOTE
     REGISTER_SERVICE_IMAGE                    = $env:REGISTER_SERVICE_IMAGE
