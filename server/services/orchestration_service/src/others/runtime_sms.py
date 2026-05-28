@@ -118,6 +118,47 @@ def _resolve_sms_session_local_retry_attempts() -> int:
         return DEFAULT_SMS_SESSION_LOCAL_RETRY_ATTEMPTS
 
 
+def _match_phone_country_code(*, phone_number: str, country_codes: tuple[str, ...]) -> str:
+    normalized_phone = str(phone_number or "").strip()
+    if not normalized_phone:
+        return ""
+    normalized_country_codes = sorted(
+        {
+            str(country_code or "").strip()
+            for country_code in country_codes
+            if str(country_code or "").strip().startswith("+")
+        },
+        key=len,
+        reverse=True,
+    )
+    for country_code in normalized_country_codes:
+        if normalized_phone.startswith(country_code):
+            return country_code
+    return ""
+
+
+def _provider_country_blacklist_from_state(
+    *,
+    payload: dict[str, Any],
+    country_codes: tuple[str, ...],
+) -> tuple[str, ...]:
+    phones = payload.get("phones") if isinstance(payload.get("phones"), dict) else {}
+    pairs: set[str] = set()
+    for raw_phone, raw_value in phones.items():
+        if not isinstance(raw_value, dict):
+            continue
+        provider_key = str(raw_value.get("providerKey") or "").strip().lower()
+        if not provider_key:
+            continue
+        country_code = _match_phone_country_code(
+            phone_number=str(raw_phone or "").strip(),
+            country_codes=country_codes,
+        )
+        if country_code:
+            pairs.add(f"{provider_key}|{country_code}")
+    return tuple(sorted(pairs))
+
+
 def record_terminal_phone_outcome(
     *,
     phone_number: str,
@@ -177,6 +218,10 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
         str(key or "").strip().lower() for key in state_payload.get("providers", {}).keys() if str(key or "").strip()
     }
     attempt_provider_blacklist = set(policy.explicit_blacklist_providers) | blocked_providers
+    provider_country_blacklist = _provider_country_blacklist_from_state(
+        payload=state_payload,
+        country_codes=tuple(policy.country_codes),
+    )
     session = None
     last_open_error: BaseException | None = None
     for _attempt in range(_resolve_sms_session_local_retry_attempts()):
@@ -190,6 +235,7 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
                 country_codes=policy.country_codes,
                 selection_mode=policy.selection_mode,
                 phone_blacklist=tuple(sorted(blocked_phones)),
+                provider_country_blacklist=provider_country_blacklist,
             )
         except Exception as exc:
             last_open_error = exc

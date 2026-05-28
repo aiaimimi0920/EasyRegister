@@ -237,6 +237,20 @@ def _normalize_selection_mode(selection_mode: str) -> str:
     return ""
 
 
+def _normalize_provider_country_blacklist(items: tuple[str, ...]) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for item in items:
+        raw = str(item or "").strip()
+        if not raw or "|" not in raw:
+            continue
+        provider_key, country_code = raw.split("|", 1)
+        normalized_provider_key = provider_key.strip().lower()
+        normalized_country_code = country_code.strip()
+        if normalized_provider_key and normalized_country_code:
+            pairs.add((normalized_provider_key, normalized_country_code))
+    return pairs
+
+
 def _is_retryable_provider_open_error(exc: Exception) -> bool:
     normalized = str(exc or "").strip().lower()
     return any(
@@ -334,6 +348,7 @@ def open_sms_session(
     country_codes: tuple[str, ...],
     selection_mode: str,
     phone_blacklist: tuple[str, ...] = (),
+    provider_country_blacklist: tuple[str, ...] = (),
 ) -> SmsSession:
     _wait_sms_service_ready()
     selection_candidates = _query_provider_selection_candidates(
@@ -356,6 +371,7 @@ def open_sms_session(
         base_payload["countryCode"] = first_country_code
     normalized_selection_mode = _normalize_selection_mode(selection_mode)
     blocked_phones = {str(item or "").strip() for item in phone_blacklist if str(item or "").strip()}
+    blocked_provider_country_pairs = _normalize_provider_country_blacklist(provider_country_blacklist)
     country_candidates = _country_code_candidates(country_codes)
     last_error: Exception | None = None
 
@@ -364,6 +380,12 @@ def open_sms_session(
         for provider_key_candidate in provider_keys:
             normalized_provider_key = str(provider_key_candidate or "").strip().lower()
             for country_code_candidate in country_candidates:
+                if (
+                    normalized_provider_key
+                    and country_code_candidate
+                    and (normalized_provider_key, country_code_candidate) in blocked_provider_country_pairs
+                ):
+                    continue
                 request_payload = dict(base_payload)
                 if country_code_candidate:
                     request_payload["countryCode"] = country_code_candidate

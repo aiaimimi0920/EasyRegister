@@ -359,6 +359,50 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms_good", session.session_id)
         self.assertEqual("+33774749623", session.phone_number)
 
+    def test_easy_sms_client_skips_provider_country_blacklist_before_opening_session(self) -> None:
+        post_payloads: list[dict[str, object]] = []
+
+        def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            post_payloads.append(dict(payload))
+            country_code = str(payload.get("countryCode") or "")
+            if country_code == "+31":
+                raise AssertionError("blacklisted provider-country should not be opened")
+            return {
+                "session": {
+                    "id": "sms_good",
+                    "phoneNumber": "+33774749623",
+                    "providerKey": "onlinesim",
+                }
+            }
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            return_value={"candidates": [{"providerKey": "onlinesim"}]},
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=_post,
+        ):
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=("+31", "+33"),
+                selection_mode="balanced",
+                provider_country_blacklist=("onlinesim|+31",),
+            )
+
+        self.assertEqual(["+33"], [payload["countryCode"] for payload in post_payloads])
+        self.assertEqual("sms_good", session.session_id)
+        self.assertEqual("+33774749623", session.phone_number)
+
     def test_easy_sms_client_wait_code_polls_until_value(self) -> None:
         with mock.patch.object(
             easy_sms_client,
@@ -806,6 +850,62 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             session_id="sms_1",
             outcome="failure",
             detail="blacklisted_phone_number",
+        )
+
+    def test_open_phone_session_for_business_passes_provider_country_blacklist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "phones": {
+                            "+31616835325": {
+                                "blockedUntilTs": 9999999999,
+                                "providerKey": "onlinesim",
+                                "reason": "rate_limit_exceeded",
+                            },
+                            "+447568371100": {
+                                "blockedUntilTs": 9999999999,
+                                "providerKey": "smstome",
+                                "reason": "phone_number_in_use",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            captured_provider_country_blacklists: list[tuple[str, ...]] = []
+
+            def _open_sms_session(**kwargs):
+                captured_provider_country_blacklists.append(tuple(kwargs["provider_country_blacklist"]))
+                return easy_sms_client.SmsSession(
+                    session_id="sms_2",
+                    phone_number="+33774749623",
+                    provider_key="onlinesim",
+                )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"enabled":true,"providerBlacklist":["hero_sms"],'
+                        '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
+                        '"countryCodes":["+31","+33","+44"],"selectionMode":"balanced"}}'
+                    ),
+                },
+                clear=False,
+            ), mock.patch.object(
+                runtime_sms,
+                "open_sms_session",
+                side_effect=_open_sms_session,
+            ):
+                session = runtime_sms.open_phone_session_for_business(business_key="openai")
+
+        self.assertEqual("sms_2", session["sessionId"])
+        self.assertEqual(
+            [("onlinesim|+31", "smstome|+44")],
+            captured_provider_country_blacklists,
         )
 
     def test_open_phone_session_for_business_retries_transient_open_timeout(self) -> None:
