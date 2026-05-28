@@ -33,12 +33,11 @@ class DeployHostEnvTests(unittest.TestCase):
             script_path = launcher_root / "deploy-host.ps1"
             shutil.copyfile(DEPLOY_HOST, script_path)
 
-            result = subprocess.run(
+            command = [powershell, "-NoProfile"]
+            if Path(powershell).name.lower().startswith("powershell"):
+                command.extend(["-ExecutionPolicy", "Bypass"])
+            command.extend(
                 [
-                    powershell,
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
                     "-File",
                     str(script_path),
                     "-RepoCacheRoot",
@@ -63,7 +62,11 @@ class DeployHostEnvTests(unittest.TestCase):
                     "ghcr.io/example/easyregister:test",
                     "-MaterializeOnly",
                     "-NoBuild",
-                ],
+                ]
+            )
+
+            result = subprocess.run(
+                command,
                 cwd=launcher_root,
                 check=False,
                 capture_output=True,
