@@ -36,6 +36,12 @@ jobs:
           set -euo pipefail
           python -m unittest discover -s tests -v
 
+      - name: Validate Release Contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate-release-contract.py
+
       - name: Validate Docker Compose Contract
         shell: bash
         run: |

@@ -699,3 +699,7 @@ supervisor 还内置了两类容量兜底：
 
 - team workspace 席位已满
 - 某条 EasyProxy 线路瞬时不可用
+
+## Release Contract
+
+This repository follows the EasyAiMi release contract v1 for GitHub Actions, GHCR publication, R2 config distribution, encrypted import-code artifacts, and blank-host local deployment. See [docs/release-contract.md](docs/release-contract.md) for the exact contract and project-specific exceptions.

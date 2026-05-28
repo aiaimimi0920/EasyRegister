@@ -11,6 +11,10 @@ on:
         description: "Optional image version tag override"
         required: false
         type: string
+      release_tag:
+        description: "Standard release tag override; takes precedence over version"
+        required: false
+        type: string
       platform:
         description: "Docker build platform list"
         required: false
@@ -63,6 +67,9 @@ jobs:
 
       - name: Resolve Release Metadata
         id: release_meta
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          VERSION_INPUT: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -76,7 +83,7 @@ jobs:
             run_smoke="true"
             platform="linux/amd64"
           else
-            version="${{ inputs.version }}"
+            version="${RELEASE_TAG_INPUT:-${VERSION_INPUT:-}}"
             if [[ -z "${version}" ]]; then
               version="release-$(date -u +%Y%m%d)-$(printf '%03d' "${GITHUB_RUN_NUMBER}")"
             fi
@@ -91,6 +98,7 @@ jobs:
           {
             echo "owner=${owner}"
             echo "version=${version}"
+            echo "release_tag=${version}"
             echo "short_sha=${short_sha}"
             echo "platform=${platform}"
             echo "image_ref=${image_ref}"
@@ -307,11 +315,25 @@ jobs:
           name: easyregister-runtime-r2-config-manifest
           path: ${{ steps.runtime_config_upload.outputs.path }}
 
+      - name: Upload Standard Runtime Config Distribution Manifest
+        if: steps.runtime_distribution.outputs.r2_enabled == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: runtime-r2-config-manifest
+          path: ${{ steps.runtime_config_upload.outputs.path }}
+
       - name: Upload Encrypted Import Code
         if: steps.runtime_distribution.outputs.import_enabled == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: easyregister-import-code-encrypted
+          path: ${{ steps.import_code.outputs.encrypted_path }}
+
+      - name: Upload Standard Encrypted Import Code
+        if: steps.runtime_distribution.outputs.import_enabled == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: runtime-import-code-encrypted
           path: ${{ steps.import_code.outputs.encrypted_path }}
 
       - name: Publish Summary

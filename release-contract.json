@@ -1,0 +1,36 @@
+{
+    "schemaVersion":  1,
+    "project":  "EasyRegister",
+    "releaseClass":  "single-runtime-image",
+    "workflows":  [
+                      {
+                          "component":  "runtime",
+                          "requiresImportCode":  true,
+                          "releaseTagOutputs":  [
+                                                    "release_tag",
+                                                    "version"
+                                                ],
+                          "artifacts":  [
+                                            "easyregister-runtime-r2-config-manifest",
+                                            "easyregister-import-code-encrypted",
+                                            "runtime-r2-config-manifest",
+                                            "runtime-import-code-encrypted"
+                                        ],
+                          "releaseTagInputs":  [
+                                                   "release_tag",
+                                                   "version"
+                                               ],
+                          "requiresR2":  true,
+                          "path":  ".github/workflows/publish-ghcr-image.yml",
+                          "requiresGhcr":  true
+                      }
+                  ],
+    "localDeploy":  {
+                        "entrypoint":  "deploy-host.ps1",
+                        "zeroFolder":  true,
+                        "forbidDevSourceBindMounts":  true
+                    },
+    "exceptions":  [
+                       "The runtime image is not a service/base component, so workflow naming remains publish-ghcr-image.yml."
+                   ]
+}
