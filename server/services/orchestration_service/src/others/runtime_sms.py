@@ -176,6 +176,7 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
             max_bindings_per_phone=policy.max_bindings_per_phone,
             country_codes=policy.country_codes,
             selection_mode=policy.selection_mode,
+            phone_blacklist=tuple(sorted(blocked_phones)),
         )
         normalized_phone = str(session.phone_number or "").strip()
         normalized_provider = str(session.provider_key or "").strip().lower()

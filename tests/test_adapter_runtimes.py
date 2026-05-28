@@ -188,6 +188,56 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms24", session.provider_key)
         self.assertEqual("sms_124", session.session_id)
 
+    def test_easy_sms_client_rotates_country_codes_when_phone_is_blacklisted(self) -> None:
+        post_payloads: list[dict[str, object]] = []
+
+        def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            post_payloads.append(dict(payload))
+            country_code = str(payload.get("countryCode") or "")
+            if country_code == "+31":
+                return {
+                    "session": {
+                        "id": "sms_bad",
+                        "phoneNumber": "+31616835325",
+                        "providerKey": "onlinesim",
+                    }
+                }
+            return {
+                "session": {
+                    "id": "sms_good",
+                    "phoneNumber": "+33774749623",
+                    "providerKey": "onlinesim",
+                }
+            }
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            return_value={"candidates": [{"providerKey": "onlinesim"}]},
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=_post,
+        ):
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=("+31", "+33"),
+                selection_mode="balanced",
+                phone_blacklist=("+31616835325",),
+            )
+
+        self.assertEqual(["+31", "+33"], [payload["countryCode"] for payload in post_payloads])
+        self.assertEqual("sms_good", session.session_id)
+        self.assertEqual("+33774749623", session.phone_number)
+
     def test_easy_sms_client_wait_code_polls_until_value(self) -> None:
         with mock.patch.object(
             easy_sms_client,
