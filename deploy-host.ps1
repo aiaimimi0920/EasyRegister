@@ -710,9 +710,11 @@ if ($ForceLinks) {
 & $materializeScript @materializeParams
 
 $aliasMountOverridePath = Join-Path $launcherRoot '.deploy-compose.alias-mounts.generated.yaml'
-$aliasMounts = New-AliasMountOverrideFile `
-    -OutputDirHost $resolvedOutputDirHost `
-    -OverridePath $aliasMountOverridePath
+$aliasMounts = @(
+    New-AliasMountOverrideFile `
+        -OutputDirHost $resolvedOutputDirHost `
+        -OverridePath $aliasMountOverridePath
+)
 
 if ($MaterializeOnly) {
     if ($aliasMounts.Count -gt 0) {
