@@ -178,17 +178,22 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
     }
     attempt_provider_blacklist = set(policy.explicit_blacklist_providers) | blocked_providers
     session = None
+    last_open_error: BaseException | None = None
     for _attempt in range(_resolve_sms_session_local_retry_attempts()):
-        session = open_sms_session(
-            business_key=policy.business_key,
-            provider_blacklist=tuple(sorted(attempt_provider_blacklist)),
-            allow_paid=policy.allow_paid,
-            allow_reuse=policy.allow_reuse,
-            max_bindings_per_phone=policy.max_bindings_per_phone,
-            country_codes=policy.country_codes,
-            selection_mode=policy.selection_mode,
-            phone_blacklist=tuple(sorted(blocked_phones)),
-        )
+        try:
+            session = open_sms_session(
+                business_key=policy.business_key,
+                provider_blacklist=tuple(sorted(attempt_provider_blacklist)),
+                allow_paid=policy.allow_paid,
+                allow_reuse=policy.allow_reuse,
+                max_bindings_per_phone=policy.max_bindings_per_phone,
+                country_codes=policy.country_codes,
+                selection_mode=policy.selection_mode,
+                phone_blacklist=tuple(sorted(blocked_phones)),
+            )
+        except Exception as exc:
+            last_open_error = exc
+            continue
         normalized_phone = str(session.phone_number or "").strip()
         normalized_provider = str(session.provider_key or "").strip().lower()
         if normalized_phone and normalized_phone not in blocked_phones:
@@ -201,8 +206,12 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
         if normalized_provider:
             attempt_provider_blacklist.add(normalized_provider)
     else:
+        if last_open_error is not None:
+            raise last_open_error
         raise RuntimeError("sms_no_usable_session_after_local_blacklist")
     if session is None:
+        if last_open_error is not None:
+            raise last_open_error
         raise RuntimeError("sms_no_usable_session_after_local_blacklist")
     return {
         "sessionId": session.session_id,
