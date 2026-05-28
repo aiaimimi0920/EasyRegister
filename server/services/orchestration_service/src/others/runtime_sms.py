@@ -22,6 +22,7 @@ DEFAULT_SMS_SESSION_LOCAL_RETRY_ATTEMPTS = 6
 PHONE_SCOPED_TERMINAL_CODES = {
     "phone_number_in_use",
     "phone_max_usage_exceeded",
+    "rate_limit_exceeded",
 }
 
 

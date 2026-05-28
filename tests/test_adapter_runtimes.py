@@ -746,6 +746,32 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("phone_number_in_use", payload["phones"]["+46720085698"]["reason"])
         self.assertNotIn("onlinesim", payload["providers"])
 
+    def test_record_terminal_phone_outcome_keeps_rate_limit_block_phone_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "3600",
+                    "REGISTER_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS": "3600",
+                },
+                clear=False,
+            ):
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number="+36707448042",
+                    provider_key="onlinesim",
+                    terminal_code="rate_limit_exceeded",
+                    terminal_message="Too many phone verification requests.",
+                )
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertIn("+36707448042", payload["phones"])
+        self.assertEqual("rate_limit_exceeded", payload["phones"]["+36707448042"]["reason"])
+        self.assertNotIn("onlinesim", payload["providers"])
+
     def test_open_phone_session_for_business_ignores_legacy_phone_scoped_provider_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
@@ -754,6 +780,48 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 '"blockedUntilTs":9999999999,'
                 '"reason":"phone_number_in_use",'
                 '"phoneNumber":"+46720085698"'
+                "}}}",
+                encoding="utf-8",
+            )
+            captured_blacklists: list[tuple[str, ...]] = []
+
+            def _open_sms_session(**kwargs):
+                captured_blacklists.append(tuple(kwargs["provider_blacklist"]))
+                return easy_sms_client.SmsSession(
+                    session_id="sms_1",
+                    phone_number="+33774749623",
+                    provider_key="onlinesim",
+                )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"enabled":true,"providerBlacklist":["hero_sms"],'
+                        '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
+                        '"countryCodes":[],"selectionMode":"balanced"}}'
+                    ),
+                },
+                clear=False,
+            ), mock.patch.object(
+                runtime_sms,
+                "open_sms_session",
+                side_effect=_open_sms_session,
+            ):
+                session = runtime_sms.open_phone_session_for_business(business_key="openai")
+
+        self.assertEqual("sms_1", session["sessionId"])
+        self.assertEqual(("hero_sms",), captured_blacklists[0])
+
+    def test_open_phone_session_for_business_ignores_legacy_rate_limit_provider_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+            state_path.write_text(
+                '{"phones":{},"providers":{"onlinesim":{'
+                '"blockedUntilTs":9999999999,'
+                '"reason":"rate_limit_exceeded",'
+                '"phoneNumber":"+36707448042"'
                 "}}}",
                 encoding="utf-8",
             )
