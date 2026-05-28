@@ -21,6 +21,7 @@ DEFAULT_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS = 5
 PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
     "phone_number_in_use",
     "phone_max_usage_exceeded",
+    "rate_limit_exceeded",
 }
 
 

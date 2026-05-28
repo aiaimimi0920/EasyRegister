@@ -531,8 +531,8 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 "resumeContext": {"flow": "oauth", "token": "resume_123_step2"},
                 "phoneVerificationAttempted": True,
                 "phoneVerificationTerminal": True,
-                "phoneVerificationTerminalCode": "rate_limit_exceeded",
-                "phoneVerificationTerminalMessage": "Too many phone verification attempts.",
+                "phoneVerificationTerminalCode": "unsupported_phone_region",
+                "phoneVerificationTerminalMessage": "Phone region is not supported.",
                 "phoneVerificationTerminalStatusCode": 403,
             }
 
@@ -565,14 +565,14 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("phone_verification_terminal", result["status"])
         self.assertTrue(result["phoneVerificationAttempted"])
         self.assertTrue(result["phoneVerificationTerminal"])
-        self.assertEqual("rate_limit_exceeded", result["phoneVerificationTerminalCode"])
+        self.assertEqual("unsupported_phone_region", result["phoneVerificationTerminalCode"])
         self.assertEqual("sms24", result["phoneProvider"])
         wait_phone_code.assert_not_called()
         record_terminal_phone_outcome.assert_called_once_with(
             phone_number="+15551234567",
             provider_key="sms24",
-            terminal_code="rate_limit_exceeded",
-            terminal_message="Too many phone verification attempts.",
+            terminal_code="unsupported_phone_region",
+            terminal_message="Phone region is not supported.",
         )
         report_phone_outcome.assert_called_once()
 
@@ -661,6 +661,94 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             provider_key="onlinesim",
             terminal_code="phone_number_in_use",
             terminal_message="Phone number already in use.",
+        )
+        self.assertEqual(2, report_phone_outcome.call_count)
+
+    def test_dispatch_obtain_codex_oauth_retries_rate_limit_terminal_with_next_number(self) -> None:
+        captured_inputs: list[dict[str, object]] = []
+        phone_sessions = [
+            {"sessionId": "sms_1", "phoneNumber": "+41779793490", "providerKey": "onlinesim"},
+            {"sessionId": "sms_2", "phoneNumber": "+353894602760", "providerKey": "onlinesim"},
+        ]
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured_inputs.append({"step_type": step_type, **dict(step_input)})
+            if step_type == "obtain_codex_oauth":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            if step_type == "submit_phone_verification_number" and step_input.get("phone_session_id") == "sms_1":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_terminal",
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123_retry"},
+                    "phoneVerificationAttempted": True,
+                    "phoneVerificationTerminal": True,
+                    "phoneVerificationTerminalCode": "rate_limit_exceeded",
+                    "phoneVerificationTerminalMessage": "Too many phone verification requests.",
+                    "phoneVerificationTerminalStatusCode": 400,
+                }
+            if step_type == "submit_phone_verification_number" and step_input.get("phone_session_id") == "sms_2":
+                return {
+                    "ok": True,
+                    "status": "phone_number_submitted",
+                    "pageType": "sms_verification",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123_sms", "pageType": "sms_verification"},
+                }
+            raise AssertionError(f"unexpected invoke: {step_type} {step_input!r}")
+
+        with mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            side_effect=phone_sessions,
+        ) as open_phone_session_for_business, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+            side_effect=RuntimeError("wait_code_timeout"),
+        ) as wait_phone_code, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "record_terminal_phone_outcome",
+            return_value={"ok": True},
+        ) as record_terminal_phone_outcome, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ) as report_phone_outcome:
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("phone_verification_submitted_small_success", result["status"])
+        self.assertEqual("sms_2", result["phoneSessionId"])
+        self.assertEqual("+353894602760", result["phoneNumber"])
+        self.assertEqual("wait_sms_code", result["phoneVerificationFailureStage"])
+        self.assertEqual(2, open_phone_session_for_business.call_count)
+        self.assertEqual(
+            ["sms_1", "sms_2"],
+            [
+                item["phone_session_id"]
+                for item in captured_inputs
+                if item["step_type"] == "submit_phone_verification_number"
+            ],
+        )
+        wait_phone_code.assert_called_once_with(session_id="sms_2", timeout_seconds=180)
+        record_terminal_phone_outcome.assert_called_once_with(
+            phone_number="+41779793490",
+            provider_key="onlinesim",
+            terminal_code="rate_limit_exceeded",
+            terminal_message="Too many phone verification requests.",
         )
         self.assertEqual(2, report_phone_outcome.call_count)
 
