@@ -279,14 +279,30 @@ def _query_provider_selection_candidates(
         candidates.append(provider_key)
     if candidates:
         return candidates
+    return _query_provider_catalog_candidates(
+        provider_blacklist=provider_blacklist,
+        allow_paid=allow_paid,
+    )
+
+
+def _query_provider_catalog_candidates(
+    *,
+    provider_blacklist: tuple[str, ...],
+    allow_paid: bool,
+    exclude_provider_keys: tuple[str, ...] = (),
+) -> list[str]:
+    candidates: list[str] = []
+    blacklist = {str(item or "").strip().lower() for item in provider_blacklist if str(item or "").strip()}
+    excluded = {str(item or "").strip().lower() for item in exclude_provider_keys if str(item or "").strip()}
+    cost_tier = "paid" if allow_paid else "free"
     providers_response = _get_json(
-        "/sms/query/providers?" + urllib.parse.urlencode({"costTier": query["costTier"]})
+        "/sms/query/providers?" + urllib.parse.urlencode({"costTier": cost_tier})
     )
     for raw_provider in providers_response.get("providers") or []:
         if not isinstance(raw_provider, dict):
             continue
         provider_key = str(raw_provider.get("key") or "").strip().lower()
-        if not provider_key or provider_key in blacklist:
+        if not provider_key or provider_key in blacklist or provider_key in excluded:
             continue
         candidates.append(provider_key)
     return candidates
@@ -342,37 +358,54 @@ def open_sms_session(
     blocked_phones = {str(item or "").strip() for item in phone_blacklist if str(item or "").strip()}
     country_candidates = _country_code_candidates(country_codes)
     last_error: Exception | None = None
-    for provider_key_candidate in candidate_provider_keys:
-        normalized_provider_key = str(provider_key_candidate or "").strip().lower()
-        for country_code_candidate in country_candidates:
-            request_payload = dict(base_payload)
-            if country_code_candidate:
-                request_payload["countryCode"] = country_code_candidate
-            if normalized_provider_key:
-                request_payload["providerKey"] = normalized_provider_key
-            if normalized_selection_mode and normalized_provider_key == "hero_sms":
-                request_payload["selectionMode"] = normalized_selection_mode
-            try:
-                response = _post_json("/sms/sessions/open", request_payload)
-            except Exception as exc:
-                last_error = exc
-                if normalized_provider_key and _is_retryable_provider_open_error(exc):
-                    continue
-                raise
-            session = dict(response.get("session") or (response.get("result") or {}).get("session") or {})
-            session_id = str(session.get("id") or "").strip()
-            phone_number = str(session.get("phoneNumberE164") or session.get("phoneNumber") or "").strip()
-            provider_key = str(session.get("providerKey") or "").strip().lower()
-            if session_id and phone_number:
-                if phone_number in blocked_phones:
-                    last_error = RuntimeError(f"sms service returned blacklisted phone number: {phone_number}")
-                    continue
-                return SmsSession(
-                    session_id=session_id,
-                    phone_number=phone_number,
-                    provider_key=provider_key,
-                )
-            last_error = RuntimeError("sms service returned invalid sms session")
+
+    def _try_provider_candidates(provider_keys: list[str]) -> SmsSession | None:
+        nonlocal last_error
+        for provider_key_candidate in provider_keys:
+            normalized_provider_key = str(provider_key_candidate or "").strip().lower()
+            for country_code_candidate in country_candidates:
+                request_payload = dict(base_payload)
+                if country_code_candidate:
+                    request_payload["countryCode"] = country_code_candidate
+                if normalized_provider_key:
+                    request_payload["providerKey"] = normalized_provider_key
+                if normalized_selection_mode and normalized_provider_key == "hero_sms":
+                    request_payload["selectionMode"] = normalized_selection_mode
+                try:
+                    response = _post_json("/sms/sessions/open", request_payload)
+                except Exception as exc:
+                    last_error = exc
+                    if normalized_provider_key and _is_retryable_provider_open_error(exc):
+                        continue
+                    raise
+                session = dict(response.get("session") or (response.get("result") or {}).get("session") or {})
+                session_id = str(session.get("id") or "").strip()
+                phone_number = str(session.get("phoneNumberE164") or session.get("phoneNumber") or "").strip()
+                provider_key = str(session.get("providerKey") or "").strip().lower()
+                if session_id and phone_number:
+                    if phone_number in blocked_phones:
+                        last_error = RuntimeError(f"sms service returned blacklisted phone number: {phone_number}")
+                        continue
+                    return SmsSession(
+                        session_id=session_id,
+                        phone_number=phone_number,
+                        provider_key=provider_key,
+                    )
+                last_error = RuntimeError("sms service returned invalid sms session")
+        return None
+
+    selected_session = _try_provider_candidates(candidate_provider_keys)
+    if selected_session is not None:
+        return selected_session
+    if selection_candidates:
+        fallback_provider_keys = _query_provider_catalog_candidates(
+            provider_blacklist=provider_blacklist,
+            allow_paid=allow_paid,
+            exclude_provider_keys=tuple(selection_candidates),
+        )
+        fallback_session = _try_provider_candidates(fallback_provider_keys)
+        if fallback_session is not None:
+            return fallback_session
     if last_error is not None:
         raise last_error
     raise RuntimeError("sms service returned invalid sms session")
