@@ -186,23 +186,28 @@ def copy_openai_oauth_artifacts_to_pool(
     )
     if not source_paths:
         return []
+    pool_dir = Path(pool_dir).resolve()
     ensure_directory(pool_dir)
     copied_paths: list[str] = []
     discarded_paths: list[dict[str, str]] = []
     for source_path in source_paths:
+        resolved_source = Path(source_path).resolve()
         try:
-            payload = load_json_payload(source_path)
+            payload = load_json_payload(resolved_source)
         except Exception as exc:
-            discarded_paths.append({"source_path": str(source_path), "reason": f"load_failed:{exc}"})
+            discarded_paths.append({"source_path": str(resolved_source), "reason": f"load_failed:{exc}"})
             continue
         valid, reason = validate_openai_oauth_seed_payload(payload)
         if not valid:
-            discarded_paths.append({"source_path": str(source_path), "reason": reason})
+            discarded_paths.append({"source_path": str(resolved_source), "reason": reason})
             continue
-        destination = pool_dir / source_path.name
+        destination = (pool_dir / resolved_source.name).resolve()
+        if resolved_source == destination:
+            copied_paths.append(str(resolved_source))
+            continue
         if destination.exists():
-            destination = pool_dir / f"{source_path.stem}-{uuid.uuid4().hex[:6]}{source_path.suffix}"
-        shutil.copy2(source_path, destination)
+            destination = pool_dir / f"{resolved_source.stem}-{uuid.uuid4().hex[:6]}{resolved_source.suffix}"
+        shutil.copy2(resolved_source, destination)
         copied_paths.append(str(destination))
     json_log(
         {

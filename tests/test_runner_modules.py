@@ -367,6 +367,54 @@ class RunnerArtifactsTests(unittest.TestCase):
             self.assertEqual("id.demo", copied_payload["idToken"])
             self.assertEqual("refresh.demo", copied_payload["chatgptLoginDetails"]["oauthTokens"]["refresh_token"])
 
+    def test_copy_openai_oauth_artifacts_to_pool_does_not_duplicate_artifact_already_in_target_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_output_dir = Path(tmp_dir) / "run-1"
+            pool_dir = Path(tmp_dir) / "openai" / "failed-twice"
+            pool_dir.mkdir(parents=True, exist_ok=True)
+            existing_path = pool_dir / "small-existing.json"
+            existing_path.write_text(
+                json.dumps(
+                    {
+                        "email": "existing@example.com",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                        "createdAt": "2026-05-30T00:00:00Z",
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result_payload = {
+                "outputs": {
+                    "finalize-openai-oauth-artifact": {
+                        "restored_path": str(existing_path),
+                    }
+                }
+            }
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0",
+                },
+                clear=False,
+            ):
+                copied_paths = runner_artifacts.copy_openai_oauth_artifacts_to_pool(
+                    run_output_dir=run_output_dir,
+                    pool_dir=pool_dir,
+                    worker_label="worker-01",
+                    task_index=1,
+                    result_or_payload=result_payload,
+                )
+
+            self.assertEqual([str(existing_path.resolve())], copied_paths)
+            self.assertEqual(["small-existing.json"], sorted(path.name for path in pool_dir.glob("small-existing*.json")))
+
     def test_copy_openai_oauth_artifacts_to_pool_materializes_from_step_outputs_when_source_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_output_dir = Path(tmp_dir) / "run-1"
