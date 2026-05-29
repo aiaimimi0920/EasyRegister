@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
 
+from others.common_io import write_json_atomic
 from others.bootstrap import ensure_local_bundle_imports
+from others.config_env import resolve_shared_root_from_env
 from others.runtime_proxy_env import resolve_easy_proxy_failure_window_seconds
 
 ensure_local_bundle_imports()
@@ -19,6 +22,63 @@ ACTIVE_FLOW_PROXY_LOCK = threading.Lock()
 ACTIVE_FLOW_PROXY_URLS: set[str] = set()
 RECENT_FLOW_PROXY_URLS: dict[str, float] = {}
 FAILED_FLOW_PROXY_URLS: dict[str, float] = {}
+FAILED_FLOW_PROXY_STATE_SCHEMA_VERSION = 1
+
+
+def failed_flow_proxy_state_path():
+    return resolve_shared_root_from_env() / "others" / "easy-proxy-failed-routes.json"
+
+
+def read_shared_failed_flow_proxy_urls() -> dict[str, float]:
+    try:
+        payload = json.loads(failed_flow_proxy_state_path().read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if int(payload.get("schemaVersion") or 0) != FAILED_FLOW_PROXY_STATE_SCHEMA_VERSION:
+        return {}
+    raw_failed = payload.get("failed")
+    if not isinstance(raw_failed, dict):
+        return {}
+    failed: dict[str, float] = {}
+    for key, value in raw_failed.items():
+        if not isinstance(value, dict):
+            continue
+        try:
+            until_epoch = float(value.get("untilEpoch") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if until_epoch > 0:
+            failed[str(key).strip().lower()] = until_epoch
+    return failed
+
+
+def write_shared_failed_flow_proxy_url(normalized: str, *, until_epoch: float) -> None:
+    try:
+        failed = read_shared_failed_flow_proxy_urls()
+        failed[normalized] = max(float(until_epoch), float(failed.get(normalized) or 0.0))
+        now_epoch = time.time()
+        active_payload = {
+            key: {
+                "untilEpoch": value,
+                "updatedAtEpoch": now_epoch,
+            }
+            for key, value in failed.items()
+            if value > now_epoch
+        }
+        write_json_atomic(
+            failed_flow_proxy_state_path(),
+            {
+                "schemaVersion": FAILED_FLOW_PROXY_STATE_SCHEMA_VERSION,
+                "updatedAtEpoch": now_epoch,
+                "failed": active_payload,
+            },
+            include_pid=True,
+            cleanup_temp=True,
+        )
+    except Exception:
+        return
 
 
 def probe_flow_proxy(
@@ -70,6 +130,14 @@ def purge_recent_flow_proxy_cache(now_monotonic: float) -> None:
 
 
 def purge_failed_flow_proxy_cache(now_monotonic: float) -> None:
+    now_epoch = time.time()
+    for key, until_epoch in read_shared_failed_flow_proxy_urls().items():
+        remaining = max(0.0, until_epoch - now_epoch)
+        if remaining > 0:
+            FAILED_FLOW_PROXY_URLS[key] = max(
+                float(FAILED_FLOW_PROXY_URLS.get(key) or 0.0),
+                now_monotonic + remaining,
+            )
     expired_keys = [key for key, expires_at in FAILED_FLOW_PROXY_URLS.items() if expires_at <= now_monotonic]
     for key in expired_keys:
         FAILED_FLOW_PROXY_URLS.pop(key, None)
@@ -82,10 +150,12 @@ def mark_failed_flow_proxy(unique_key: str) -> None:
     failure_window_seconds = resolve_easy_proxy_failure_window_seconds()
     if failure_window_seconds <= 0:
         return
+    until_epoch = time.time() + failure_window_seconds
     with ACTIVE_FLOW_PROXY_LOCK:
         now_monotonic = time.monotonic()
         purge_failed_flow_proxy_cache(now_monotonic)
         FAILED_FLOW_PROXY_URLS[normalized] = now_monotonic + failure_window_seconds
+    write_shared_failed_flow_proxy_url(normalized, until_epoch=until_epoch)
 
 
 def classify_easy_proxy_error(exc: Exception, *, probe_url: str | None = None) -> tuple[str, str, str]:
