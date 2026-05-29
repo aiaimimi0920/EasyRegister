@@ -1036,6 +1036,42 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("external_registration_blocked", outcome["ignoreReason"])
             self.assertFalse(Path(outcome["statePath"]).is_file())
 
+    def test_record_business_mailbox_domain_outcome_records_attributed_registration_disallowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": False,
+                "errorStep": "create-openai-account",
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@provider-domain.test",
+                        "provider": "mailtm",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "create-openai-account": {
+                        "message": (
+                            "create_account status=400 body={\"error\":{\"code\":\"registration_disallowed\"}} "
+                            "[mailbox_provider=mailtm email=user@provider-domain.test]"
+                        ),
+                    }
+                },
+            }
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertNotIn("ignored", outcome)
+            self.assertEqual("registration_disallowed", outcome["failureReason"])
+            self.assertEqual("mailtm", outcome["provider"])
+            self.assertEqual("provider-domain.test", outcome["domain"])
+            self.assertTrue(Path(outcome["statePath"]).is_file())
+
     def test_record_business_mailbox_domain_outcome_blacklists_email_otp_failures_quickly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"

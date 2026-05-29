@@ -287,6 +287,8 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
         or "registration_disallowed" in combined
         or "terms of use restriction on about-you page" in combined
     ):
+        if "mailbox_provider=" in combined:
+            return ""
         return "external_registration_blocked"
 
     if error_step == "obtain-codex-oauth" and any(
@@ -350,6 +352,8 @@ def mailbox_failure_reason(*, result_payload_value: dict[str, Any]) -> str:
 
     if "unsupported_email" in combined or "the email you provided is not supported" in combined:
         return "unsupported_email"
+    if "registration_disallowed" in combined and "mailbox_provider=" in combined:
+        return "registration_disallowed"
     if "wrong_email_otp_code" in combined or "chatgpt_login_otp_validate_failed" in combined:
         return "email_otp_wrong_code"
     if (
