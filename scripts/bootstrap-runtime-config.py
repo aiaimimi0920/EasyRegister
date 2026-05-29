@@ -5,10 +5,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
+logging.disable(logging.DEBUG)
 import boto3
+logging.getLogger().setLevel(logging.WARNING)
+logging.getLogger("boto3").setLevel(logging.WARNING)
+logging.getLogger("botocore").setLevel(logging.WARNING)
 
 
 def hash_hex_bytes(data: bytes, algorithm: str) -> str:
