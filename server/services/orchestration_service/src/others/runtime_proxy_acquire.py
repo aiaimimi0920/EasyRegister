@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Any
 
-from others.config import env_float
-from others.common import json_log
+from others.config import _resolve_shared_root, env_float
+from others.common import json_log, write_json_atomic
 from others.runtime_proxy_model import FlowProxyLease
 from others.runtime_proxy_support import (
     DEFAULT_ORCHESTRATION_HOST_ID,
@@ -33,10 +34,73 @@ from shared_proxy.easy_proxy_client import checkout_proxy, checkout_random_node_
 
 
 _COMPAT_CHECKOUT_COOLDOWN_UNTIL: dict[str, float] = {}
+_COMPAT_CHECKOUT_COOLDOWN_STATE_SCHEMA_VERSION = 1
 
 
 def _resolve_compat_checkout_failure_cooldown_seconds() -> float:
     return max(0.0, env_float("REGISTER_PROXY_LEASE_FAILURE_COOLDOWN_SECONDS", 120.0))
+
+
+def _compat_checkout_cooldown_state_path():
+    return _resolve_shared_root() / "others" / "easy-proxy-checkout-cooldowns.json"
+
+
+def _read_shared_compat_checkout_cooldowns() -> dict[str, float]:
+    path = _compat_checkout_cooldown_state_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if int(payload.get("schemaVersion") or 0) != _COMPAT_CHECKOUT_COOLDOWN_STATE_SCHEMA_VERSION:
+        return {}
+    raw_cooldowns = payload.get("cooldowns")
+    if not isinstance(raw_cooldowns, dict):
+        return {}
+    cooldowns: dict[str, float] = {}
+    for key, value in raw_cooldowns.items():
+        if not isinstance(value, dict):
+            continue
+        try:
+            until_epoch = float(value.get("untilEpoch") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if until_epoch > 0:
+            cooldowns[str(key)] = until_epoch
+    return cooldowns
+
+
+def _write_shared_compat_checkout_cooldown(*, key: str, until_epoch: float) -> None:
+    try:
+        cooldowns = _read_shared_compat_checkout_cooldowns()
+        cooldowns[str(key)] = max(float(until_epoch), float(cooldowns.get(str(key)) or 0.0))
+        now_epoch = time.time()
+        active_payload = {
+            cooldown_key: {
+                "untilEpoch": cooldown_until,
+                "updatedAtEpoch": now_epoch,
+            }
+            for cooldown_key, cooldown_until in cooldowns.items()
+            if cooldown_until > now_epoch
+        }
+        write_json_atomic(
+            _compat_checkout_cooldown_state_path(),
+            {
+                "schemaVersion": _COMPAT_CHECKOUT_COOLDOWN_STATE_SCHEMA_VERSION,
+                "updatedAtEpoch": now_epoch,
+                "cooldowns": active_payload,
+            },
+            include_pid=True,
+            cleanup_temp=True,
+        )
+    except Exception as exc:
+        json_log(
+            {
+                "event": "register_easy_proxy_checkout_cooldown_state_write_failed",
+                "error": str(exc),
+            }
+        )
 
 
 def acquire_flow_proxy_lease(
@@ -114,8 +178,17 @@ def acquire_flow_proxy_lease(
             until = float(_COMPAT_CHECKOUT_COOLDOWN_UNTIL.get(compat_cooldown_key) or 0.0)
             if until <= now:
                 _COMPAT_CHECKOUT_COOLDOWN_UNTIL.pop(compat_cooldown_key, None)
-                return 0.0
-            return max(0.0, until - now)
+            else:
+                return max(0.0, until - now)
+        shared_until_epoch = float(_read_shared_compat_checkout_cooldowns().get(compat_cooldown_key) or 0.0)
+        shared_remaining = max(0.0, shared_until_epoch - time.time())
+        if shared_remaining > 0:
+            with _ACTIVE_FLOW_PROXY_LOCK:
+                _COMPAT_CHECKOUT_COOLDOWN_UNTIL[compat_cooldown_key] = max(
+                    float(_COMPAT_CHECKOUT_COOLDOWN_UNTIL.get(compat_cooldown_key) or 0.0),
+                    time.monotonic() + shared_remaining,
+                )
+        return shared_remaining
 
     def _mark_compat_checkout_cooldown(exc: Exception) -> None:
         cooldown_seconds = _resolve_compat_checkout_failure_cooldown_seconds()
@@ -128,6 +201,10 @@ def acquire_flow_proxy_lease(
                 until,
                 float(_COMPAT_CHECKOUT_COOLDOWN_UNTIL.get(compat_cooldown_key) or 0.0),
             )
+        _write_shared_compat_checkout_cooldown(
+            key=compat_cooldown_key,
+            until_epoch=time.time() + cooldown_seconds,
+        )
         json_log(
             {
                 "event": "register_easy_proxy_checkout_cooldown_started",

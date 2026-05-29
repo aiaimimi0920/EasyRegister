@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,15 @@ from others import runtime_proxy_acquire  # noqa: E402
 
 class RuntimeProxyAcquireTests(unittest.TestCase):
     def setUp(self) -> None:
+        self._output_root = tempfile.TemporaryDirectory()
+        self.addCleanup(self._output_root.cleanup)
+        self._env_patch = mock.patch.dict(
+            "os.environ",
+            {"REGISTER_OUTPUT_ROOT": self._output_root.name},
+            clear=False,
+        )
+        self._env_patch.start()
+        self.addCleanup(self._env_patch.stop)
         runtime_proxy_acquire._COMPAT_CHECKOUT_COOLDOWN_UNTIL.clear()
 
     def test_duplicate_active_route_releases_lease_without_reporting_failure_and_falls_back(self) -> None:
@@ -181,11 +191,15 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
             runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
 
         try:
-            with mock.patch.dict(
-                "os.environ",
-                {"REGISTER_PROXY_LEASE_FAILURE_COOLDOWN_SECONDS": "60"},
-                clear=False,
-            ), \
+            with tempfile.TemporaryDirectory() as tmp_dir, \
+                mock.patch.dict(
+                    "os.environ",
+                    {
+                        "REGISTER_OUTPUT_ROOT": tmp_dir,
+                        "REGISTER_PROXY_LEASE_FAILURE_COOLDOWN_SECONDS": "60",
+                    },
+                    clear=False,
+                ), \
                 mock.patch.object(runtime_proxy_acquire, "_proxy_runtime_config", return_value=config), \
                 mock.patch.object(runtime_proxy_acquire, "ensure_easy_proxy_env_defaults"), \
                 mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_mode", return_value="auto"), \
@@ -226,6 +240,7 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                     flow_name="codex_openai_account_task",
                     probe_url="https://platform.openai.com/login",
                 )
+                runtime_proxy_acquire._COMPAT_CHECKOUT_COOLDOWN_UNTIL.clear()
                 second = runtime_proxy_acquire.acquire_flow_proxy_lease(
                     flow_name="codex_openai_account_task",
                     probe_url="https://platform.openai.com/login",
