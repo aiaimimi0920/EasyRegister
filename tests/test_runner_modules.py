@@ -1468,6 +1468,61 @@ class RunnerWorkerLoopTests(unittest.TestCase):
         self.assertEqual({}, active_counts)
         worker_state.exited.assert_called_once_with(local_runs=0)
 
+    def test_worker_loop_releases_continue_slot_when_reserved_slots_exceed_pool_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            free_oauth_pool_dir = output_root / "codex" / "free"
+            flow_pool_dir = output_root / "openai" / "failed-once"
+            flow_pool_dir.mkdir(parents=True, exist_ok=True)
+            (flow_pool_dir / "seed.json").write_text("{}", encoding="utf-8")
+            spec = RunnerFlowSpec(
+                name="continue-openai",
+                flow_path="continue-flow.json",
+                instance_role="continue",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=3,
+                openai_oauth_pool_dir=flow_pool_dir,
+                mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
+                concurrency_limit=2,
+            )
+            worker_state = mock.Mock()
+            stop_event = mock.Mock()
+            stop_event.is_set.side_effect = [False, True]
+            task_counter = SimpleNamespace(value=0)
+            active_counts: dict[str, int] = {"continue-openai": 1}
+            with mock.patch.object(runner_worker_loop, "WorkerRuntimeState", return_value=worker_state):
+                with mock.patch.object(runner_worker_loop, "_process_worker_maintenance"):
+                    with mock.patch.object(
+                        runner_worker_loop,
+                        "_choose_runnable_flow_spec",
+                        return_value=(spec, {"selected": {"name": "continue-openai"}}),
+                    ):
+                        with mock.patch.object(runner_worker_loop, "claim_task_index") as claim_task:
+                            with mock.patch.object(runner_worker_loop, "run_dst_flow_once") as run_once:
+                                with mock.patch("others.runner_worker_loop.time.sleep"):
+                                    runner_worker_loop.worker_loop(
+                                        worker_id=1,
+                                        instance_id="mixed",
+                                        instance_role="mixed",
+                                        output_root_text=str(output_root),
+                                        delay_seconds=0.0,
+                                        max_runs=1,
+                                        task_max_attempts=0,
+                                        flow_specs=(spec,),
+                                        stop_event=stop_event,
+                                        task_counter=task_counter,
+                                        free_oauth_pool_dir_text=str(free_oauth_pool_dir),
+                                        active_flow_counts=active_counts,
+                                    )
+
+        claim_task.assert_not_called()
+        run_once.assert_not_called()
+        self.assertEqual({"continue-openai": 1}, active_counts)
+        worker_state.exited.assert_called_once_with(local_runs=0)
+
     def test_worker_loop_main_continues_without_team_auth_when_pool_filtered_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"

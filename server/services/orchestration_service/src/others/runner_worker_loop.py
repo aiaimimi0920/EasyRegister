@@ -81,6 +81,58 @@ def task_slots_exhausted(
     return int(getattr(task_counter, "value", 0) or 0) >= max_runs
 
 
+def _json_file_count(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    return sum(1 for candidate in path.glob("*.json") if candidate.is_file())
+
+
+def _flow_spec_post_reserve_runnable_state(
+    *,
+    selected_flow_spec: Any,
+    output_root: Path,
+    shared_root: Path,
+    active_flow_counts: Any | None,
+    active_flow_lock: Any | None,
+) -> dict[str, Any]:
+    state = _flow_spec_runnable_state(
+        selected_flow_spec,
+        output_root=output_root,
+        shared_root=shared_root,
+        active_flow_counts=None,
+    )
+    normalized_role = str(selected_flow_spec.instance_role or "").strip().lower()
+    if normalized_role != "continue" or not bool(state.get("ready")):
+        return state
+
+    source_dir_text = str(state.get("inputSourceDir") or selected_flow_spec.openai_oauth_pool_dir or "").strip()
+    available_item_count = _json_file_count(Path(source_dir_text).expanduser().resolve()) if source_dir_text else 0
+    counts = _snapshot_active_flow_counts(
+        active_flow_counts=active_flow_counts,
+        active_flow_lock=active_flow_lock,
+    )
+    slot_key = str(state.get("slotKey") or "").strip()
+    active_count = int(counts.get(slot_key, 0) or 0) if slot_key else 0
+    enriched_state = {
+        **state,
+        "activeCount": active_count,
+        "availableItemCount": available_item_count,
+    }
+    if available_item_count <= 0:
+        return {
+            **enriched_state,
+            "ready": False,
+            "reason": "openai_oauth_pool_empty",
+        }
+    if active_flow_counts is not None and active_count > available_item_count:
+        return {
+            **enriched_state,
+            "ready": False,
+            "reason": "openai_oauth_pool_reserved_slots_exceed_available",
+        }
+    return enriched_state
+
+
 def worker_loop(
     *,
     worker_id: int,
@@ -195,11 +247,12 @@ def worker_loop(
             continue
         normalized_role = str(selected_flow_spec.instance_role or "").strip().lower()
         if normalized_role == "continue":
-            post_reserve_state = _flow_spec_runnable_state(
-                selected_flow_spec,
+            post_reserve_state = _flow_spec_post_reserve_runnable_state(
+                selected_flow_spec=selected_flow_spec,
                 output_root=output_root,
                 shared_root=shared_root,
-                active_flow_counts=None,
+                active_flow_counts=active_flow_counts,
+                active_flow_lock=active_flow_lock,
             )
             if not bool(post_reserve_state.get("ready")):
                 _release_flow_slot(
