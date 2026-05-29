@@ -297,8 +297,12 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
     def test_easy_sms_client_rotates_country_codes_when_phone_is_blacklisted(self) -> None:
         post_payloads: list[dict[str, object]] = []
+        reported_outcomes: list[dict[str, object]] = []
 
         def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            if path == "/sms/sessions/report-outcome":
+                reported_outcomes.append(dict(payload))
+                return {"result": {"accepted": True}}
             post_payloads.append(dict(payload))
             country_code = str(payload.get("countryCode") or "")
             if country_code == "+31":
@@ -342,6 +346,9 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             )
 
         self.assertEqual(["+31", "+33"], [payload["countryCode"] for payload in post_payloads])
+        self.assertEqual(["sms_bad"], [payload["sessionId"] for payload in reported_outcomes])
+        self.assertFalse(bool(reported_outcomes[0]["success"]))
+        self.assertEqual("blacklisted_phone_number", reported_outcomes[0]["detail"])
         self.assertEqual("sms_good", session.session_id)
         self.assertEqual("+33774749623", session.phone_number)
 

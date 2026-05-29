@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import socket
 import time
 from datetime import datetime, timezone
@@ -348,6 +349,33 @@ def _wait_sms_service_ready() -> None:
     raise RuntimeError("sms service not ready after wait")
 
 
+def _phone_lookup_keys(phone_number: str) -> set[str]:
+    text = str(phone_number or "").strip()
+    if not text:
+        return set()
+    compact = re.sub(r"[^\d+]", "", text)
+    digits_only = re.sub(r"\D", "", text)
+    keys = {text}
+    if compact:
+        keys.add(compact)
+    if digits_only:
+        keys.add(digits_only)
+    return keys
+
+
+def _safe_report_rejected_sms_session(*, session_id: str, detail: str) -> None:
+    if not str(session_id or "").strip():
+        return
+    try:
+        report_sms_outcome(
+            session_id=session_id,
+            outcome="failure",
+            detail=detail,
+        )
+    except Exception:
+        return
+
+
 def open_sms_session(
     *,
     business_key: str,
@@ -379,7 +407,12 @@ def open_sms_session(
     if first_country_code:
         base_payload["countryCode"] = first_country_code
     normalized_selection_mode = _normalize_selection_mode(selection_mode)
-    blocked_phones = {str(item or "").strip() for item in phone_blacklist if str(item or "").strip()}
+    blocked_phones = {
+        key
+        for item in phone_blacklist
+        for key in _phone_lookup_keys(str(item or ""))
+        if key
+    }
     blocked_provider_country_pairs = _normalize_provider_country_blacklist(provider_country_blacklist)
     country_candidates = _country_code_candidates(country_codes)
     last_error: Exception | None = None
@@ -418,7 +451,11 @@ def open_sms_session(
                 phone_number = str(session.get("phoneNumberE164") or session.get("phoneNumber") or "").strip()
                 provider_key = str(session.get("providerKey") or "").strip().lower()
                 if session_id and phone_number:
-                    if phone_number in blocked_phones:
+                    if _phone_lookup_keys(phone_number) & blocked_phones:
+                        _safe_report_rejected_sms_session(
+                            session_id=session_id,
+                            detail="blacklisted_phone_number",
+                        )
                         last_error = RuntimeError(f"sms service returned blacklisted phone number: {phone_number}")
                         continue
                     return SmsSession(
