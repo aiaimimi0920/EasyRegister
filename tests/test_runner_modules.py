@@ -1091,6 +1091,70 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("provider_email_otp_failure_threshold", third["providerBlacklistReason"])
             self.assertTrue(third["providerBlacklisted"])
 
+    def test_record_business_mailbox_domain_outcome_aggregates_email_otp_failure_reasons_for_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+
+            def _payload(domain: str, message: str) -> dict[str, object]:
+                return {
+                    "ok": False,
+                    "errorStep": "create-openai-account",
+                    "steps": {"acquire-mailbox": "ok"},
+                    "outputs": {
+                        "acquire-mailbox": {
+                            "email": f"user@{domain}",
+                            "provider": "mixedslow",
+                            "business_key": "openai",
+                        }
+                    },
+                    "stepErrors": {
+                        "create-openai-account": {
+                            "message": message,
+                        }
+                    },
+                }
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD": "100",
+                    "REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD": "3",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS": "100",
+                    "REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD": "100",
+                },
+                clear=True,
+            ):
+                first = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=_payload(
+                        "one.test",
+                        "timeout waiting for 6-digit code [mailbox_provider=mixedslow]",
+                    ),
+                    instance_role="main",
+                )
+                second = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=_payload(
+                        "two.test",
+                        "chatgpt_login_otp_validate_failed status=401 body={\"error\":{\"code\":\"wrong_email_otp_code\"}}",
+                    ),
+                    instance_role="main",
+                )
+                third = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=_payload(
+                        "three.test",
+                        "timeout waiting for 6-digit code [mailbox_provider=mixedslow]",
+                    ),
+                    instance_role="main",
+                )
+
+            assert first is not None and second is not None and third is not None
+            self.assertFalse(first["providerBlacklisted"])
+            self.assertFalse(second["providerBlacklisted"])
+            self.assertEqual("provider_email_otp_failure_threshold", third["providerBlacklistReason"])
+            self.assertTrue(third["providerBlacklisted"])
+
     def test_mailbox_domain_blacklist_reason_requires_unsupported_email(self) -> None:
         unsupported_payload = {
             "stepErrors": {

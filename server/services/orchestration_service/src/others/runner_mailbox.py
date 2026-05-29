@@ -221,7 +221,19 @@ def mailbox_email_otp_failure_blacklist_threshold() -> int:
 
 
 def mailbox_email_otp_provider_failure_blacklist_threshold() -> int:
-    return max(0, env_int("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD", 5))
+    return max(0, env_int("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD", 3))
+
+
+def mailbox_failure_reason_total(failure_reasons: Any, reasons: set[str]) -> int:
+    if not isinstance(failure_reasons, dict):
+        return 0
+    total = 0
+    for reason in reasons:
+        try:
+            total += max(0, int(failure_reasons.get(reason) or 0))
+        except Exception:
+            continue
+    return total
 
 
 def mailbox_domain_blacklist_reason(*, result_payload_value: dict[str, Any]) -> str:
@@ -501,7 +513,7 @@ def record_business_mailbox_domain_outcome(
         not blacklist_reason
         and failure_reason in EMAIL_OTP_FAILURE_REASONS
         and email_otp_threshold > 0
-        and max(0, int(failure_reasons.get(failure_reason) or 0)) >= email_otp_threshold
+        and mailbox_failure_reason_total(failure_reasons, EMAIL_OTP_FAILURE_REASONS) >= email_otp_threshold
     ):
         blacklist_reason = "email_otp_failure_threshold"
     if not blacklist_reason and mailbox_failure_rate_reaches_blacklist_threshold(
@@ -570,7 +582,8 @@ def record_business_mailbox_domain_outcome(
         if (
             failure_reason in EMAIL_OTP_FAILURE_REASONS
             and provider_email_otp_threshold > 0
-            and max(0, int(provider_failure_reasons.get(failure_reason) or 0)) >= provider_email_otp_threshold
+            and mailbox_failure_reason_total(provider_failure_reasons, EMAIL_OTP_FAILURE_REASONS)
+            >= provider_email_otp_threshold
         ):
             provider_blacklist_reason = "provider_email_otp_failure_threshold"
         elif mailbox_failure_rate_reaches_blacklist_threshold(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,8 @@ DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE = 90.0
 DEFAULT_REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD = 500
 DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS = 4
 MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
+EMAIL_OTP_FAILURE_REASONS = {"email_otp_timeout", "email_otp_wrong_code"}
+_MAILBOX_DEFAULT_POLICY_KEYS = {"default", "*", "__default__"}
 
 
 def _mailbox_runtime_config() -> MailboxRuntimeConfig:
@@ -166,6 +169,20 @@ def _resolve_mailbox_explicit_blacklist_providers(*, business_key: str | None = 
     return _mailbox_runtime_config().resolve_business_policy(business_key).explicit_blacklist_providers
 
 
+def _resolve_business_mailbox_domain_pool(*, business_key: str | None = None) -> tuple[str, ...]:
+    config = _mailbox_runtime_config()
+    resolved_business_key = config.resolve_business_key(business_key)
+    for policy in config.business_policies:
+        if policy.business_key == resolved_business_key and policy.domain_pool:
+            return policy.domain_pool
+    for policy in config.business_policies:
+        if policy.business_key in _MAILBOX_DEFAULT_POLICY_KEYS and policy.domain_pool:
+            return policy.domain_pool
+    if env_text("REGISTER_MAILBOX_DOMAIN_POOL"):
+        return config.resolve_business_policy(resolved_business_key).domain_pool
+    return ()
+
+
 def _resolve_mailbox_domain_blacklist_min_attempts() -> int:
     return _mailbox_runtime_config().blacklist_min_attempts
 
@@ -176,6 +193,26 @@ def _resolve_mailbox_domain_blacklist_failure_rate() -> float:
 
 def _resolve_mailbox_domain_consecutive_failure_blacklist_threshold() -> int:
     return _mailbox_runtime_config().consecutive_failure_blacklist_threshold
+
+
+def _resolve_mailbox_email_otp_failure_blacklist_threshold() -> int:
+    return max(0, env_int("REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD", 3))
+
+
+def _resolve_mailbox_email_otp_provider_failure_blacklist_threshold() -> int:
+    return max(0, env_int("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD", 3))
+
+
+def _mailbox_failure_reason_total(failure_reasons: Any, reasons: set[str]) -> int:
+    if not isinstance(failure_reasons, dict):
+        return 0
+    total = 0
+    for reason in reasons:
+        try:
+            total += max(0, int(failure_reasons.get(reason) or 0))
+        except Exception:
+            continue
+    return total
 
 
 def _mailbox_domain_stats(domain: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> dict[str, Any]:
@@ -221,7 +258,13 @@ def _mailbox_domain_is_business_blacklisted(domain: str, state_payload: dict[str
     if domain in set(_resolve_mailbox_explicit_blacklist_domains(business_key=business_key)):
         return True
     stats = _mailbox_domain_stats(domain, state_payload, business_key=business_key)
-    return bool(stats.get("blacklisted"))
+    if bool(stats.get("blacklisted")):
+        return True
+    threshold = _resolve_mailbox_email_otp_failure_blacklist_threshold()
+    return (
+        threshold > 0
+        and _mailbox_failure_reason_total(stats.get("failureReasons"), EMAIL_OTP_FAILURE_REASONS) >= threshold
+    )
 
 
 def _mailbox_provider_is_business_blacklisted(provider: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> bool:
@@ -231,7 +274,36 @@ def _mailbox_provider_is_business_blacklisted(provider: str, state_payload: dict
     if normalized_provider in set(_resolve_mailbox_explicit_blacklist_providers(business_key=business_key)):
         return True
     stats = _mailbox_provider_stats(normalized_provider, state_payload, business_key=business_key)
-    return bool(stats.get("blacklisted"))
+    if bool(stats.get("blacklisted")):
+        return True
+    threshold = _resolve_mailbox_email_otp_provider_failure_blacklist_threshold()
+    return (
+        threshold > 0
+        and _mailbox_failure_reason_total(stats.get("failureReasons"), EMAIL_OTP_FAILURE_REASONS) >= threshold
+    )
+
+
+def _select_business_mailbox_domain(*, business_key: str | None = None) -> tuple[str, str]:
+    domain_pool = _resolve_business_mailbox_domain_pool(business_key=business_key)
+    if not domain_pool:
+        return "", "not_configured"
+    explicit_blacklist = set(_resolve_mailbox_explicit_blacklist_domains(business_key=business_key))
+    candidates = tuple(domain for domain in domain_pool if domain and domain not in explicit_blacklist)
+    if not candidates:
+        return "", "all_explicitly_blacklisted"
+    state_payload = _load_mailbox_domain_state()
+    eligible = tuple(
+        domain
+        for domain in candidates
+        if not _mailbox_domain_is_business_blacklisted(
+            domain,
+            state_payload,
+            business_key=business_key,
+        )
+    )
+    if eligible:
+        return random.choice(eligible), "eligible"
+    return random.choice(candidates), "dynamic_blacklist_exhausted"
 
 
 def _resolve_mailbox_business_retry_attempts() -> int:
@@ -280,6 +352,16 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
     if domain in explicit_blacklist:
         return {
             "reason": "explicit_business_blacklist",
+            "business_key": resolved_business_key,
+            "provider": provider,
+            "domain": domain,
+            "email": email,
+        }
+
+    business_domain_pool = set(_resolve_business_mailbox_domain_pool(business_key=resolved_business_key))
+    if business_domain_pool and domain not in business_domain_pool:
+        return {
+            "reason": "outside_business_domain_pool",
             "business_key": resolved_business_key,
             "provider": provider,
             "domain": domain,
@@ -456,6 +538,34 @@ def resolve_mailbox(
                     "provider": planned_provider,
                     "businessKey": resolved_business_key,
                 }
+            )
+        selected_domain, domain_selection_reason = _select_business_mailbox_domain(
+            business_key=resolved_business_key,
+        )
+        if selected_domain and not _mailbox_provider_is_business_blacklisted(
+            "moemail",
+            _load_mailbox_domain_state(),
+            business_key=resolved_business_key,
+        ):
+            json_log(
+                {
+                    "event": "register_mailbox_business_domain_selected",
+                    "businessKey": resolved_business_key,
+                    "provider": "moemail",
+                    "domain": selected_domain,
+                    "reason": domain_selection_reason,
+                }
+            )
+            return _create_mailbox_with_business_policy(
+                create_fn=lambda: create_mailbox(
+                    provider="moemail",
+                    default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
+                    prefer_raw_self_hosted_ref=True,
+                    ttl_seconds=ttl_seconds,
+                    mailcreate_domain=selected_domain,
+                    **strategy_kwargs,
+                ),
+                business_key=resolved_business_key,
             )
         return _create_mailbox_with_business_policy(
             create_fn=lambda: create_mailbox(
