@@ -1117,6 +1117,82 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("provider-domain.test", outcome["domain"])
             self.assertTrue(Path(outcome["statePath"]).is_file())
 
+    def test_record_business_mailbox_domain_outcome_success_clears_dynamic_blacklists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            state_path = shared_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "domains": {
+                                    "recover.test": {
+                                        "provider": "recovermail",
+                                        "attempts": 20,
+                                        "successes": 0,
+                                        "failures": 20,
+                                        "consecutiveFailures": 20,
+                                        "failureReasons": {"email_otp_timeout": 20},
+                                        "blacklisted": True,
+                                        "blacklistReason": "email_otp_failure_threshold",
+                                    }
+                                },
+                                "providers": {
+                                    "recovermail": {
+                                        "attempts": 20,
+                                        "successes": 0,
+                                        "failures": 20,
+                                        "consecutiveFailures": 20,
+                                        "failureReasons": {"email_otp_timeout": 20},
+                                        "blacklisted": True,
+                                        "blacklistReason": "provider_email_otp_failure_threshold",
+                                    }
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload = {
+                "ok": True,
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@recover.test",
+                        "provider": "recovermail",
+                        "business_key": "openai",
+                    }
+                },
+            }
+
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertFalse(outcome["blacklisted"])
+            self.assertEqual("", outcome["blacklistReason"])
+            self.assertFalse(outcome["providerBlacklisted"])
+            self.assertEqual("", outcome["providerBlacklistReason"])
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            domain_stats = state_payload["businesses"]["openai"]["domains"]["recover.test"]
+            provider_stats = state_payload["businesses"]["openai"]["providers"]["recovermail"]
+            self.assertFalse(domain_stats["blacklisted"])
+            self.assertEqual("", domain_stats["blacklistReason"])
+            self.assertEqual({}, domain_stats["failureReasons"])
+            self.assertEqual(0, domain_stats["consecutiveFailures"])
+            self.assertFalse(provider_stats["blacklisted"])
+            self.assertEqual("", provider_stats["blacklistReason"])
+            self.assertEqual({}, provider_stats["failureReasons"])
+            self.assertEqual(0, provider_stats["consecutiveFailures"])
+
     def test_record_business_mailbox_domain_outcome_blacklists_email_otp_failures_quickly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"

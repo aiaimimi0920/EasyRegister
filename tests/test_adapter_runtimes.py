@@ -1933,6 +1933,64 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("mail2925", violation["provider"])
         self.assertEqual("ok.test", violation["domain"])
 
+    def test_create_mailbox_with_business_policy_falls_back_when_dynamic_blacklist_exhausted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "providers": {
+                                    "mail2925": {
+                                        "attempts": 20,
+                                        "successes": 0,
+                                        "failures": 20,
+                                        "blacklisted": True,
+                                        "blacklistReason": "provider_failure_rate_threshold",
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            mailboxes = [
+                runtime_mailbox.Mailbox(
+                    provider="mail2925",
+                    email="first@2925.com",
+                    ref="mail2925:first",
+                    session_id="first",
+                ),
+                runtime_mailbox.Mailbox(
+                    provider="mail2925",
+                    email="fallback@2925.com",
+                    ref="mail2925:fallback",
+                    session_id="fallback",
+                ),
+            ]
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_BUSINESS_RETRY_ATTEMPTS": "2",
+                },
+                clear=True,
+            ), mock.patch.object(runtime_mailbox, "_release_mailbox_quiet") as release_mock:
+                selected = runtime_mailbox._create_mailbox_with_business_policy(
+                    create_fn=lambda: mailboxes.pop(0),
+                    business_key="openai",
+                )
+
+        self.assertEqual("fallback@2925.com", selected.email)
+        release_mock.assert_called_once()
+
     def test_mailbox_domain_policy_violation_applies_dynamic_provider_blacklist_with_domain_pool(self) -> None:
         mailbox = runtime_mailbox.Mailbox(
             provider="mail2925",

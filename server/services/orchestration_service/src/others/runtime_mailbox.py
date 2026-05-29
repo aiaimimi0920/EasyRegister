@@ -386,6 +386,15 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
     return None
 
 
+def _mailbox_policy_violation_is_dynamic(violation: dict[str, Any] | None) -> bool:
+    if not isinstance(violation, dict):
+        return False
+    return str(violation.get("reason") or "").strip() in {
+        "dynamic_business_blacklist",
+        "dynamic_business_provider_blacklist",
+    }
+
+
 def _release_mailbox_quiet(mailbox: Mailbox, *, reason: str) -> None:
     try:
         release_mailbox(
@@ -406,6 +415,20 @@ def _create_mailbox_with_business_policy(*, create_fn: Any, business_key: str | 
         if violation is None:
             return mailbox
         last_violation = violation
+        if attempt_index >= max_attempts and _mailbox_policy_violation_is_dynamic(violation):
+            json_log(
+                {
+                    "event": "register_mailbox_business_dynamic_blacklist_exhausted_fallback",
+                    "attempt": attempt_index,
+                    "maxAttempts": max_attempts,
+                    "reason": str(violation.get("reason") or ""),
+                    "businessKey": str(violation.get("business_key") or ""),
+                    "provider": str(violation.get("provider") or ""),
+                    "domain": str(violation.get("domain") or ""),
+                    "email": str(violation.get("email") or ""),
+                }
+            )
+            return mailbox
         json_log(
             {
                 "event": "register_mailbox_business_domain_rejected",

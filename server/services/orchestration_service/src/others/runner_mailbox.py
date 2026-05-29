@@ -498,6 +498,7 @@ def record_business_mailbox_domain_outcome(
     if ok:
         successes += 1
         consecutive_failures = 0
+        failure_reasons = {}
     else:
         failures += 1
         consecutive_failures += 1
@@ -510,24 +511,26 @@ def record_business_mailbox_domain_outcome(
     prior_blacklisted = bool(current.get("blacklisted"))
     prior_blacklist_reason = str(current.get("blacklistReason") or "").strip()
     threshold = mailbox_domain_consecutive_failure_blacklist_threshold(shared_root=shared_root)
-    if not blacklist_reason and consecutive_failures >= threshold:
-        blacklist_reason = "consecutive_failures_threshold"
-    email_otp_threshold = mailbox_email_otp_failure_blacklist_threshold()
-    if (
-        not blacklist_reason
-        and failure_reason in EMAIL_OTP_FAILURE_REASONS
-        and email_otp_threshold > 0
-        and mailbox_failure_reason_total(failure_reasons, EMAIL_OTP_FAILURE_REASONS) >= email_otp_threshold
-    ):
-        blacklist_reason = "email_otp_failure_threshold"
-    if not blacklist_reason and mailbox_failure_rate_reaches_blacklist_threshold(
-        attempts=attempts,
-        failures=failures,
-        min_attempts=min_attempts,
-        failure_rate_threshold=failure_rate_threshold,
-    ):
-        blacklist_reason = "failure_rate_threshold"
-    blacklisted = prior_blacklisted or bool(blacklist_reason)
+    if not ok:
+        if not blacklist_reason and consecutive_failures >= threshold:
+            blacklist_reason = "consecutive_failures_threshold"
+        email_otp_threshold = mailbox_email_otp_failure_blacklist_threshold()
+        if (
+            not blacklist_reason
+            and failure_reason in EMAIL_OTP_FAILURE_REASONS
+            and email_otp_threshold > 0
+            and mailbox_failure_reason_total(failure_reasons, EMAIL_OTP_FAILURE_REASONS) >= email_otp_threshold
+        ):
+            blacklist_reason = "email_otp_failure_threshold"
+        if not blacklist_reason and mailbox_failure_rate_reaches_blacklist_threshold(
+            attempts=attempts,
+            failures=failures,
+            min_attempts=min_attempts,
+            failure_rate_threshold=failure_rate_threshold,
+        ):
+            blacklist_reason = "failure_rate_threshold"
+    blacklisted = False if ok else prior_blacklisted or bool(blacklist_reason)
+    stored_blacklist_reason = "" if ok else blacklist_reason or prior_blacklist_reason
     domains[domain] = {
         "provider": provider,
         "attempts": attempts,
@@ -542,7 +545,7 @@ def record_business_mailbox_domain_outcome(
         "lastFailureReason": failure_reason if not ok else str(current.get("lastFailureReason") or "").strip(),
         "failureReasons": failure_reasons,
         "blacklisted": blacklisted,
-        "blacklistReason": blacklist_reason or prior_blacklist_reason,
+        "blacklistReason": stored_blacklist_reason,
     }
 
     provider_attempts = 0
@@ -570,6 +573,7 @@ def record_business_mailbox_domain_outcome(
         if ok:
             provider_successes += 1
             provider_consecutive_failures = 0
+            provider_failure_reasons = {}
         else:
             provider_failures += 1
             provider_consecutive_failures += 1
@@ -582,23 +586,24 @@ def record_business_mailbox_domain_outcome(
         )
         prior_provider_blacklisted = bool(provider_current.get("blacklisted"))
         prior_provider_blacklist_reason = str(provider_current.get("blacklistReason") or "").strip()
-        provider_email_otp_threshold = mailbox_email_otp_provider_failure_blacklist_threshold()
-        if (
-            failure_reason in EMAIL_OTP_FAILURE_REASONS
-            and provider_email_otp_threshold > 0
-            and mailbox_failure_reason_total(provider_failure_reasons, EMAIL_OTP_FAILURE_REASONS)
-            >= provider_email_otp_threshold
-        ):
-            provider_blacklist_reason = "provider_email_otp_failure_threshold"
-        elif mailbox_failure_rate_reaches_blacklist_threshold(
-            attempts=provider_attempts,
-            failures=provider_failures,
-            min_attempts=min_attempts,
-            failure_rate_threshold=failure_rate_threshold,
-        ):
-            provider_blacklist_reason = "provider_failure_rate_threshold"
-        provider_blacklisted = prior_provider_blacklisted or bool(provider_blacklist_reason)
-        provider_blacklist_reason = provider_blacklist_reason or prior_provider_blacklist_reason
+        if not ok:
+            provider_email_otp_threshold = mailbox_email_otp_provider_failure_blacklist_threshold()
+            if (
+                failure_reason in EMAIL_OTP_FAILURE_REASONS
+                and provider_email_otp_threshold > 0
+                and mailbox_failure_reason_total(provider_failure_reasons, EMAIL_OTP_FAILURE_REASONS)
+                >= provider_email_otp_threshold
+            ):
+                provider_blacklist_reason = "provider_email_otp_failure_threshold"
+            elif mailbox_failure_rate_reaches_blacklist_threshold(
+                attempts=provider_attempts,
+                failures=provider_failures,
+                min_attempts=min_attempts,
+                failure_rate_threshold=failure_rate_threshold,
+            ):
+                provider_blacklist_reason = "provider_failure_rate_threshold"
+        provider_blacklisted = False if ok else prior_provider_blacklisted or bool(provider_blacklist_reason)
+        provider_blacklist_reason = "" if ok else provider_blacklist_reason or prior_provider_blacklist_reason
         providers[provider] = {
             "attempts": provider_attempts,
             "successes": provider_successes,
@@ -639,7 +644,7 @@ def record_business_mailbox_domain_outcome(
         "failureRate": round(failure_rate, 3),
         "failureReason": failure_reason,
         "blacklisted": blacklisted,
-        "blacklistReason": blacklist_reason or prior_blacklist_reason,
+        "blacklistReason": stored_blacklist_reason,
         "providerAttempts": provider_attempts,
         "providerSuccesses": provider_successes,
         "providerFailures": provider_failures,
