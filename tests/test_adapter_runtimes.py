@@ -1688,7 +1688,36 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("m2u", violation["provider"])
         self.assertEqual("cpu.edu.kg", violation["domain"])
 
-    def test_mailbox_domain_policy_violation_rejects_domain_outside_business_pool(self) -> None:
+    def test_mailbox_domain_policy_violation_rejects_moemail_domain_outside_business_pool(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="moemail",
+            email="user@outside.test",
+            ref="moemail:test",
+            session_id="moemail-session",
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                    '{"openai":{"domainPool":["zhooo.org","cnmlgb.de"],'
+                    '"explicitBlacklistDomains":["coolkid.icu"]}}'
+                ),
+            },
+            clear=True,
+        ):
+            violation = runtime_mailbox._mailbox_domain_policy_violation(
+                mailbox,
+                business_key="openai",
+            )
+
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertEqual("outside_business_domain_pool", violation["reason"])
+        self.assertEqual("moemail", violation["provider"])
+        self.assertEqual("outside.test", violation["domain"])
+
+    def test_mailbox_domain_policy_violation_allows_non_moemail_outside_business_pool(self) -> None:
         mailbox = runtime_mailbox.Mailbox(
             provider="mail2925",
             email="user@outside.test",
@@ -1711,11 +1740,7 @@ class RuntimeMailboxTests(unittest.TestCase):
                 business_key="openai",
             )
 
-        self.assertIsNotNone(violation)
-        assert violation is not None
-        self.assertEqual("outside_business_domain_pool", violation["reason"])
-        self.assertEqual("mail2925", violation["provider"])
-        self.assertEqual("outside.test", violation["domain"])
+        self.assertIsNone(violation)
 
     def test_mailbox_domain_policy_violation_applies_business_provider_blacklist(self) -> None:
         mailbox = runtime_mailbox.Mailbox(
@@ -1852,6 +1877,63 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("dynamic_business_provider_blacklist", violation["reason"])
         self.assertEqual("mail2925", violation["provider"])
         self.assertEqual("ok.test", violation["domain"])
+
+    def test_mailbox_domain_policy_violation_applies_dynamic_provider_blacklist_with_domain_pool(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="mail2925",
+            email="allowed@outside.test",
+            ref="mail2925:test",
+            session_id="mail2925-session",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "providers": {
+                                    "mail2925": {
+                                        "attempts": 4,
+                                        "successes": 0,
+                                        "failures": 4,
+                                        "blacklisted": False,
+                                        "failureReasons": {
+                                            "email_otp_timeout": 3,
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD": "3",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"domainPool":["zhooo.org"],'
+                        '"explicitBlacklistDomains":["coolkid.icu"]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                violation = runtime_mailbox._mailbox_domain_policy_violation(
+                    mailbox,
+                    business_key="openai",
+                )
+
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertEqual("dynamic_business_provider_blacklist", violation["reason"])
+        self.assertEqual("mail2925", violation["provider"])
 
     def test_mailbox_domain_policy_violation_keeps_business_pool_domain_despite_dynamic_provider_threshold(self) -> None:
         mailbox = runtime_mailbox.Mailbox(
@@ -2035,7 +2117,7 @@ class RuntimeMailboxTests(unittest.TestCase):
                 with mock.patch.object(
                     runtime_mailbox,
                     "_resolve_planned_mailbox_provider",
-                    return_value="mail2925",
+                    return_value="moemail",
                 ):
                     with mock.patch.object(
                         runtime_mailbox,
@@ -2051,6 +2133,56 @@ class RuntimeMailboxTests(unittest.TestCase):
 
         self.assertEqual("good@zhooo.org", resolved.email)
         self.assertEqual(1, create_mailbox.call_count)
+
+    def test_resolve_mailbox_does_not_force_moemail_when_plan_prefers_other_provider(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="mail2925",
+            email="candidate@outside.test",
+            ref="mail2925:session",
+            session_id="session",
+        )
+        create_kwargs: list[dict[str, object]] = []
+
+        def _create_mailbox(**kwargs):
+            create_kwargs.append(dict(kwargs))
+            return mailbox
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_BUSINESS_RETRY_ATTEMPTS": "1",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"domainPool":["zhooo.org"],'
+                        '"explicitBlacklistDomains":["coolkid.icu"]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                with mock.patch.object(
+                    runtime_mailbox,
+                    "_resolve_planned_mailbox_provider",
+                    return_value="mail2925",
+                ):
+                    with mock.patch.object(
+                        runtime_mailbox,
+                        "create_mailbox",
+                        side_effect=_create_mailbox,
+                    ), mock.patch.object(runtime_mailbox, "release_mailbox"):
+                        resolved = runtime_mailbox.resolve_mailbox(
+                            preallocated_email=None,
+                            preallocated_session_id=None,
+                            preallocated_mailbox_ref=None,
+                            business_key="openai",
+                        )
+
+        self.assertEqual("candidate@outside.test", resolved.email)
+        self.assertEqual(1, len(create_kwargs))
+        self.assertEqual("auto", create_kwargs[0].get("provider"))
+        self.assertNotIn("mailcreate_domain", create_kwargs[0])
 
     def test_resolve_mailbox_provider_selections_defaults_to_easyemail_unfiltered(self) -> None:
         with mock.patch.dict(

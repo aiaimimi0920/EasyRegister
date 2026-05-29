@@ -346,7 +346,7 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
         }
 
     business_domain_pool = set(_resolve_business_mailbox_domain_pool(business_key=resolved_business_key))
-    if business_domain_pool and domain not in business_domain_pool:
+    if business_domain_pool and provider == "moemail" and domain not in business_domain_pool:
         return {
             "reason": "outside_business_domain_pool",
             "business_key": resolved_business_key,
@@ -355,7 +355,10 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
             "email": email,
         }
 
-    if provider and not business_domain_pool and _mailbox_provider_is_business_blacklisted(
+    pool_domain_is_authoritative_moemail = bool(
+        business_domain_pool and provider == "moemail" and domain in business_domain_pool
+    )
+    if provider and not pool_domain_is_authoritative_moemail and _mailbox_provider_is_business_blacklisted(
         provider,
         state_payload,
         business_key=resolved_business_key,
@@ -539,9 +542,13 @@ def resolve_mailbox(
                     "businessKey": resolved_business_key,
                 }
             )
-        selected_domain, domain_selection_reason = _select_business_mailbox_domain(
-            business_key=resolved_business_key,
-        )
+        if planned_provider == "moemail":
+            selected_domain, domain_selection_reason = _select_business_mailbox_domain(
+                business_key=resolved_business_key,
+            )
+        else:
+            selected_domain = ""
+            domain_selection_reason = "planned_provider_not_moemail" if planned_provider else "no_planned_provider"
         if selected_domain:
             json_log(
                 {
@@ -562,6 +569,15 @@ def resolve_mailbox(
                     **strategy_kwargs,
                 ),
                 business_key=resolved_business_key,
+            )
+        if _resolve_business_mailbox_domain_pool(business_key=resolved_business_key):
+            json_log(
+                {
+                    "event": "register_mailbox_business_domain_deferred",
+                    "businessKey": resolved_business_key,
+                    "provider": planned_provider,
+                    "reason": domain_selection_reason,
+                }
             )
         return _create_mailbox_with_business_policy(
             create_fn=lambda: create_mailbox(
