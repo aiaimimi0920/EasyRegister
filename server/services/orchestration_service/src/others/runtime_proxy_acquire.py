@@ -4,6 +4,7 @@ import os
 import time
 from typing import Any
 
+from others.config import env_float
 from others.common import json_log
 from others.runtime_proxy_model import FlowProxyLease
 from others.runtime_proxy_support import (
@@ -31,6 +32,13 @@ from shared_proxy import mask_proxy_url
 from shared_proxy.easy_proxy_client import checkout_proxy, checkout_random_node_proxy, release_lease, report_usage
 
 
+_COMPAT_CHECKOUT_COOLDOWN_UNTIL: dict[str, float] = {}
+
+
+def _resolve_compat_checkout_failure_cooldown_seconds() -> float:
+    return max(0.0, env_float("REGISTER_PROXY_LEASE_FAILURE_COOLDOWN_SECONDS", 120.0))
+
+
 def acquire_flow_proxy_lease(
     *,
     flow_name: str,
@@ -55,6 +63,7 @@ def acquire_flow_proxy_lease(
     lease: FlowProxyLease | None = None
     last_error: Exception | None = None
     host_id = ""
+    compat_cooldown_key = "|".join((management_base.lower(), service_key, stage))
     metadata_text = {
         str(key): str(value)
         for key, value in (metadata or {}).items()
@@ -99,6 +108,34 @@ def acquire_flow_proxy_lease(
             "eof",
         )
         return any(marker in normalized for marker in abort_markers)
+
+    def _compat_checkout_cooldown_remaining(now: float) -> float:
+        with _ACTIVE_FLOW_PROXY_LOCK:
+            until = float(_COMPAT_CHECKOUT_COOLDOWN_UNTIL.get(compat_cooldown_key) or 0.0)
+            if until <= now:
+                _COMPAT_CHECKOUT_COOLDOWN_UNTIL.pop(compat_cooldown_key, None)
+                return 0.0
+            return max(0.0, until - now)
+
+    def _mark_compat_checkout_cooldown(exc: Exception) -> None:
+        cooldown_seconds = _resolve_compat_checkout_failure_cooldown_seconds()
+        if cooldown_seconds <= 0:
+            return
+        now = time.monotonic()
+        until = now + cooldown_seconds
+        with _ACTIVE_FLOW_PROXY_LOCK:
+            _COMPAT_CHECKOUT_COOLDOWN_UNTIL[compat_cooldown_key] = max(
+                until,
+                float(_COMPAT_CHECKOUT_COOLDOWN_UNTIL.get(compat_cooldown_key) or 0.0),
+            )
+        json_log(
+            {
+                "event": "register_easy_proxy_checkout_cooldown_started",
+                "flowName": flow_name,
+                "seconds": round(cooldown_seconds, 3),
+                "errorClass": _classify_easy_proxy_error(exc, probe_url=probe_url)[1],
+            }
+        )
 
     def _try_random_nodes() -> FlowProxyLease | None:
         nonlocal last_error
@@ -273,12 +310,25 @@ def acquire_flow_proxy_lease(
                         )
                     release_lease(candidate_lease_id, base_url=management_base, api_key=api_key)
                 if _should_abort_compat_retry(exc):
+                    if not local_route_reuse and not candidate_lease_id and not candidate_proxy_url:
+                        _mark_compat_checkout_cooldown(exc)
                     break
                 time.sleep(0.1 * (attempt + 1))
         return None
 
     if mode in {"auto", "lease"}:
-        lease = _try_compat_checkout()
+        cooldown_remaining = _compat_checkout_cooldown_remaining(time.monotonic())
+        if cooldown_remaining > 0:
+            last_error = RuntimeError(f"easy_proxy_checkout_cooldown_active seconds={cooldown_remaining:.1f}")
+            json_log(
+                {
+                    "event": "register_easy_proxy_checkout_cooldown_active",
+                    "flowName": flow_name,
+                    "remainingSeconds": round(cooldown_remaining, 3),
+                }
+            )
+        else:
+            lease = _try_compat_checkout()
     if lease is None and mode in {"auto", "random-node"}:
         lease = _try_random_nodes()
 

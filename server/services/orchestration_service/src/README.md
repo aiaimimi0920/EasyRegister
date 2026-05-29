@@ -58,6 +58,8 @@
 - `REGISTER_PROXY_UNIQUE_ATTEMPTS`
 - `REGISTER_PROXY_RECENT_WINDOW_SECONDS`
 - `REGISTER_PROXY_FAILURE_WINDOW_SECONDS`
+- `REGISTER_PROXY_LEASE_FAILURE_COOLDOWN_SECONDS`
+  - `auto` 模式下，如果租约 checkout 本身超时或临时不可用，会在这个秒数内跳过租约入口，直接走 random-node fallback；默认 `120`
 - `REGISTER_TEAM_AUTH_TEMP_BLACKLIST_SECONDS`
   当某个 team / mother 账号在刷新后仍然返回 `token_invalidated` 时，会被临时黑名单隔离的秒数，默认 `3600`
 

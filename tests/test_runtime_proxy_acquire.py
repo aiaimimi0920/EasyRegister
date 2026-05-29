@@ -15,6 +15,9 @@ from others import runtime_proxy_acquire  # noqa: E402
 
 
 class RuntimeProxyAcquireTests(unittest.TestCase):
+    def setUp(self) -> None:
+        runtime_proxy_acquire._COMPAT_CHECKOUT_COOLDOWN_UNTIL.clear()
+
     def test_duplicate_active_route_releases_lease_without_reporting_failure_and_falls_back(self) -> None:
         released_lease_ids: list[str] = []
         reported_lease_ids: list[str] = []
@@ -149,6 +152,89 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
             self.assertEqual("random-node", lease.acquisition_mode)
             self.assertEqual(1, checkout_proxy_mock.call_count)
             self.assertEqual(1, checkout_random_mock.call_count)
+            release_lease_mock.assert_not_called()
+            report_usage_mock.assert_not_called()
+        finally:
+            with runtime_proxy_acquire._ACTIVE_FLOW_PROXY_LOCK:
+                runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.update(original_active)
+                runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.update(original_recent)
+                runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.update(original_failed)
+
+    def test_compat_checkout_timeout_enters_short_cooldown_before_random_fallback(self) -> None:
+        config = SimpleNamespace(
+            enabled=True,
+            required_by_default=True,
+            management_base_url="http://easy-proxy:29888",
+            api_key="",
+            ttl_minutes=30,
+        )
+
+        with runtime_proxy_acquire._ACTIVE_FLOW_PROXY_LOCK:
+            original_active = set(runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS)
+            original_recent = dict(runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS)
+            original_failed = dict(runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS)
+            runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.clear()
+            runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.clear()
+            runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
+
+        try:
+            with mock.patch.dict(
+                "os.environ",
+                {"REGISTER_PROXY_LEASE_FAILURE_COOLDOWN_SECONDS": "60"},
+                clear=False,
+            ), \
+                mock.patch.object(runtime_proxy_acquire, "_proxy_runtime_config", return_value=config), \
+                mock.patch.object(runtime_proxy_acquire, "ensure_easy_proxy_env_defaults"), \
+                mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_mode", return_value="auto"), \
+                mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_unique_attempts", return_value=3), \
+                mock.patch.object(runtime_proxy_acquire, "_default_easy_proxy_service_key", return_value="service-key"), \
+                mock.patch.object(runtime_proxy_acquire, "_default_easy_proxy_stage", return_value="registration"), \
+                mock.patch.object(runtime_proxy_acquire, "_build_easy_proxy_host_id", return_value="host-1"), \
+                mock.patch.object(runtime_proxy_acquire, "runtime_reachable_proxy_url", side_effect=lambda value: value), \
+                mock.patch.object(runtime_proxy_acquire, "_probe_flow_proxy"), \
+                mock.patch.object(
+                    runtime_proxy_acquire,
+                    "checkout_proxy",
+                    side_effect=RuntimeError("timed out"),
+                ) as checkout_proxy_mock, \
+                mock.patch.object(
+                    runtime_proxy_acquire,
+                    "checkout_random_node_proxy",
+                    side_effect=[
+                        {
+                            "proxyUrl": "http://easy-proxy:25039",
+                            "metadata": {
+                                "selectedNodeTag": "tag-25039",
+                                "selectedNodePort": "25039",
+                            },
+                        },
+                        {
+                            "proxyUrl": "http://easy-proxy:25041",
+                            "metadata": {
+                                "selectedNodeTag": "tag-25041",
+                                "selectedNodePort": "25041",
+                            },
+                        },
+                    ],
+                ) as checkout_random_mock, \
+                mock.patch.object(runtime_proxy_acquire, "release_lease") as release_lease_mock, \
+                mock.patch.object(runtime_proxy_acquire, "report_usage") as report_usage_mock:
+                first = runtime_proxy_acquire.acquire_flow_proxy_lease(
+                    flow_name="codex_openai_account_task",
+                    probe_url="https://platform.openai.com/login",
+                )
+                second = runtime_proxy_acquire.acquire_flow_proxy_lease(
+                    flow_name="codex_openai_account_task",
+                    probe_url="https://platform.openai.com/login",
+                )
+
+            self.assertEqual("random-node", first.acquisition_mode)
+            self.assertEqual("random-node", second.acquisition_mode)
+            self.assertEqual(1, checkout_proxy_mock.call_count)
+            self.assertEqual(2, checkout_random_mock.call_count)
             release_lease_mock.assert_not_called()
             report_usage_mock.assert_not_called()
         finally:
