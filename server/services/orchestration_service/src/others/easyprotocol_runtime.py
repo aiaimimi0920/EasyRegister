@@ -19,9 +19,11 @@ DEFAULT_EASY_PROTOCOL_REQUESTED_SERVICE = ""
 DEFAULT_EASY_PROTOCOL_TIMEOUT_SECONDS = 900
 DEFAULT_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS = 5
 PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
+    "invalid_phone_number",
     "phone_number_in_use",
     "phone_max_usage_exceeded",
     "rate_limit_exceeded",
+    "wrong_otp_code",
 }
 
 
@@ -56,6 +58,23 @@ def phone_verification_terminal_retry_attempts() -> int:
 
 def _is_retryable_phone_terminal_code(terminal_code: str) -> bool:
     return str(terminal_code or "").strip().lower() in PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES
+
+
+def _is_retryable_phone_code_submission_error(exc: BaseException) -> bool:
+    message = str(exc or "").strip().lower()
+    if not message:
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "wrong_email_otp_code",
+            "otp_incorrect",
+            "wrong otp",
+            "wrong code",
+            "incorrect code",
+            "invalid verification code",
+        )
+    )
 
 
 def build_easyprotocol_request(*, step_type: str, step_input: dict[str, Any]) -> dict[str, Any]:
@@ -327,6 +346,19 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
                 outcome="failure",
                 detail=str(exc),
             )
+            if (
+                phone_number_submitted
+                and phone_failure_stage == "submit_phone_verification_code"
+                and _is_retryable_phone_code_submission_error(exc)
+            ):
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number=phone_session["phoneNumber"],
+                    provider_key=phone_session["providerKey"],
+                    terminal_code="wrong_otp_code",
+                    terminal_message=str(exc),
+                )
+                if phone_attempt_index + 1 < max_phone_attempts:
+                    continue
             if phone_number_submitted:
                 return {
                     "ok": True,

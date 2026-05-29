@@ -21,6 +21,7 @@ from others.runner_artifacts import (
 from others.runner_flow_scheduler import (
     choose_runnable_flow_spec as _choose_runnable_flow_spec,
     configured_flow_roles as _configured_flow_roles,
+    flow_spec_runnable_state as _flow_spec_runnable_state,
     release_flow_slot as _release_flow_slot,
     reserve_flow_slot as _reserve_flow_slot,
     snapshot_active_flow_counts as _snapshot_active_flow_counts,
@@ -192,6 +193,34 @@ def worker_loop(
             worker_state.sleeping(task_index=int(task_counter.value or 0), seconds=1.0)
             time.sleep(1.0)
             continue
+        normalized_role = str(selected_flow_spec.instance_role or "").strip().lower()
+        if normalized_role == "continue":
+            post_reserve_state = _flow_spec_runnable_state(
+                selected_flow_spec,
+                output_root=output_root,
+                shared_root=shared_root,
+                active_flow_counts=None,
+            )
+            if not bool(post_reserve_state.get("ready")):
+                _release_flow_slot(
+                    spec=selected_flow_spec,
+                    active_flow_counts=active_flow_counts,
+                    active_flow_lock=active_flow_lock,
+                )
+                sleep_seconds = max(float(delay_seconds or 0.0), 1.0)
+                _json_log(
+                    {
+                        "event": "register_flow_selection_stale",
+                        "workerId": worker_label,
+                        "pid": os.getpid(),
+                        "selection": flow_selection,
+                        "postReserveState": post_reserve_state,
+                        "seconds": sleep_seconds,
+                    }
+                )
+                worker_state.sleeping(task_index=int(task_counter.value or 0), seconds=sleep_seconds)
+                time.sleep(sleep_seconds)
+                continue
         task_index = claim_task_index(task_counter=task_counter, max_runs=max_runs)
         if task_index is None:
             _release_flow_slot(
@@ -201,7 +230,6 @@ def worker_loop(
             )
             break
 
-        normalized_role = str(selected_flow_spec.instance_role or "").strip().lower()
         openai_oauth_pool_dir = Path(selected_flow_spec.openai_oauth_pool_dir).resolve()
         _ensure_directory(openai_oauth_pool_dir)
         input_source_dir = str(selected_flow_spec.input_source_dir or "").strip()

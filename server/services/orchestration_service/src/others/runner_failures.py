@@ -146,19 +146,37 @@ def extra_failure_cooldown_seconds(*, result: Any) -> float:
     cleanup_config = _cleanup_runtime_config()
     team_auth_config = _team_auth_runtime_config()
 
-    if error_step == "create-openai-account":
-        combined = result_error_message(payload, "create-openai-account").lower()
+    flow_cooldown_steps = {
+        "create-openai-account",
+        "initialize-chatgpt-login-session",
+        "initialize-platform-organization",
+        "obtain-codex-oauth",
+        "validate-free-personal-oauth",
+    }
+    if error_step in flow_cooldown_steps:
+        combined = result_error_message(payload, error_step).lower()
         if result_error_matches(
             payload,
+            ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
             ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
+            ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+            ErrorCodes.PROXY_CONNECT_FAILED,
             ErrorCodes.TRANSPORT_ERROR,
-            step_id="create-openai-account",
+            step_id=error_step,
         ) or any(
             marker in combined
             for marker in (
+                "cf_mitigated=challenge",
+                "cf-mitigated=challenge",
+                "just a moment",
                 "status=403",
                 "platform_login status=403",
                 "authorize_continue status=429",
+                "status=429",
+                "rate_limit_exceeded",
+                "rate limit exceeded",
+                "oauth_authorize_repair_challenge",
+                "platform_oauth_token_exchange_failed",
                 "unexpected_eof_while_reading",
                 "eof occurred in violation of protocol",
             )

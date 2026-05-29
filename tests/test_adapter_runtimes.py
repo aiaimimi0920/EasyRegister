@@ -822,6 +822,91 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(2, report_phone_outcome.call_count)
 
+    def test_dispatch_obtain_codex_oauth_retries_wrong_sms_code_with_next_number(self) -> None:
+        captured_inputs: list[dict[str, object]] = []
+        phone_sessions = [
+            {"sessionId": "sms_1", "phoneNumber": "+15550000001", "providerKey": "freepool"},
+            {"sessionId": "sms_2", "phoneNumber": "+15550000002", "providerKey": "freepool"},
+        ]
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured_inputs.append({"step_type": step_type, **dict(step_input)})
+            if step_type == "obtain_codex_oauth":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            if step_type == "submit_phone_verification_number":
+                return {
+                    "ok": True,
+                    "status": "phone_number_submitted",
+                    "pageType": "sms_verification",
+                    "resumeContext": {"flow": "oauth", "token": f"resume_{step_input['phone_session_id']}"},
+                }
+            if step_type == "submit_phone_verification_code" and step_input.get("phone_session_id") == "sms_1":
+                raise RuntimeError("otp_incorrect body={\"error\":{\"code\":\"wrong_email_otp_code\"}}")
+            if step_type == "submit_phone_verification_code" and step_input.get("phone_session_id") == "sms_2":
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "successPath": "C:/tmp/codex-free.json",
+                    "userId": "user_123",
+                }
+            raise AssertionError(f"unexpected invoke: {step_type} {step_input!r}")
+
+        with mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            side_effect=phone_sessions,
+        ) as open_phone_session_for_business, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+            side_effect=["111111", "222222"],
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "record_terminal_phone_outcome",
+            return_value={"ok": True},
+        ) as record_terminal_phone_outcome, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ) as report_phone_outcome:
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("sms_2", result["phoneSessionId"])
+        self.assertEqual(2, open_phone_session_for_business.call_count)
+        self.assertEqual(
+            ["sms_1", "sms_2"],
+            [
+                item["phone_session_id"]
+                for item in captured_inputs
+                if item["step_type"] == "submit_phone_verification_code"
+            ],
+        )
+        record_terminal_phone_outcome.assert_called_once_with(
+            phone_number="+15550000001",
+            provider_key="freepool",
+            terminal_code="wrong_otp_code",
+            terminal_message=mock.ANY,
+        )
+        self.assertEqual(
+            [mock.call(session_id="sms_1", outcome="failure", detail=mock.ANY), mock.call(session_id="sms_2", outcome="success", detail="codex_oauth_completed")],
+            report_phone_outcome.call_args_list,
+        )
+
     def test_open_phone_session_for_business_skips_blacklisted_phone_by_rotating_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
@@ -1087,6 +1172,38 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertIn("+36707448042", payload["phones"])
         self.assertEqual("rate_limit_exceeded", payload["phones"]["+36707448042"]["reason"])
         self.assertNotIn("onlinesim", payload["providers"])
+
+    def test_record_terminal_phone_outcome_keeps_invalid_and_wrong_code_phone_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "3600",
+                    "REGISTER_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS": "3600",
+                },
+                clear=False,
+            ):
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number="+15550000003",
+                    provider_key="freepool",
+                    terminal_code="invalid_phone_number",
+                    terminal_message="Invalid phone number.",
+                )
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number="+15550000004",
+                    provider_key="freepool",
+                    terminal_code="wrong_otp_code",
+                    terminal_message="Wrong code.",
+                )
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual("invalid_phone_number", payload["phones"]["+15550000003"]["reason"])
+        self.assertEqual("wrong_otp_code", payload["phones"]["+15550000004"]["reason"])
+        self.assertNotIn("freepool", payload["providers"])
 
     def test_record_terminal_phone_outcome_escalates_repeated_phone_scoped_failures_to_provider_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1569,6 +1686,57 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertIsNotNone(violation)
         assert violation is not None
         self.assertEqual("explicit_business_provider_blacklist", violation["reason"])
+        self.assertEqual("m2u", violation["provider"])
+        self.assertEqual("cnmlgb.de", violation["domain"])
+
+    def test_mailbox_domain_policy_violation_applies_dynamic_business_provider_blacklist(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="m2u",
+            email="allowed@cnmlgb.de",
+            ref="m2u:test",
+            session_id="m2u-session",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "businesses": {
+                            "openai": {
+                                "providers": {
+                                    "m2u": {
+                                        "attempts": 3,
+                                        "successes": 0,
+                                        "failures": 3,
+                                        "failureRate": 100.0,
+                                        "blacklisted": True,
+                                        "blacklistReason": "provider_failure_rate_threshold",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                },
+                clear=True,
+            ):
+                violation = runtime_mailbox._mailbox_domain_policy_violation(
+                    mailbox,
+                    business_key="openai",
+                )
+
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertEqual("dynamic_business_provider_blacklist", violation["reason"])
         self.assertEqual("m2u", violation["provider"])
         self.assertEqual("cnmlgb.de", violation["domain"])
 

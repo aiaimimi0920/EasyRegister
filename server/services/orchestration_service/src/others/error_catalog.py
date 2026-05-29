@@ -225,6 +225,38 @@ def classify_error_code(
         return ErrorCodes.USER_REGISTER_400
     if "chat_requirements_failed" in lowered and ("status=401" in lowered or '"detail":"unauthorized"' in lowered):
         return ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION
+    if (
+        "status=429" in combined
+        or "rate_limit_exceeded" in combined
+        or "rate limit exceeded" in combined
+        or "too many requests" in combined
+    ):
+        return ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED
+    if (
+        (
+            "oauth_authorize_repair_challenge" in lowered
+            or "chatgpt_login" in lowered
+            or "authorize_continue" in lowered
+            or "platform_login" in lowered
+        )
+        and (
+            "cf_mitigated=challenge" in combined
+            or "cf-mitigated=challenge" in combined
+            or "just a moment" in combined
+            or "status=403" in combined
+            or "cloudflare" in combined
+        )
+    ):
+        return ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED
+    if (
+        "platform_oauth_token_exchange_failed" in lowered
+        and (
+            "invalid_request" in lowered
+            or "invalid request" in lowered
+            or "status=400" in lowered
+        )
+    ):
+        return ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION
     if "chatgpt_login_authorize_init_failed" in lowered and ("just a moment" in lowered or "status=403" in lowered):
         return ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED
     if "chatgpt_login_otp_validate_failed" in lowered and "wrong_email_otp_code" in lowered:

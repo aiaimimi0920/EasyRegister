@@ -178,11 +178,43 @@ def _mailbox_domain_stats(domain: str, state_payload: dict[str, Any], *, busines
     return stats if isinstance(stats, dict) else {}
 
 
+def _mailbox_provider_stats(provider: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> dict[str, Any]:
+    normalized_provider = _normalize_mailbox_provider(provider)
+    if not normalized_provider:
+        return {}
+    resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
+    businesses = state_payload.get("businesses")
+    if isinstance(businesses, dict):
+        business_payload = businesses.get(resolved_business_key)
+        if isinstance(business_payload, dict):
+            providers = business_payload.get("providers")
+            if isinstance(providers, dict):
+                stats = providers.get(normalized_provider)
+                if isinstance(stats, dict):
+                    return stats
+    providers = state_payload.get("providers")
+    if not isinstance(providers, dict):
+        return {}
+    stats = providers.get(normalized_provider)
+    return stats if isinstance(stats, dict) else {}
+
+
 def _mailbox_domain_is_business_blacklisted(domain: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> bool:
     if domain in set(_resolve_mailbox_explicit_blacklist_domains(business_key=business_key)):
         return True
     stats = _mailbox_domain_stats(domain, state_payload, business_key=business_key)
     return bool(stats.get("blacklisted"))
+
+
+def _mailbox_provider_is_business_blacklisted(provider: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> bool:
+    normalized_provider = _normalize_mailbox_provider(provider)
+    if not normalized_provider:
+        return False
+    if normalized_provider in set(_resolve_mailbox_explicit_blacklist_providers(business_key=business_key)):
+        return True
+    stats = _mailbox_provider_stats(normalized_provider, state_payload, business_key=business_key)
+    return bool(stats.get("blacklisted"))
+
 
 def _resolve_mailbox_business_retry_attempts() -> int:
     return max(1, env_int("REGISTER_MAILBOX_BUSINESS_RETRY_ATTEMPTS", DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS))
@@ -212,6 +244,20 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
     if not domain:
         return None
 
+    state_payload = _load_mailbox_domain_state()
+    if provider and _mailbox_provider_is_business_blacklisted(
+        provider,
+        state_payload,
+        business_key=resolved_business_key,
+    ):
+        return {
+            "reason": "dynamic_business_provider_blacklist",
+            "business_key": resolved_business_key,
+            "provider": provider,
+            "domain": domain,
+            "email": email,
+        }
+
     explicit_blacklist = set(_resolve_mailbox_explicit_blacklist_domains(business_key=resolved_business_key))
     if domain in explicit_blacklist:
         return {
@@ -222,7 +268,6 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
             "email": email,
         }
 
-    state_payload = _load_mailbox_domain_state()
     if _mailbox_domain_is_business_blacklisted(
         domain,
         state_payload,

@@ -22,9 +22,11 @@ DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD = 5
 DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS = 60 * 60
 DEFAULT_SMS_SESSION_LOCAL_RETRY_ATTEMPTS = 6
 PHONE_SCOPED_TERMINAL_CODES = {
+    "invalid_phone_number",
     "phone_number_in_use",
     "phone_max_usage_exceeded",
     "rate_limit_exceeded",
+    "wrong_otp_code",
 }
 PROVIDER_TERMINAL_OUTCOMES_KEY = "providerTerminalOutcomes"
 

@@ -15,7 +15,7 @@ SRC_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "orches
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from errors import ErrorCodes  # noqa: E402
+from errors import ErrorCodes, classify_error_code  # noqa: E402
 from others.config import RunnerFlowSpec  # noqa: E402
 from others import runner_artifacts, runner_credential_sync, runner_failures, runner_flow_scheduler, runner_mailbox, runner_process_supervisor, runner_team_artifacts, runner_team_auth, runner_team_auth_pool, runner_team_cleanup, runner_worker_loop, runner_worker_maintenance, runner_worker_results  # noqa: E402
 
@@ -788,6 +788,31 @@ class RunnerFailuresTests(unittest.TestCase):
             cooldown = runner_failures.extra_failure_cooldown_seconds(result=payload)
         self.assertEqual(45.0, cooldown)
 
+    def test_extra_failure_cooldown_seconds_covers_oauth_cloudflare_challenge(self) -> None:
+        payload = {
+            "errorStep": "obtain-codex-oauth",
+            "stepErrors": {
+                "obtain-codex-oauth": {
+                    "code": ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
+                    "message": "oauth_authorize_repair_challenge status=403 cf_mitigated=challenge",
+                }
+            },
+        }
+        with mock.patch.dict(
+            os.environ,
+            {"REGISTER_CREATE_ACCOUNT_COOLDOWN_SECONDS": "37"},
+            clear=True,
+        ):
+            cooldown = runner_failures.extra_failure_cooldown_seconds(result=payload)
+        self.assertEqual(37.0, cooldown)
+
+    def test_classify_error_code_maps_oauth_repair_challenge_to_blocked(self) -> None:
+        code = classify_error_code(
+            step_type="obtain_codex_oauth",
+            message="oauth_authorize_repair_challenge status=403 cf_mitigated=challenge",
+        )
+        self.assertEqual(ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, code)
+
     def test_team_mother_failure_cooldown_seconds_uses_structured_codes(self) -> None:
         payload = {
             "errorStep": "invite-team-members",
@@ -978,6 +1003,112 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual(3, third["consecutiveFailures"])
             self.assertTrue(third["blacklisted"])
             self.assertEqual("consecutive_failures_threshold", third["blacklistReason"])
+
+    def test_record_business_mailbox_domain_outcome_blacklists_after_failure_rate_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": False,
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@flaky.test",
+                        "provider": "mailbox-provider",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "create-openai-account": {
+                        "message": "create_account status=400 body={\"error\":{\"code\":\"invalid_request_error\"}}",
+                    }
+                },
+            }
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS": "3",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE": "90",
+                    "REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD": "100",
+                },
+                clear=True,
+            ):
+                first = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
+                second = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
+                third = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
+            assert first is not None and second is not None and third is not None
+            self.assertFalse(first["blacklisted"])
+            self.assertFalse(second["blacklisted"])
+            self.assertTrue(third["blacklisted"])
+            self.assertEqual("failure_rate_threshold", third["blacklistReason"])
+            self.assertEqual(100.0, third["failureRate"])
+
+    def test_record_business_mailbox_provider_outcome_blacklists_after_failure_rate_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+
+            def _payload(domain: str) -> dict[str, object]:
+                return {
+                    "ok": False,
+                    "outputs": {
+                        "acquire-mailbox": {
+                            "email": f"user@{domain}",
+                            "provider": "badmail",
+                            "business_key": "openai",
+                        }
+                    },
+                    "stepErrors": {
+                        "create-openai-account": {
+                            "message": "create_account status=400 body={\"error\":{\"code\":\"invalid_request_error\"}}",
+                        }
+                    },
+                }
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS": "3",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE": "90",
+                    "REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD": "100",
+                },
+                clear=True,
+            ):
+                first = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=_payload("one.test"),
+                    instance_role="main",
+                )
+                second = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=_payload("two.test"),
+                    instance_role="main",
+                )
+                third = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=_payload("three.test"),
+                    instance_role="main",
+                )
+            assert first is not None and second is not None and third is not None
+            self.assertFalse(first["providerBlacklisted"])
+            self.assertFalse(second["providerBlacklisted"])
+            self.assertTrue(third["providerBlacklisted"])
+            self.assertEqual("provider_failure_rate_threshold", third["providerBlacklistReason"])
+            state_payload = json.loads(Path(third["statePath"]).read_text(encoding="utf-8"))
+            provider_stats = state_payload["businesses"]["openai"]["providers"]["badmail"]
+            self.assertEqual(3, provider_stats["attempts"])
+            self.assertTrue(provider_stats["blacklisted"])
 
     def test_mark_mailbox_capacity_failure_respects_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1218,6 +1349,8 @@ class RunnerWorkerLoopTests(unittest.TestCase):
             output_root = Path(tmp_dir) / "register-output"
             free_oauth_pool_dir = output_root / "codex" / "free"
             flow_pool_dir = output_root / "openai" / "failed-once"
+            flow_pool_dir.mkdir(parents=True, exist_ok=True)
+            (flow_pool_dir / "seed.json").write_text("{}", encoding="utf-8")
             spec = RunnerFlowSpec(
                 name="continue-openai",
                 flow_path="continue-flow.json",
@@ -1274,6 +1407,66 @@ class RunnerWorkerLoopTests(unittest.TestCase):
         self.assertEqual(3, run_once.call_args.kwargs["task_max_attempts"])
         self.assertEqual("openai", run_once.call_args.kwargs["mailbox_business_key"])
         self.assertFalse(run_once.call_args.kwargs["team_invite_enabled"])
+
+    def test_worker_loop_releases_continue_slot_when_pool_empties_after_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            free_oauth_pool_dir = output_root / "codex" / "free"
+            flow_pool_dir = output_root / "openai" / "failed-once"
+            flow_pool_dir.mkdir(parents=True, exist_ok=True)
+            (flow_pool_dir / "seed.json").write_text("{}", encoding="utf-8")
+            spec = RunnerFlowSpec(
+                name="continue-openai",
+                flow_path="continue-flow.json",
+                instance_role="continue",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=3,
+                openai_oauth_pool_dir=flow_pool_dir,
+                mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
+            )
+            worker_state = mock.Mock()
+            stop_event = mock.Mock()
+            stop_event.is_set.side_effect = [False, True]
+            task_counter = SimpleNamespace(value=0)
+            active_counts: dict[str, int] = {}
+            with mock.patch.object(runner_worker_loop, "WorkerRuntimeState", return_value=worker_state):
+                with mock.patch.object(runner_worker_loop, "_process_worker_maintenance"):
+                    with mock.patch.object(
+                        runner_worker_loop,
+                        "_choose_runnable_flow_spec",
+                        return_value=(spec, {"selected": {"name": "continue-openai"}}),
+                    ):
+                        with mock.patch.object(
+                            runner_worker_loop,
+                            "_flow_spec_runnable_state",
+                            return_value={"ready": False, "reason": "openai_oauth_pool_empty"},
+                        ) as post_reserve_state:
+                            with mock.patch.object(runner_worker_loop, "claim_task_index") as claim_task:
+                                with mock.patch.object(runner_worker_loop, "run_dst_flow_once") as run_once:
+                                    with mock.patch("others.runner_worker_loop.time.sleep"):
+                                        runner_worker_loop.worker_loop(
+                                            worker_id=1,
+                                            instance_id="mixed",
+                                            instance_role="mixed",
+                                            output_root_text=str(output_root),
+                                            delay_seconds=0.0,
+                                            max_runs=1,
+                                            task_max_attempts=0,
+                                            flow_specs=(spec,),
+                                            stop_event=stop_event,
+                                            task_counter=task_counter,
+                                            free_oauth_pool_dir_text=str(free_oauth_pool_dir),
+                                            active_flow_counts=active_counts,
+                                        )
+
+        post_reserve_state.assert_called_once()
+        claim_task.assert_not_called()
+        run_once.assert_not_called()
+        self.assertEqual({}, active_counts)
+        worker_state.exited.assert_called_once_with(local_runs=0)
 
     def test_worker_loop_main_continues_without_team_auth_when_pool_filtered_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
