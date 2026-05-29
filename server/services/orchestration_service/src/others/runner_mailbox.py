@@ -12,6 +12,9 @@ from others.config import CleanupRuntimeConfig, MailboxRuntimeConfig
 from others.file_lock import release_lock, try_acquire_lock
 
 
+MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 2
+
+
 def _cleanup_runtime_config() -> CleanupRuntimeConfig:
     return CleanupRuntimeConfig.from_env()
 
@@ -68,7 +71,15 @@ def load_mailbox_domain_stats_state(*, shared_root: Path) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    try:
+        schema_version = int(payload.get("schemaVersion") or 0)
+    except Exception:
+        schema_version = 0
+    if schema_version != MAILBOX_DOMAIN_STATS_SCHEMA_VERSION:
+        return {}
+    return payload
 
 
 def write_mailbox_cleanup_state(*, shared_root: Path, payload: dict[str, Any]) -> None:
@@ -80,6 +91,7 @@ def write_mailbox_cleanup_state(*, shared_root: Path, payload: dict[str, Any]) -
 def write_mailbox_domain_stats_state(*, shared_root: Path, payload: dict[str, Any]) -> None:
     path = mailbox_domain_stats_path(shared_root=shared_root)
     ensure_directory(path.parent)
+    payload["schemaVersion"] = MAILBOX_DOMAIN_STATS_SCHEMA_VERSION
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -215,6 +227,113 @@ def mailbox_domain_blacklist_reason(*, result_payload_value: dict[str, Any]) -> 
     return ""
 
 
+def _mailbox_result_error_text(*, result_payload_value: dict[str, Any]) -> str:
+    if not isinstance(result_payload_value, dict):
+        return ""
+    parts: list[str] = [
+        str(result_payload_value.get("errorStep") or "").strip(),
+        str(result_payload_value.get("error") or "").strip(),
+        str(result_payload_value.get("errorCode") or "").strip(),
+    ]
+    step_errors = result_payload_value.get("stepErrors")
+    if isinstance(step_errors, dict):
+        for raw_value in step_errors.values():
+            if not isinstance(raw_value, dict):
+                continue
+            parts.extend(
+                [
+                    str(raw_value.get("code") or "").strip(),
+                    str(raw_value.get("message") or "").strip(),
+                    str(raw_value.get("detail") or "").strip(),
+                ]
+            )
+    return " ".join(part for part in parts if part).strip().lower()
+
+
+def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> str:
+    """Return a reason when a run failure should not degrade mailbox quality stats."""
+
+    if bool(result_payload_value.get("ok")):
+        return ""
+    error_step = str(result_payload_value.get("errorStep") or "").strip().lower()
+    combined = _mailbox_result_error_text(result_payload_value=result_payload_value)
+
+    if "sms_no_selection_plan_candidates" in combined:
+        return "external_sms_no_selection"
+
+    if error_step == "obtain-codex-oauth" and any(
+        marker in combined
+        for marker in (
+            "phone_wall",
+            "phone_verification",
+            "phone number",
+            "phone_number",
+            "sms_",
+            "unsupported_phone",
+            "wrong_otp_code",
+            "otp_incorrect",
+        )
+    ):
+        return "external_phone_verification"
+
+    if error_step in {
+        "create-openai-account",
+        "initialize-chatgpt-login-session",
+        "initialize-platform-organization",
+        "obtain-codex-oauth",
+        "validate-free-personal-oauth",
+    }:
+        if result_error_matches(
+            result_payload_value,
+            ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
+            ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
+            ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+            ErrorCodes.PROXY_CONNECT_FAILED,
+            ErrorCodes.TRANSPORT_ERROR,
+            step_id=error_step,
+        ):
+            return "external_proxy_or_auth"
+        if any(
+            marker in combined
+            for marker in (
+                "cf_mitigated=challenge",
+                "cf-mitigated=challenge",
+                "just a moment",
+                "status=403",
+                "status=429",
+                "rate_limit_exceeded",
+                "rate limit exceeded",
+                "unexpected_eof_while_reading",
+                "eof occurred in violation of protocol",
+                "easy_proxy_checkout_failed",
+                "proxy connect",
+            )
+        ):
+            return "external_proxy_or_auth"
+
+    return ""
+
+
+def mailbox_failure_reason(*, result_payload_value: dict[str, Any]) -> str:
+    if bool(result_payload_value.get("ok")):
+        return ""
+    error_step = str(result_payload_value.get("errorStep") or "").strip().lower()
+    combined = _mailbox_result_error_text(result_payload_value=result_payload_value)
+
+    if "unsupported_email" in combined or "the email you provided is not supported" in combined:
+        return "unsupported_email"
+    if error_step == "initialize-chatgpt-login-session":
+        if "wrong_email_otp_code" in combined or "chatgpt_login_otp_validate_failed" in combined:
+            return "email_otp_wrong_code"
+        if "chatgpt_login_email_otp_wait_failed" in combined or "timeout waiting for 6-digit code" in combined:
+            return "email_otp_timeout"
+    if error_step == "create-openai-account":
+        return "create_account_failure"
+    if error_step:
+        return error_step.replace("-", "_")
+    return "run_failure"
+
+
 def mailbox_failure_rate_reaches_blacklist_threshold(
     *,
     attempts: int,
@@ -306,6 +425,20 @@ def record_business_mailbox_domain_outcome(
     email = str(context.get("email") or "").strip().lower()
     if not domain:
         return None
+    ok = bool(result_payload_value.get("ok"))
+    ignore_reason = "" if ok else mailbox_failure_ignore_reason(result_payload_value=result_payload_value)
+    if ignore_reason:
+        config = _mailbox_runtime_config(shared_root=shared_root)
+        business_key = config.resolve_business_key(context.get("business_key"))
+        return {
+            "ignored": True,
+            "ignoreReason": ignore_reason,
+            "businessKey": business_key,
+            "provider": provider,
+            "domain": domain,
+            "email": email,
+            "statePath": str(mailbox_domain_stats_path(shared_root=shared_root)),
+        }
 
     payload = load_mailbox_domain_stats_state(shared_root=shared_root)
     config = _mailbox_runtime_config(shared_root=shared_root)
@@ -323,7 +456,9 @@ def record_business_mailbox_domain_outcome(
     successes = max(0, int(current.get("successes") or 0))
     failures = max(0, int(current.get("failures") or 0))
     consecutive_failures = max(0, int(current.get("consecutiveFailures") or 0))
-    ok = bool(result_payload_value.get("ok"))
+    failure_reason = "" if ok else mailbox_failure_reason(result_payload_value=result_payload_value)
+    failure_reasons_payload = current.get("failureReasons")
+    failure_reasons = dict(failure_reasons_payload) if isinstance(failure_reasons_payload, dict) else {}
     now = datetime.now(timezone.utc).isoformat()
     if ok:
         successes += 1
@@ -331,6 +466,8 @@ def record_business_mailbox_domain_outcome(
     else:
         failures += 1
         consecutive_failures += 1
+        if failure_reason:
+            failure_reasons[failure_reason] = max(0, int(failure_reasons.get(failure_reason) or 0)) + 1
     failure_rate = (float(failures) / float(attempts)) * 100.0 if attempts > 0 else 0.0
     min_attempts = mailbox_domain_blacklist_min_attempts(shared_root=shared_root)
     failure_rate_threshold = mailbox_domain_blacklist_failure_rate(shared_root=shared_root)
@@ -359,6 +496,8 @@ def record_business_mailbox_domain_outcome(
         "lastEmail": email,
         "lastSuccessAt": now if ok else str(current.get("lastSuccessAt") or "").strip(),
         "lastFailureAt": now if not ok else str(current.get("lastFailureAt") or "").strip(),
+        "lastFailureReason": failure_reason if not ok else str(current.get("lastFailureReason") or "").strip(),
+        "failureReasons": failure_reasons,
         "blacklisted": blacklisted,
         "blacklistReason": blacklist_reason or prior_blacklist_reason,
     }
@@ -379,12 +518,20 @@ def record_business_mailbox_domain_outcome(
         provider_successes = max(0, int(provider_current.get("successes") or 0))
         provider_failures = max(0, int(provider_current.get("failures") or 0))
         provider_consecutive_failures = max(0, int(provider_current.get("consecutiveFailures") or 0))
+        provider_failure_reasons_payload = provider_current.get("failureReasons")
+        provider_failure_reasons = (
+            dict(provider_failure_reasons_payload)
+            if isinstance(provider_failure_reasons_payload, dict)
+            else {}
+        )
         if ok:
             provider_successes += 1
             provider_consecutive_failures = 0
         else:
             provider_failures += 1
             provider_consecutive_failures += 1
+            if failure_reason:
+                provider_failure_reasons[failure_reason] = max(0, int(provider_failure_reasons.get(failure_reason) or 0)) + 1
         provider_failure_rate = (
             (float(provider_failures) / float(provider_attempts)) * 100.0
             if provider_attempts > 0
@@ -412,6 +559,8 @@ def record_business_mailbox_domain_outcome(
             "lastEmail": email,
             "lastSuccessAt": now if ok else str(provider_current.get("lastSuccessAt") or "").strip(),
             "lastFailureAt": now if not ok else str(provider_current.get("lastFailureAt") or "").strip(),
+            "lastFailureReason": failure_reason if not ok else str(provider_current.get("lastFailureReason") or "").strip(),
+            "failureReasons": provider_failure_reasons,
             "failureRate": round(provider_failure_rate, 3),
             "blacklisted": provider_blacklisted,
             "blacklistReason": provider_blacklist_reason,
@@ -437,6 +586,7 @@ def record_business_mailbox_domain_outcome(
         "failures": failures,
         "consecutiveFailures": consecutive_failures,
         "failureRate": round(failure_rate, 3),
+        "failureReason": failure_reason,
         "blacklisted": blacklisted,
         "blacklistReason": blacklist_reason or prior_blacklist_reason,
         "providerAttempts": provider_attempts,

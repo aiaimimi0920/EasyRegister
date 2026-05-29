@@ -126,7 +126,11 @@ def process_worker_run_result(
     if mailbox_domain_outcome:
         _json_log(
             {
-                "event": "register_mailbox_domain_outcome_recorded",
+                "event": (
+                    "register_mailbox_domain_outcome_ignored"
+                    if bool(mailbox_domain_outcome.get("ignored"))
+                    else "register_mailbox_domain_outcome_recorded"
+                ),
                 "workerId": worker_label,
                 "taskIndex": task_index,
                 "instanceRole": normalized_role,

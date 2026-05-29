@@ -30,6 +30,15 @@ from others.paths import resolve_shared_root  # noqa: E402
 
 
 class TypedConfigTests(unittest.TestCase):
+    def test_cleanup_runtime_config_parses_sms_no_selection_cooldown(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"REGISTER_SMS_NO_SELECTION_COOLDOWN_SECONDS": "123"},
+            clear=True,
+        ):
+            config = CleanupRuntimeConfig.from_env()
+        self.assertEqual(123.0, config.sms_no_selection_cooldown_seconds)
+
     def test_sms_runtime_config_parses_default_and_openai_business_policies(self) -> None:
         with mock.patch.dict(
             os.environ,

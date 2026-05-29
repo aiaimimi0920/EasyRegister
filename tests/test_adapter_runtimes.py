@@ -1205,6 +1205,34 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("wrong_otp_code", payload["phones"]["+15550000004"]["reason"])
         self.assertNotIn("freepool", payload["providers"])
 
+    def test_record_terminal_phone_outcome_emits_sanitized_summary_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "3600",
+                    "REGISTER_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS": "3600",
+                },
+                clear=False,
+            ), mock.patch.object(runtime_sms, "json_log") as json_log:
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number="+15550000005",
+                    provider_key="freepool",
+                    terminal_code="wrong_otp_code",
+                    terminal_message="Wrong code.",
+                )
+
+        json_log.assert_called_once()
+        event = json_log.call_args.args[0]
+        self.assertEqual("register_sms_terminal_phone_outcome_recorded", event["event"])
+        self.assertEqual("freepool", event["providerKey"])
+        self.assertEqual("wrong_otp_code", event["terminalCode"])
+        self.assertTrue(event["phoneRecorded"])
+        self.assertNotIn("phoneNumber", event)
+
     def test_record_terminal_phone_outcome_escalates_repeated_phone_scoped_failures_to_provider_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
@@ -1703,6 +1731,7 @@ class RuntimeMailboxTests(unittest.TestCase):
             state_path.write_text(
                 json.dumps(
                     {
+                        "schemaVersion": 2,
                         "businesses": {
                             "openai": {
                                 "providers": {
@@ -1739,6 +1768,53 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("dynamic_business_provider_blacklist", violation["reason"])
         self.assertEqual("m2u", violation["provider"])
         self.assertEqual("cnmlgb.de", violation["domain"])
+
+    def test_mailbox_domain_policy_violation_ignores_legacy_dynamic_state(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="m2u",
+            email="allowed@cnmlgb.de",
+            ref="m2u:test",
+            session_id="m2u-session",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "businesses": {
+                            "openai": {
+                                "providers": {
+                                    "m2u": {
+                                        "attempts": 99,
+                                        "successes": 0,
+                                        "failures": 99,
+                                        "failureRate": 100.0,
+                                        "blacklisted": True,
+                                        "blacklistReason": "provider_failure_rate_threshold",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                },
+                clear=True,
+            ):
+                violation = runtime_mailbox._mailbox_domain_policy_violation(
+                    mailbox,
+                    business_key="openai",
+                )
+
+        self.assertIsNone(violation)
 
     def test_resolve_mailbox_retries_m2u_provider_blacklist(self) -> None:
         first_mailbox = runtime_mailbox.Mailbox(

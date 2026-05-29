@@ -34,6 +34,7 @@ DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS = 20
 DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE = 90.0
 DEFAULT_REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD = 500
 DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS = 4
+MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 2
 
 
 def _mailbox_runtime_config() -> MailboxRuntimeConfig:
@@ -133,7 +134,24 @@ def _load_mailbox_domain_state() -> dict[str, Any]:
         payload = json.loads(state_path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    try:
+        schema_version = int(payload.get("schemaVersion") or 0)
+    except Exception:
+        schema_version = 0
+    if schema_version != MAILBOX_DOMAIN_STATS_SCHEMA_VERSION:
+        json_log(
+            {
+                "event": "register_mailbox_domain_state_ignored",
+                "reason": "legacy_schema_version",
+                "statePath": str(state_path),
+                "schemaVersion": schema_version,
+                "expectedSchemaVersion": MAILBOX_DOMAIN_STATS_SCHEMA_VERSION,
+            }
+        )
+        return {}
+    return payload
 
 
 def resolve_mailbox_business_key(*, business_key: str | None = None) -> str:

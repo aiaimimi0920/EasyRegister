@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from others.common import json_log
 from others.common_io import write_json_atomic
 from others.config import SmsRuntimeConfig, env_text
 from others.local_config import read_easysms_server_api_key
@@ -334,6 +335,31 @@ def record_terminal_phone_outcome(
             "blockedUntilTs": provider_until.timestamp(),
         }
     _write_sms_state(payload=payload, config=config)
+    provider_block = (
+        payload.get("providers", {}).get(normalized_provider)
+        if normalized_provider and isinstance(payload.get("providers"), dict)
+        else None
+    )
+    json_log(
+        {
+            "event": "register_sms_terminal_phone_outcome_recorded",
+            "providerKey": normalized_provider,
+            "terminalCode": normalized_code,
+            "phoneRecorded": bool(normalized_phone),
+            "phoneScoped": _is_phone_scoped_terminal_code(normalized_code),
+            "providerBlocked": bool(provider_block),
+            "providerBlockReason": (
+                str(provider_block.get("reason") or "").strip()
+                if isinstance(provider_block, dict)
+                else ""
+            ),
+            "terminalFailureCount": (
+                int(provider_block.get("terminalFailureCount") or 0)
+                if isinstance(provider_block, dict)
+                else 0
+            ),
+        }
+    )
     return payload
 
 

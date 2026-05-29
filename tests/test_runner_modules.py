@@ -12,8 +12,10 @@ from unittest import mock
 
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+PYTHON_SHARED_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "python_shared" / "src"
+for candidate in (SRC_ROOT, PYTHON_SHARED_ROOT):
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 from errors import ErrorCodes, classify_error_code  # noqa: E402
 from others.config import RunnerFlowSpec  # noqa: E402
@@ -806,6 +808,24 @@ class RunnerFailuresTests(unittest.TestCase):
             cooldown = runner_failures.extra_failure_cooldown_seconds(result=payload)
         self.assertEqual(37.0, cooldown)
 
+    def test_extra_failure_cooldown_seconds_covers_sms_no_selection_after_phone_wall(self) -> None:
+        payload = {
+            "errorStep": "obtain-codex-oauth",
+            "error": "sms_no_selection_plan_candidates",
+            "stepErrors": {
+                "obtain-codex-oauth": {
+                    "message": "sms_no_selection_plan_candidates",
+                }
+            },
+        }
+        with mock.patch.dict(
+            os.environ,
+            {"REGISTER_SMS_NO_SELECTION_COOLDOWN_SECONDS": "91"},
+            clear=True,
+        ):
+            cooldown = runner_failures.extra_failure_cooldown_seconds(result=payload)
+        self.assertEqual(91.0, cooldown)
+
     def test_classify_error_code_maps_oauth_repair_challenge_to_blocked(self) -> None:
         code = classify_error_code(
             step_type="obtain_codex_oauth",
@@ -888,6 +908,73 @@ class RunnerMailboxTests(unittest.TestCase):
                 ["coolkid.icu"],
                 state_payload["businesses"]["openai"]["explicitBlacklistDomains"],
             )
+
+    def test_record_business_mailbox_domain_outcome_ignores_sms_resource_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": False,
+                "errorStep": "obtain-codex-oauth",
+                "error": "sms_no_selection_plan_candidates",
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@sms-good-mailbox.test",
+                        "provider": "stablemail",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "obtain-codex-oauth": {
+                        "message": "sms_no_selection_plan_candidates",
+                    }
+                },
+            }
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertTrue(outcome["ignored"])
+            self.assertEqual("external_sms_no_selection", outcome["ignoreReason"])
+            self.assertFalse(Path(outcome["statePath"]).is_file())
+
+    def test_record_business_mailbox_domain_outcome_records_email_otp_failure_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": False,
+                "errorStep": "initialize-chatgpt-login-session",
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@slow-mailbox.test",
+                        "provider": "slowmail",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "initialize-chatgpt-login-session": {
+                        "message": "chatgpt_login_email_otp_wait_failed: timeout waiting for 6-digit code",
+                    }
+                },
+            }
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertFalse(outcome.get("ignored", False))
+            self.assertEqual("email_otp_timeout", outcome["failureReason"])
+            state_payload = json.loads(Path(outcome["statePath"]).read_text(encoding="utf-8"))
+            domain_stats = state_payload["businesses"]["openai"]["domains"]["slow-mailbox.test"]
+            provider_stats = state_payload["businesses"]["openai"]["providers"]["slowmail"]
+            self.assertEqual({"email_otp_timeout": 1}, domain_stats["failureReasons"])
+            self.assertEqual({"email_otp_timeout": 1}, provider_stats["failureReasons"])
 
     def test_mailbox_domain_blacklist_reason_requires_unsupported_email(self) -> None:
         unsupported_payload = {
