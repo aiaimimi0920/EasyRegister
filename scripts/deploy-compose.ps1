@@ -18,6 +18,27 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Invoke-NativeCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $FilePath @Arguments
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($exitCode -ne 0) {
+        throw "Native command failed with exit code ${exitCode}: $FilePath $($Arguments -join ' ')"
+    }
+}
+
 function Resolve-AbsolutePath {
     param(
         [Parameter(Mandatory = $true)]
@@ -94,4 +115,4 @@ if ($Services) {
     $composeArgs += $Services
 }
 
-& docker @composeArgs
+Invoke-NativeCommand -FilePath "docker" -Arguments $composeArgs

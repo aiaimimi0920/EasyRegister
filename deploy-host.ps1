@@ -68,6 +68,28 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Invoke-NativeCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $FilePath @Arguments
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($exitCode -ne 0) {
+        throw "Native command failed with exit code ${exitCode}: $FilePath $($Arguments -join ' ')"
+    }
+}
+
 $deployBoundParameters = @{}
 foreach ($entry in $PSBoundParameters.GetEnumerator()) {
     $deployBoundParameters[[string]$entry.Key] = $true
@@ -470,12 +492,13 @@ if (-not [string]::IsNullOrWhiteSpace($ImportCode) -or -not [string]::IsNullOrWh
         Copy-Item -LiteralPath $resolvedBootstrapFile -Destination $bootstrapPath -Force
     }
 
-    & python (Join-Path $repoRoot 'scripts\bootstrap-runtime-config.py') `
-        --bootstrap-path $bootstrapPath `
-        --runtime-env-path $importedRuntimeEnvPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to download EasyRegister runtime env from bootstrap with exit code $LASTEXITCODE"
-    }
+    Invoke-NativeCommand -FilePath "python" -Arguments @(
+        (Join-Path $repoRoot 'scripts\bootstrap-runtime-config.py'),
+        "--bootstrap-path",
+        $bootstrapPath,
+        "--runtime-env-path",
+        $importedRuntimeEnvPath
+    )
     $importedRuntimeValues = Read-DotEnvFile -Path $importedRuntimeEnvPath
 }
 
@@ -617,10 +640,7 @@ if (-not [string]::IsNullOrWhiteSpace($Image)) {
     $env:EASYREGISTER_TEST_IMAGE = $Image
     if ($Pull) {
         Write-Host "[deploy-host] pulling image: $Image" -ForegroundColor Cyan
-        & docker pull $Image
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to pull docker image: $Image"
-        }
+        Invoke-NativeCommand -FilePath "docker" -Arguments @("pull", $Image)
     }
 }
 
