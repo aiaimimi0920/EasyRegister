@@ -1731,7 +1731,7 @@ class RuntimeMailboxTests(unittest.TestCase):
             state_path.write_text(
                 json.dumps(
                     {
-                        "schemaVersion": 2,
+                        "schemaVersion": 3,
                         "businesses": {
                             "openai": {
                                 "providers": {
@@ -1783,6 +1783,7 @@ class RuntimeMailboxTests(unittest.TestCase):
             state_path.write_text(
                 json.dumps(
                     {
+                        "schemaVersion": 2,
                         "businesses": {
                             "openai": {
                                 "providers": {

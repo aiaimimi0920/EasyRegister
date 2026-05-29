@@ -8,11 +8,12 @@ from typing import Any
 from easyemail_flow import dispatch_easyemail_step
 from errors import ErrorCodes, result_error_matches, result_error_message
 from others.common import ensure_directory
-from others.config import CleanupRuntimeConfig, MailboxRuntimeConfig
+from others.config import CleanupRuntimeConfig, MailboxRuntimeConfig, env_int
 from others.file_lock import release_lock, try_acquire_lock
 
 
-MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 2
+MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
+EMAIL_OTP_FAILURE_REASONS = {"email_otp_timeout", "email_otp_wrong_code"}
 
 
 def _cleanup_runtime_config() -> CleanupRuntimeConfig:
@@ -215,6 +216,14 @@ def mailbox_domain_consecutive_failure_blacklist_threshold(*, shared_root: Path)
     return _mailbox_runtime_config(shared_root=shared_root).consecutive_failure_blacklist_threshold
 
 
+def mailbox_email_otp_failure_blacklist_threshold() -> int:
+    return max(0, env_int("REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD", 3))
+
+
+def mailbox_email_otp_provider_failure_blacklist_threshold() -> int:
+    return max(0, env_int("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD", 5))
+
+
 def mailbox_domain_blacklist_reason(*, result_payload_value: dict[str, Any]) -> str:
     step_errors = result_payload_value.get("stepErrors") if isinstance(result_payload_value, dict) else {}
     if not isinstance(step_errors, dict):
@@ -260,6 +269,13 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
 
     if "sms_no_selection_plan_candidates" in combined:
         return "external_sms_no_selection"
+
+    if (
+        "cannot create your account with the given information" in combined
+        or "registration_disallowed" in combined
+        or "terms of use restriction on about-you page" in combined
+    ):
+        return "external_registration_blocked"
 
     if error_step == "obtain-codex-oauth" and any(
         marker in combined
@@ -322,11 +338,14 @@ def mailbox_failure_reason(*, result_payload_value: dict[str, Any]) -> str:
 
     if "unsupported_email" in combined or "the email you provided is not supported" in combined:
         return "unsupported_email"
-    if error_step == "initialize-chatgpt-login-session":
-        if "wrong_email_otp_code" in combined or "chatgpt_login_otp_validate_failed" in combined:
-            return "email_otp_wrong_code"
-        if "chatgpt_login_email_otp_wait_failed" in combined or "timeout waiting for 6-digit code" in combined:
-            return "email_otp_timeout"
+    if "wrong_email_otp_code" in combined or "chatgpt_login_otp_validate_failed" in combined:
+        return "email_otp_wrong_code"
+    if (
+        "chatgpt_login_email_otp_wait_failed" in combined
+        or "timeout waiting for 6-digit code" in combined
+        or "otp_timeout" in combined
+    ):
+        return "email_otp_timeout"
     if error_step == "create-openai-account":
         return "create_account_failure"
     if error_step:
@@ -477,6 +496,14 @@ def record_business_mailbox_domain_outcome(
     threshold = mailbox_domain_consecutive_failure_blacklist_threshold(shared_root=shared_root)
     if not blacklist_reason and consecutive_failures >= threshold:
         blacklist_reason = "consecutive_failures_threshold"
+    email_otp_threshold = mailbox_email_otp_failure_blacklist_threshold()
+    if (
+        not blacklist_reason
+        and failure_reason in EMAIL_OTP_FAILURE_REASONS
+        and email_otp_threshold > 0
+        and max(0, int(failure_reasons.get(failure_reason) or 0)) >= email_otp_threshold
+    ):
+        blacklist_reason = "email_otp_failure_threshold"
     if not blacklist_reason and mailbox_failure_rate_reaches_blacklist_threshold(
         attempts=attempts,
         failures=failures,
@@ -539,7 +566,14 @@ def record_business_mailbox_domain_outcome(
         )
         prior_provider_blacklisted = bool(provider_current.get("blacklisted"))
         prior_provider_blacklist_reason = str(provider_current.get("blacklistReason") or "").strip()
-        if mailbox_failure_rate_reaches_blacklist_threshold(
+        provider_email_otp_threshold = mailbox_email_otp_provider_failure_blacklist_threshold()
+        if (
+            failure_reason in EMAIL_OTP_FAILURE_REASONS
+            and provider_email_otp_threshold > 0
+            and max(0, int(provider_failure_reasons.get(failure_reason) or 0)) >= provider_email_otp_threshold
+        ):
+            provider_blacklist_reason = "provider_email_otp_failure_threshold"
+        elif mailbox_failure_rate_reaches_blacklist_threshold(
             attempts=provider_attempts,
             failures=provider_failures,
             min_attempts=min_attempts,

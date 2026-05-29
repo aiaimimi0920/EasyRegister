@@ -976,6 +976,121 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual({"email_otp_timeout": 1}, domain_stats["failureReasons"])
             self.assertEqual({"email_otp_timeout": 1}, provider_stats["failureReasons"])
 
+    def test_record_business_mailbox_domain_outcome_classifies_create_account_email_otp_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": False,
+                "errorStep": "create-openai-account",
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@slow-create.test",
+                        "provider": "slowmail",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "create-openai-account": {
+                        "message": "timeout waiting for 6-digit code [mailbox_provider=slowmail]",
+                    }
+                },
+            }
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertEqual("email_otp_timeout", outcome["failureReason"])
+
+    def test_record_business_mailbox_domain_outcome_ignores_registration_blocked_create_account(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": False,
+                "errorStep": "create-openai-account",
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@probably-ok.test",
+                        "provider": "stablemail",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "create-openai-account": {
+                        "message": "create_account status=400 body={\"error\":{\"message\":\"Sorry, we cannot create your account with the given information.\"}}",
+                    }
+                },
+            }
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertTrue(outcome["ignored"])
+            self.assertEqual("external_registration_blocked", outcome["ignoreReason"])
+            self.assertFalse(Path(outcome["statePath"]).is_file())
+
+    def test_record_business_mailbox_domain_outcome_blacklists_email_otp_failures_quickly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+
+            def _payload(domain: str) -> dict[str, object]:
+                return {
+                    "ok": False,
+                    "errorStep": "create-openai-account",
+                    "steps": {"acquire-mailbox": "ok"},
+                    "outputs": {
+                        "acquire-mailbox": {
+                            "email": f"user@{domain}",
+                            "provider": "slowmail",
+                            "business_key": "openai",
+                        }
+                    },
+                    "stepErrors": {
+                        "create-openai-account": {
+                            "message": "timeout waiting for 6-digit code [mailbox_provider=slowmail]",
+                        }
+                    },
+                }
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD": "2",
+                    "REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD": "3",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS": "100",
+                    "REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD": "100",
+                },
+                clear=True,
+            ):
+                first = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=_payload("one.test"),
+                    instance_role="main",
+                )
+                second = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=_payload("one.test"),
+                    instance_role="main",
+                )
+                third = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=_payload("two.test"),
+                    instance_role="main",
+                )
+            assert first is not None and second is not None and third is not None
+            self.assertFalse(first["blacklisted"])
+            self.assertEqual("email_otp_failure_threshold", second["blacklistReason"])
+            self.assertTrue(second["blacklisted"])
+            self.assertEqual("provider_email_otp_failure_threshold", third["providerBlacklistReason"])
+            self.assertTrue(third["providerBlacklisted"])
+
     def test_mailbox_domain_blacklist_reason_requires_unsupported_email(self) -> None:
         unsupported_payload = {
             "stepErrors": {
