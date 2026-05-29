@@ -106,6 +106,45 @@ def mailbox_release_result_ok(release_result: Any) -> bool:
     }
 
 
+def release_mailbox_by_email_after_missing_session(
+    *,
+    email_address: str,
+    provider_type_key: str,
+    limit: int = 20,
+) -> dict[str, Any] | None:
+    normalized_email = str(email_address or "").strip()
+    if not normalized_email:
+        return None
+    results = list(
+        release_mailbox_sessions_by_email(
+            email_address=normalized_email,
+            provider_type_key=provider_type_key,
+            reason="dst_flow_cleanup_missing_session",
+            limit=max(1, int(limit or 20)),
+        )
+        or []
+    )
+    released_count = 0
+    failed_count = 0
+    for item in results:
+        release_result = item.get("release") if isinstance(item, dict) else None
+        if mailbox_release_result_ok(release_result):
+            released_count += 1
+        else:
+            failed_count += 1
+    return {
+        "released": released_count > 0 and failed_count == 0,
+        "detail": "recovered_by_email" if released_count > 0 and failed_count == 0 else "missing_session_id",
+        "provider": provider_type_key,
+        "email": normalized_email,
+        "recovered_by_email": True,
+        "matched_session_count": len(results),
+        "released_count": released_count,
+        "failed_count": failed_count,
+        "results": results,
+    }
+
+
 def dispatch_easyemail_step(*, step_type: str, step_input: dict[str, Any]) -> dict[str, Any]:
     normalized_step_type = str(step_type or "").strip()
     if normalized_step_type == "acquire_mailbox":
@@ -132,6 +171,12 @@ def dispatch_easyemail_step(*, step_type: str, step_input: dict[str, Any]) -> di
         provider = str(step_input.get("provider") or step_input.get("providerTypeKey") or "").strip().lower()
         mailbox_ref = str(step_input.get("mailbox_ref") or "").strip()
         mailbox_session_id = str(step_input.get("mailbox_session_id") or "").strip()
+        email_address = str(
+            step_input.get("email_address")
+            or step_input.get("emailAddress")
+            or step_input.get("email")
+            or ""
+        ).strip()
         source_path_text = str(step_input.get("source_path") or "").strip()
         error_code = str(step_input.get("error_code") or "").strip()
         preserve_enabled = is_truthy(step_input.get("preserve_enabled"))
@@ -183,6 +228,27 @@ def dispatch_easyemail_step(*, step_type: str, step_input: dict[str, Any]) -> di
             result.setdefault("provider", release_provider)
         if str(result.get("detail") or "").strip().lower() == "skipped_non_moemail":
             result["detail"] = "provider_does_not_support_release"
+        if str(result.get("detail") or "").strip().lower() == "missing_session_id" and email_address:
+            try:
+                recovered_result = release_mailbox_by_email_after_missing_session(
+                    email_address=email_address,
+                    provider_type_key=release_provider or provider,
+                )
+            except Exception as exc:
+                recovered_result = {
+                    "released": False,
+                    "detail": "missing_session_id",
+                    "provider": release_provider or provider,
+                    "email": email_address,
+                    "recovered_by_email": False,
+                    "recovery_error": str(exc),
+                    "matched_session_count": 0,
+                    "released_count": 0,
+                    "failed_count": 1,
+                    "results": [],
+                }
+            if recovered_result is not None:
+                result = recovered_result
 
         maybe_write_team_flow_update(
             source_path_text=source_path_text,

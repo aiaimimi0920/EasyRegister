@@ -39,6 +39,22 @@ class TypedConfigTests(unittest.TestCase):
             config = CleanupRuntimeConfig.from_env()
         self.assertEqual(123.0, config.sms_no_selection_cooldown_seconds)
 
+    def test_cleanup_runtime_config_parses_oauth_specific_cooldowns(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_OAUTH_RATE_LIMIT_COOLDOWN_SECONDS": "301",
+                "REGISTER_OAUTH_BLOCKED_COOLDOWN_SECONDS": "302",
+                "REGISTER_OAUTH_MISSING_SESSION_COOLDOWN_SECONDS": "303",
+            },
+            clear=True,
+        ):
+            config = CleanupRuntimeConfig.from_env()
+
+        self.assertEqual(301.0, config.oauth_rate_limit_cooldown_seconds)
+        self.assertEqual(302.0, config.oauth_blocked_cooldown_seconds)
+        self.assertEqual(303.0, config.oauth_missing_session_cooldown_seconds)
+
     def test_sms_runtime_config_parses_default_and_openai_business_policies(self) -> None:
         with mock.patch.dict(
             os.environ,

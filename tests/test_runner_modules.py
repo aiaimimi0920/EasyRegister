@@ -802,11 +802,56 @@ class RunnerFailuresTests(unittest.TestCase):
         }
         with mock.patch.dict(
             os.environ,
-            {"REGISTER_CREATE_ACCOUNT_COOLDOWN_SECONDS": "37"},
+            {
+                "REGISTER_CREATE_ACCOUNT_COOLDOWN_SECONDS": "11",
+                "REGISTER_OAUTH_BLOCKED_COOLDOWN_SECONDS": "37",
+            },
             clear=True,
         ):
             cooldown = runner_failures.extra_failure_cooldown_seconds(result=payload)
         self.assertEqual(37.0, cooldown)
+
+    def test_extra_failure_cooldown_seconds_uses_rate_limit_specific_cooldown(self) -> None:
+        payload = {
+            "errorStep": "obtain-codex-oauth",
+            "stepErrors": {
+                "obtain-codex-oauth": {
+                    "code": ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
+                    "message": "authorize_continue status=429",
+                }
+            },
+        }
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_CREATE_ACCOUNT_COOLDOWN_SECONDS": "11",
+                "REGISTER_OAUTH_RATE_LIMIT_COOLDOWN_SECONDS": "321",
+            },
+            clear=True,
+        ):
+            cooldown = runner_failures.extra_failure_cooldown_seconds(result=payload)
+        self.assertEqual(321.0, cooldown)
+
+    def test_extra_failure_cooldown_seconds_uses_missing_session_specific_cooldown(self) -> None:
+        payload = {
+            "errorStep": "obtain-codex-oauth",
+            "stepErrors": {
+                "obtain-codex-oauth": {
+                    "code": ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+                    "message": "authorize_init_missing_login_session",
+                }
+            },
+        }
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_CREATE_ACCOUNT_COOLDOWN_SECONDS": "11",
+                "REGISTER_OAUTH_MISSING_SESSION_COOLDOWN_SECONDS": "67",
+            },
+            clear=True,
+        ):
+            cooldown = runner_failures.extra_failure_cooldown_seconds(result=payload)
+        self.assertEqual(67.0, cooldown)
 
     def test_extra_failure_cooldown_seconds_covers_sms_no_selection_after_phone_wall(self) -> None:
         payload = {

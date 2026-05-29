@@ -140,6 +140,17 @@ def maybe_bridge_step_artifact(*, step_type: str, step_result: dict[str, Any]) -
     return bridged
 
 
+def validate_login_session_handoff_for_oauth(step_input: dict[str, Any]) -> None:
+    if "login_session" not in step_input:
+        return
+    login_session = step_input.get("login_session")
+    if not isinstance(login_session, dict) or not login_session:
+        raise RuntimeError("authorize_missing_login_session:login_session_handoff_missing")
+    if login_session.get("ok") is False:
+        detail = str(login_session.get("detail") or login_session.get("status") or "login_session_not_ok").strip()
+        raise RuntimeError(f"authorize_missing_login_session:{detail}")
+
+
 def invoke_easyprotocol(*, step_type: str, step_input: dict[str, Any]) -> dict[str, Any]:
     base_url = str(os.environ.get("EASY_PROTOCOL_BASE_URL") or "").strip() or DEFAULT_EASY_PROTOCOL_BASE_URL
     request_url = normalize_easyprotocol_request_url(base_url)
@@ -221,6 +232,7 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
                 "response": None,
             }
     if normalized_step_type == "obtain_codex_oauth":
+        validate_login_session_handoff_for_oauth(normalized_step_input)
         normalized_step_input.setdefault(
             "sms_verification",
             runtime_sms.build_phone_verification_step_input(

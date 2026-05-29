@@ -53,6 +53,16 @@ def step_output_ok(*, step_type: str, step_output: Any) -> tuple[bool, str]:
             or (step_output or {}).get("status")
             or f"{normalized_step_type}_failed"
         ).strip()
+    if normalized_step_type == "obtain_codex_oauth":
+        if isinstance(step_output, dict) and (
+            bool(step_output.get("ok")) or bool(str(step_output.get("successPath") or "").strip())
+        ):
+            return True, ""
+        return False, str(
+            (step_output or {}).get("detail")
+            or (step_output or {}).get("status")
+            or "obtain_codex_oauth_failed"
+        ).strip()
     if normalized_step_type == "release_proxy_chain":
         if isinstance(step_output, dict) and bool(step_output.get("released")):
             return True, ""

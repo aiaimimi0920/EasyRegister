@@ -1085,6 +1085,9 @@ class CleanupRuntimeConfig:
     mailbox_cleanup_failure_threshold: int
     team_cleanup_cooldown_seconds: float
     create_account_cooldown_seconds: float
+    oauth_rate_limit_cooldown_seconds: float
+    oauth_blocked_cooldown_seconds: float
+    oauth_missing_session_cooldown_seconds: float
     mailbox_failure_cooldown_seconds: float
     sms_no_selection_cooldown_seconds: float
     crash_cooldown_seconds: float
@@ -1099,6 +1102,9 @@ class CleanupRuntimeConfig:
             mailbox_cleanup_failure_threshold=max(1, env_int("REGISTER_MAILBOX_CLEANUP_FAILURE_THRESHOLD", 3)),
             team_cleanup_cooldown_seconds=max(0.0, env_float("REGISTER_TEAM_CLEANUP_COOLDOWN_SECONDS", 180.0)),
             create_account_cooldown_seconds=max(0.0, env_float("REGISTER_CREATE_ACCOUNT_COOLDOWN_SECONDS", 60.0)),
+            oauth_rate_limit_cooldown_seconds=max(0.0, env_float("REGISTER_OAUTH_RATE_LIMIT_COOLDOWN_SECONDS", 300.0)),
+            oauth_blocked_cooldown_seconds=max(0.0, env_float("REGISTER_OAUTH_BLOCKED_COOLDOWN_SECONDS", 180.0)),
+            oauth_missing_session_cooldown_seconds=max(0.0, env_float("REGISTER_OAUTH_MISSING_SESSION_COOLDOWN_SECONDS", 90.0)),
             mailbox_failure_cooldown_seconds=max(0.0, env_float("REGISTER_MAILBOX_FAILURE_COOLDOWN_SECONDS", 15.0)),
             sms_no_selection_cooldown_seconds=max(0.0, env_float("REGISTER_SMS_NO_SELECTION_COOLDOWN_SECONDS", 120.0)),
             crash_cooldown_seconds=max(0.0, env_float("REGISTER_CRASH_COOLDOWN_SECONDS", 20.0)),

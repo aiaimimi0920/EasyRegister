@@ -204,6 +204,8 @@ def classify_error_code(
 
     if ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING in combined:
         return ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING
+    if ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION in combined:
+        return ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION
     if (
         normalized_step_type == "invite_codex_member"
         and (

@@ -1401,6 +1401,20 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         wait_phone_code.assert_called_once()
         report_phone_outcome.assert_called_once()
 
+    def test_dispatch_obtain_codex_oauth_rejects_missing_login_session_handoff_before_protocol_call(self) -> None:
+        with mock.patch.object(easyprotocol_runtime, "invoke_easyprotocol") as invoke_easyprotocol:
+            with self.assertRaisesRegex(RuntimeError, "authorize_missing_login_session"):
+                easyprotocol_runtime.dispatch_easyprotocol_step(
+                    step_type="obtain_codex_oauth",
+                    step_input={
+                        "source_path": "C:/tmp/small.json",
+                        "output_dir": "C:/tmp/out",
+                        "login_session": "",
+                    },
+                )
+
+        invoke_easyprotocol.assert_not_called()
+
 
 class EasyEmailRuntimeTests(unittest.TestCase):
     def test_release_mailbox_preserve_updates_team_flow_state(self) -> None:
@@ -1471,6 +1485,47 @@ class EasyEmailRuntimeTests(unittest.TestCase):
         self.assertFalse(result["released"])
         self.assertEqual("not_found", result["detail"])
         self.assertEqual("im215", result["provider"])
+
+    def test_release_mailbox_recovers_by_email_when_session_id_is_missing(self) -> None:
+        with mock.patch.object(easyemail_runtime, "ensure_easyemail_runtime_defaults"), mock.patch.object(
+            easyemail_runtime,
+            "release_mailbox",
+            return_value={"released": False, "detail": "missing_session_id"},
+        ) as release_mailbox, mock.patch.object(
+            easyemail_runtime,
+            "release_mailbox_sessions_by_email",
+            return_value=[
+                {
+                    "sessionId": "recovered-session",
+                    "email": "user@example.com",
+                    "release": {"released": True, "detail": "deleted"},
+                }
+            ],
+        ) as release_sessions:
+            result = easyemail_runtime.dispatch_easyemail_step(
+                step_type="release_mailbox",
+                step_input={
+                    "provider": "cloudflare_temp_email",
+                    "email_address": "user@example.com",
+                    "mailbox_session_id": "",
+                },
+            )
+
+        release_mailbox.assert_called_once_with(
+            mailbox_ref=None,
+            session_id=None,
+            reason="dst_flow_cleanup",
+        )
+        release_sessions.assert_called_once_with(
+            email_address="user@example.com",
+            provider_type_key="cloudflare_temp_email",
+            reason="dst_flow_cleanup_missing_session",
+            limit=20,
+        )
+        self.assertTrue(result["released"])
+        self.assertEqual("recovered_by_email", result["detail"])
+        self.assertEqual(1, result["released_count"])
+        self.assertEqual("cloudflare_temp_email", result["provider"])
 
     def test_release_mailbox_sessions_by_email_reports_cleanup_summary(self) -> None:
         with mock.patch.object(easyemail_runtime, "ensure_easyemail_runtime_defaults"):

@@ -9,14 +9,117 @@ from unittest import mock
 
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+PYTHON_SHARED_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "python_shared" / "src"
+for candidate in (SRC_ROOT, PYTHON_SHARED_ROOT):
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 import dst_flow  # noqa: E402
 from others import easyemail_runtime  # noqa: E402
+from others.dst_flow_loader import load_dst_flow  # noqa: E402
 
 
 class DstFlowIntegrationTests(unittest.TestCase):
+    def test_cleanup_release_mailbox_missing_session_does_not_fail_successful_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "main-work",
+                                    "type": "noop_success",
+                                    "metadata": {"owner": "orchestration"},
+                                    "saveAs": "main_work",
+                                },
+                                {
+                                    "id": "release-mailbox",
+                                    "type": "release_mailbox",
+                                    "metadata": {
+                                        "owner": "easyemail",
+                                        "stage": "cleanup",
+                                        "alwaysRun": True,
+                                    },
+                                    "input": {"mailbox_session_id": ""},
+                                    "saveAs": "release_mailbox",
+                                },
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "noop_success":
+                    return {"ok": True, "status": "ok"}
+                if step_type == "release_mailbox":
+                    return {"released": False, "detail": "missing_session_id"}
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {"orchestration": _dispatcher, "easyemail": _dispatcher},
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual("ok", result.steps["main-work"])
+        self.assertEqual("cleanup_warning", result.steps["release-mailbox"])
+        self.assertEqual("missing_session_id", result.step_errors["release-mailbox"]["message"])
+        self.assertEqual("", result.error_step)
+
+    def test_obtain_codex_oauth_false_result_fails_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "obtain-codex-oauth",
+                                    "type": "obtain_codex_oauth",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "saveAs": "obtain_codex_oauth",
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                return {"ok": False, "status": "authorize_continue_failed", "detail": "authorize_missing_login_session"}
+
+            with mock.patch.dict(dst_flow.OWNER_DISPATCHERS, {"easyprotocol": _dispatcher}, clear=True):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertFalse(result.ok)
+        self.assertEqual("obtain-codex-oauth", result.error_step)
+        self.assertEqual("authorize_missing_login_session", result.step_errors["obtain-codex-oauth"]["code"])
+
+    def test_canonical_openai_flows_handoff_login_session_to_codex_oauth(self) -> None:
+        flows_dir = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
+        for flow_name in ("codex-openai-account-v1.semantic-flow.json", "codex-openai-oauth-continue-v1.semantic-flow.json"):
+            with self.subTest(flow_name=flow_name):
+                plan = load_dst_flow(flows_dir / flow_name)
+                obtain_steps = [statement for statement in plan.steps if statement.step_id == "obtain-codex-oauth"]
+                self.assertEqual(1, len(obtain_steps))
+                self.assertEqual("{{initialize_chatgpt_login_session}}", obtain_steps[0].input.get("login_session"))
+
     def test_run_dst_flow_once_claims_configured_input_file_and_releases_mailbox_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             input_dir = Path(tmp_dir) / "input"

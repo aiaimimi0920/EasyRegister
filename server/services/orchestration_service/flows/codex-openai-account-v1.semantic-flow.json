@@ -198,7 +198,10 @@
           "source_path": "{{create_openai_account.storage_path}}",
           "output_dir": "{{task.output_dir}}",
           "proxy_url": "{{proxy_chain.proxy_url}}",
-          "workspace_selector": "{{task.free_workspace_selector}}"
+          "workspace_selector": "{{task.free_workspace_selector}}",
+          "login_session": "{{initialize_chatgpt_login_session}}",
+          "mailbox_ref": "{{mailbox.mailbox_ref}}",
+          "mailbox_session_id": "{{mailbox.session_id}}"
         },
         "saveAs": "obtain_codex_oauth",
         "metadata": {
@@ -257,6 +260,8 @@
         "type": "release_mailbox",
         "input": {
           "source_path": "{{create_openai_account.storage_path}}",
+          "email_address": "{{mailbox.email}}",
+          "provider": "{{mailbox.provider}}",
           "mailbox_ref": "{{mailbox.mailbox_ref}}",
           "mailbox_session_id": "{{mailbox.session_id}}"
         },

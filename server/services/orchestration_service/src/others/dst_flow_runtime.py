@@ -165,6 +165,23 @@ def statement_enabled(*, statement: DstStatement, state: dict[str, Any]) -> bool
     return bool(resolved)
 
 
+def cleanup_failure_is_nonfatal(*, statement: DstStatement, flow_failed: bool) -> bool:
+    if flow_failed:
+        return False
+    if not step_always_run(statement):
+        return False
+    stage = str(statement.metadata.get("stage") or "").strip().lower()
+    if stage != "cleanup":
+        return False
+    return str(statement.step_type or "").strip().lower() in {
+        "release_mailbox",
+        "release_mailbox_sessions_by_email",
+        "release_proxy_chain",
+        "revoke_codex_member",
+        "revoke_team_members",
+    }
+
+
 def run_statement_once(
     *,
     statement: DstStatement,
@@ -409,6 +426,9 @@ def run_dst_flow_once(
                 except Exception as exc:
                     error_details = step_error_details(step_type=statement.step_type, exc=exc)
                     result.step_errors[statement.step_id] = error_details
+                    if cleanup_failure_is_nonfatal(statement=statement, flow_failed=flow_failed):
+                        result.steps[statement.step_id] = "cleanup_warning"
+                        break
                     if not flow_failed and maybe_prepare_special_step_retry(
                         statement=statement,
                         state=state,
