@@ -309,6 +309,64 @@ class RunnerArtifactsTests(unittest.TestCase):
             self.assertTrue(copied_path.is_file())
             self.assertEqual("small-legacy.json", copied_path.name)
 
+    def test_copy_openai_oauth_artifacts_to_pool_preserves_chatgpt_web_refresh_material(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_output_dir = Path(tmp_dir) / "run-1"
+            source_dir = run_output_dir / "openai_oauth"
+            pool_dir = Path(tmp_dir) / "openai" / "failed-twice"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            payload_path = source_dir / "small-refresh.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "email": "refresh@example.com",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                        "createdAt": "2026-05-30T00:00:00Z",
+                        "accessToken": "access.demo",
+                        "refreshToken": "refresh.demo",
+                        "idToken": "id.demo",
+                        "expiresAt": "2026-06-01T00:00:00Z",
+                        "oauthClientId": "app_2SKx67EdpoN0G6j64rFvigXD",
+                        "oauthTokenEndpoint": "https://auth.openai.com/api/accounts/oauth/token",
+                        "refreshStrategy": "oauth_token",
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"},
+                            "oauthTokens": {
+                                "access_token": "access.demo",
+                                "refresh_token": "refresh.demo",
+                                "id_token": "id.demo",
+                                "expires_in": 3600,
+                                "token_type": "Bearer",
+                                "exchanged_at": "2026-05-30T00:00:00Z",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0",
+                },
+                clear=False,
+            ):
+                copied_paths = runner_artifacts.copy_openai_oauth_artifacts_to_pool(
+                    run_output_dir=run_output_dir,
+                    pool_dir=pool_dir,
+                    worker_label="worker-01",
+                    task_index=1,
+                )
+
+            self.assertEqual(1, len(copied_paths))
+            copied_payload = json.loads(Path(copied_paths[0]).read_text(encoding="utf-8"))
+            self.assertEqual("refresh.demo", copied_payload["refreshToken"])
+            self.assertEqual("id.demo", copied_payload["idToken"])
+            self.assertEqual("refresh.demo", copied_payload["chatgptLoginDetails"]["oauthTokens"]["refresh_token"])
+
     def test_copy_openai_oauth_artifacts_to_pool_materializes_from_step_outputs_when_source_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_output_dir = Path(tmp_dir) / "run-1"
