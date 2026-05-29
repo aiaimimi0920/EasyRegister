@@ -335,19 +335,6 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
         return None
 
     state_payload = _load_mailbox_domain_state()
-    if provider and _mailbox_provider_is_business_blacklisted(
-        provider,
-        state_payload,
-        business_key=resolved_business_key,
-    ):
-        return {
-            "reason": "dynamic_business_provider_blacklist",
-            "business_key": resolved_business_key,
-            "provider": provider,
-            "domain": domain,
-            "email": email,
-        }
-
     explicit_blacklist = set(_resolve_mailbox_explicit_blacklist_domains(business_key=resolved_business_key))
     if domain in explicit_blacklist:
         return {
@@ -362,6 +349,19 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
     if business_domain_pool and domain not in business_domain_pool:
         return {
             "reason": "outside_business_domain_pool",
+            "business_key": resolved_business_key,
+            "provider": provider,
+            "domain": domain,
+            "email": email,
+        }
+
+    if provider and not business_domain_pool and _mailbox_provider_is_business_blacklisted(
+        provider,
+        state_payload,
+        business_key=resolved_business_key,
+    ):
+        return {
+            "reason": "dynamic_business_provider_blacklist",
             "business_key": resolved_business_key,
             "provider": provider,
             "domain": domain,
@@ -542,11 +542,7 @@ def resolve_mailbox(
         selected_domain, domain_selection_reason = _select_business_mailbox_domain(
             business_key=resolved_business_key,
         )
-        if selected_domain and not _mailbox_provider_is_business_blacklisted(
-            "moemail",
-            _load_mailbox_domain_state(),
-            business_key=resolved_business_key,
-        ):
+        if selected_domain:
             json_log(
                 {
                     "event": "register_mailbox_business_domain_selected",
