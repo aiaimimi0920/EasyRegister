@@ -18,12 +18,15 @@ from shared_sms.easy_sms_client import open_sms_session, report_sms_outcome, wai
 DEFAULT_EASY_SMS_BASE_URL = "http://localhost:18083"
 DEFAULT_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS = 24 * 60 * 60
 DEFAULT_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS = 30 * 60
+DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD = 5
+DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS = 60 * 60
 DEFAULT_SMS_SESSION_LOCAL_RETRY_ATTEMPTS = 6
 PHONE_SCOPED_TERMINAL_CODES = {
     "phone_number_in_use",
     "phone_max_usage_exceeded",
     "rate_limit_exceeded",
 }
+PROVIDER_TERMINAL_OUTCOMES_KEY = "providerTerminalOutcomes"
 
 
 def _sms_runtime_config() -> SmsRuntimeConfig:
@@ -39,16 +42,25 @@ def _load_sms_state(*, config: SmsRuntimeConfig | None = None) -> dict[str, Any]
     resolved_config = config or _sms_runtime_config()
     path = resolved_config.state_path
     if not path.is_file():
-        return {"phones": {}, "providers": {}}
+        return {"phones": {}, "providers": {}, PROVIDER_TERMINAL_OUTCOMES_KEY: {}}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return {"phones": {}, "providers": {}}
+        return {"phones": {}, "providers": {}, PROVIDER_TERMINAL_OUTCOMES_KEY: {}}
     if not isinstance(payload, dict):
-        return {"phones": {}, "providers": {}}
+        return {"phones": {}, "providers": {}, PROVIDER_TERMINAL_OUTCOMES_KEY: {}}
     phones = payload.get("phones") if isinstance(payload.get("phones"), dict) else {}
     providers = payload.get("providers") if isinstance(payload.get("providers"), dict) else {}
-    return {"phones": dict(phones), "providers": dict(providers)}
+    provider_outcomes = (
+        payload.get(PROVIDER_TERMINAL_OUTCOMES_KEY)
+        if isinstance(payload.get(PROVIDER_TERMINAL_OUTCOMES_KEY), dict)
+        else {}
+    )
+    return {
+        "phones": dict(phones),
+        "providers": dict(providers),
+        PROVIDER_TERMINAL_OUTCOMES_KEY: dict(provider_outcomes),
+    }
 
 
 def _write_sms_state(*, payload: dict[str, Any], config: SmsRuntimeConfig | None = None) -> None:
@@ -60,11 +72,22 @@ def _is_phone_scoped_terminal_code(terminal_code: str) -> bool:
     return str(terminal_code or "").strip().lower() in PHONE_SCOPED_TERMINAL_CODES
 
 
+def _parse_iso_timestamp(value: Any) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
 def _prune_sms_state(*, payload: dict[str, Any], now_ts: float | None = None) -> dict[str, Any]:
     effective_now_ts = float(now_ts or time.time())
     normalized = {
         "phones": {},
         "providers": {},
+        PROVIDER_TERMINAL_OUTCOMES_KEY: {},
     }
     for bucket_key in ("phones", "providers"):
         bucket = payload.get(bucket_key) if isinstance(payload.get(bucket_key), dict) else {}
@@ -82,7 +105,67 @@ def _prune_sms_state(*, payload: dict[str, Any], now_ts: float | None = None) ->
             if blocked_until_ts > effective_now_ts:
                 target[key] = dict(raw_value)
         normalized[bucket_key] = target
+    outcome_window_seconds = _resolve_sms_phone_scoped_provider_failure_window_seconds()
+    min_outcome_ts = effective_now_ts - outcome_window_seconds
+    raw_outcomes = (
+        payload.get(PROVIDER_TERMINAL_OUTCOMES_KEY)
+        if isinstance(payload.get(PROVIDER_TERMINAL_OUTCOMES_KEY), dict)
+        else {}
+    )
+    for raw_provider, raw_entries in raw_outcomes.items():
+        provider_key = str(raw_provider or "").strip().lower()
+        if not provider_key or not isinstance(raw_entries, list):
+            continue
+        entries: list[dict[str, Any]] = []
+        for raw_entry in raw_entries:
+            if not isinstance(raw_entry, dict):
+                continue
+            reason = str(raw_entry.get("reason") or "").strip()
+            if not _is_phone_scoped_terminal_code(reason):
+                continue
+            try:
+                recorded_at_ts = float(raw_entry.get("atTs") or 0.0)
+            except Exception:
+                recorded_at_ts = 0.0
+            if recorded_at_ts < min_outcome_ts:
+                continue
+            entries.append(dict(raw_entry))
+        if entries:
+            normalized[PROVIDER_TERMINAL_OUTCOMES_KEY][provider_key] = entries
     return normalized
+
+
+def _provider_blacklist_from_repeated_phone_scoped_state(
+    *,
+    payload: dict[str, Any],
+    now_ts: float | None = None,
+) -> tuple[str, ...]:
+    threshold = _resolve_sms_phone_scoped_provider_failure_threshold()
+    if threshold <= 0:
+        return ()
+    effective_now_ts = float(now_ts or time.time())
+    min_recorded_at_ts = effective_now_ts - _resolve_sms_phone_scoped_provider_failure_window_seconds()
+    counts: dict[str, int] = {}
+    phones = payload.get("phones") if isinstance(payload.get("phones"), dict) else {}
+    for raw_value in phones.values():
+        if not isinstance(raw_value, dict):
+            continue
+        reason = str(raw_value.get("reason") or "").strip()
+        if not _is_phone_scoped_terminal_code(reason):
+            continue
+        provider_key = str(raw_value.get("providerKey") or "").strip().lower()
+        if not provider_key:
+            continue
+        recorded_at_ts = _parse_iso_timestamp(raw_value.get("blockedAt"))
+        if recorded_at_ts is None:
+            try:
+                recorded_at_ts = float(raw_value.get("blockedUntilTs") or 0.0) - _resolve_sms_terminal_phone_blacklist_seconds()
+            except Exception:
+                recorded_at_ts = 0.0
+        if recorded_at_ts < min_recorded_at_ts:
+            continue
+        counts[provider_key] = counts.get(provider_key, 0) + 1
+    return tuple(sorted(provider_key for provider_key, count in counts.items() if count >= threshold))
 
 
 def _resolve_sms_terminal_phone_blacklist_seconds() -> int:
@@ -105,6 +188,28 @@ def _resolve_sms_terminal_provider_blacklist_seconds() -> int:
         return max(0, int(float(raw or DEFAULT_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS)))
     except Exception:
         return DEFAULT_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS
+
+
+def _resolve_sms_phone_scoped_provider_failure_threshold() -> int:
+    raw = str(
+        os.environ.get("REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD")
+        or DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD
+    ).strip()
+    try:
+        return max(0, int(float(raw or DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD)))
+    except Exception:
+        return DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD
+
+
+def _resolve_sms_phone_scoped_provider_failure_window_seconds() -> int:
+    raw = str(
+        os.environ.get("REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS")
+        or DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS
+    ).strip()
+    try:
+        return max(1, int(float(raw or DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS)))
+    except Exception:
+        return DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS
 
 
 def _resolve_sms_session_local_retry_attempts() -> int:
@@ -183,7 +288,40 @@ def record_terminal_phone_outcome(
             "blockedUntil": phone_until.isoformat().replace("+00:00", "Z"),
             "blockedUntilTs": phone_until.timestamp(),
         }
-    if normalized_provider and not _is_phone_scoped_terminal_code(normalized_code):
+    if normalized_provider and _is_phone_scoped_terminal_code(normalized_code):
+        provider_outcomes = payload.setdefault(PROVIDER_TERMINAL_OUTCOMES_KEY, {})
+        entries = provider_outcomes.setdefault(normalized_provider, [])
+        if not isinstance(entries, list):
+            entries = []
+            provider_outcomes[normalized_provider] = entries
+        entries.append(
+            {
+                "reason": normalized_code,
+                "detail": normalized_message,
+                "phoneNumber": normalized_phone,
+                "at": now.isoformat().replace("+00:00", "Z"),
+                "atTs": now.timestamp(),
+            }
+        )
+        payload = _prune_sms_state(payload=payload, now_ts=now.timestamp())
+        entries = list(payload.get(PROVIDER_TERMINAL_OUTCOMES_KEY, {}).get(normalized_provider, []))
+        threshold = _resolve_sms_phone_scoped_provider_failure_threshold()
+        if threshold > 0 and len(entries) >= threshold:
+            provider_until = now + timedelta(seconds=_resolve_sms_terminal_provider_blacklist_seconds())
+            payload.setdefault("providers", {})[normalized_provider] = {
+                "reason": "repeated_phone_scoped_terminal",
+                "detail": (
+                    f"{len(entries)} phone-scoped terminal outcomes within "
+                    f"{_resolve_sms_phone_scoped_provider_failure_window_seconds()} seconds; "
+                    f"latest={normalized_code}"
+                ),
+                "phoneNumber": normalized_phone,
+                "blockedAt": now.isoformat().replace("+00:00", "Z"),
+                "blockedUntil": provider_until.isoformat().replace("+00:00", "Z"),
+                "blockedUntilTs": provider_until.timestamp(),
+                "terminalFailureCount": len(entries),
+            }
+    elif normalized_provider and not _is_phone_scoped_terminal_code(normalized_code):
         provider_until = now + timedelta(seconds=_resolve_sms_terminal_provider_blacklist_seconds())
         payload.setdefault("providers", {})[normalized_provider] = {
             "reason": normalized_code,
@@ -217,6 +355,11 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
     blocked_providers = {
         str(key or "").strip().lower() for key in state_payload.get("providers", {}).keys() if str(key or "").strip()
     }
+    blocked_providers.update(
+        _provider_blacklist_from_repeated_phone_scoped_state(
+            payload=state_payload,
+        )
+    )
     attempt_provider_blacklist = set(policy.explicit_blacklist_providers) | blocked_providers
     provider_country_blacklist = _provider_country_blacklist_from_state(
         payload=state_payload,

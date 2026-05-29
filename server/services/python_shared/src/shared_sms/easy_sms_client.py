@@ -22,6 +22,11 @@ SUPPORTED_SMS_SELECTION_MODES = {
     "stock-first",
     "balanced",
 }
+UNPRODUCTIVE_SELECTION_HEALTH_STATES = {
+    "empty",
+    "challenge",
+    "blocked",
+}
 
 
 @dataclass(frozen=True)
@@ -281,6 +286,11 @@ def _query_provider_selection_candidates(
     plan_response = _get_json(
         "/sms/query/providers/selection-plan?" + urllib.parse.urlencode(query)
     )
+    if "candidates" not in plan_response:
+        return _query_provider_catalog_candidates(
+            provider_blacklist=provider_blacklist,
+            allow_paid=allow_paid,
+        )
     raw_candidates = plan_response.get("candidates") or []
     candidates: list[str] = []
     blacklist = {str(item or "").strip().lower() for item in provider_blacklist if str(item or "").strip()}
@@ -293,17 +303,10 @@ def _query_provider_selection_candidates(
         if raw_candidate.get("available") is False:
             continue
         health_state = str(raw_candidate.get("healthState") or "").strip().lower()
-        if health_state == "empty":
+        if health_state in UNPRODUCTIVE_SELECTION_HEALTH_STATES:
             continue
         candidates.append(provider_key)
-    if candidates:
-        return candidates
-    if raw_candidates:
-        return []
-    return _query_provider_catalog_candidates(
-        provider_blacklist=provider_blacklist,
-        allow_paid=allow_paid,
-    )
+    return candidates
 
 
 def _query_provider_catalog_candidates(
@@ -369,10 +372,9 @@ def open_sms_session(
         "allowReuse": bool(allow_reuse),
         "maxBindingsPerPhone": max(1, int(max_bindings_per_phone or 1)),
     }
-    if selection_candidates:
-        candidate_provider_keys = list(selection_candidates)
-    else:
-        candidate_provider_keys = [""]
+    if not selection_candidates:
+        raise RuntimeError("sms_no_selection_plan_candidates")
+    candidate_provider_keys = list(selection_candidates)
     first_country_code = _first_country_code(country_codes)
     if first_country_code:
         base_payload["countryCode"] = first_country_code
@@ -432,15 +434,6 @@ def open_sms_session(
         return selected_session
     if selection_candidates and opened_session_attempts == 0 and provider_country_skip_count > 0:
         raise RuntimeError("sms_no_unblocked_provider_country_candidates")
-    if selection_candidates:
-        fallback_provider_keys = _query_provider_catalog_candidates(
-            provider_blacklist=provider_blacklist,
-            allow_paid=allow_paid,
-            exclude_provider_keys=tuple(selection_candidates),
-        )
-        fallback_session = _try_provider_candidates(fallback_provider_keys)
-        if fallback_session is not None:
-            return fallback_session
     if last_error is not None:
         raise last_error
     raise RuntimeError("sms service returned invalid sms session")

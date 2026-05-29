@@ -209,37 +209,25 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
         self.assertEqual(["onlinesim"], candidates)
 
-    def test_easy_sms_client_falls_back_to_provider_catalog_when_selection_plan_is_exhausted(self) -> None:
+    def test_easy_sms_client_does_not_catalog_fallback_when_selection_plan_is_exhausted(self) -> None:
         post_payloads: list[dict[str, object]] = []
 
         def _get(path: str) -> dict[str, object]:
             if path.startswith("/sms/query/providers/selection-plan?"):
                 return {"candidates": [{"providerKey": "receive_smss"}]}
             if path.startswith("/sms/query/providers?"):
-                return {
-                    "providers": [
-                        {"key": "receive_smss"},
-                        {"key": "onlinesim"},
-                    ]
-                }
+                raise AssertionError("catalog fallback should not run after an authoritative selection plan")
             return {}
 
         def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
             post_payloads.append(dict(payload))
             provider_key = str(payload.get("providerKey") or "")
-            if provider_key == "receive_smss":
-                raise RuntimeError(
-                    'sms service POST /sms/sessions/open failed: HTTP 503 '
-                    '[code=Provider "receive_smss" is currently unavailable: '
-                    'No eligible public numbers were available for a synthetic activation session.]'
-                )
-            return {
-                "session": {
-                    "id": "sms_125",
-                    "phoneNumber": "+31616835325",
-                    "providerKey": provider_key,
-                }
-            }
+            self.assertEqual("receive_smss", provider_key)
+            raise RuntimeError(
+                'sms service POST /sms/sessions/open failed: HTTP 503 '
+                '[code=Provider "receive_smss" is currently unavailable: '
+                'No eligible public numbers were available for a synthetic activation session.]'
+            )
 
         with mock.patch.object(
             easy_sms_client,
@@ -254,52 +242,31 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             "_post_json",
             side_effect=_post,
         ):
-            session = easy_sms_client.open_sms_session(
-                business_key="openai",
-                provider_blacklist=(),
-                allow_paid=False,
-                allow_reuse=False,
-                max_bindings_per_phone=1,
-                country_codes=("+31",),
-                selection_mode="balanced",
-            )
+            with self.assertRaisesRegex(RuntimeError, "No eligible public numbers"):
+                easy_sms_client.open_sms_session(
+                    business_key="openai",
+                    provider_blacklist=(),
+                    allow_paid=False,
+                    allow_reuse=False,
+                    max_bindings_per_phone=1,
+                    country_codes=("+31",),
+                    selection_mode="balanced",
+                )
 
-        self.assertEqual(["receive_smss", "onlinesim"], [payload["providerKey"] for payload in post_payloads])
-        self.assertEqual("onlinesim", session.provider_key)
-        self.assertEqual("sms_125", session.session_id)
+        self.assertEqual(["receive_smss"], [payload["providerKey"] for payload in post_payloads])
 
-    def test_easy_sms_client_uses_provider_catalog_when_selection_plan_is_empty(self) -> None:
+    def test_easy_sms_client_does_not_catalog_fallback_when_selection_plan_is_empty(self) -> None:
         post_payloads: list[dict[str, object]] = []
 
         def _get(path: str) -> dict[str, object]:
             if path.startswith("/sms/query/providers/selection-plan?"):
                 return {"candidates": []}
             if path.startswith("/sms/query/providers?"):
-                return {
-                    "providers": [
-                        {"key": "receive_smss"},
-                        {"key": "onlinesim"},
-                    ]
-                }
+                raise AssertionError("catalog fallback should not run when selection plan is empty")
             return {}
 
         def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
             post_payloads.append(dict(payload))
-            provider_key = str(payload.get("providerKey") or "")
-            if provider_key == "receive_smss":
-                raise RuntimeError(
-                    'sms service POST /sms/sessions/open failed: HTTP 503 '
-                    '[code=Provider "receive_smss" is currently unavailable: '
-                    'No eligible public numbers were available for a synthetic activation session.]'
-                )
-            if provider_key == "onlinesim":
-                return {
-                    "session": {
-                        "id": "sms_126",
-                        "phoneNumber": "+46720085698",
-                        "providerKey": provider_key,
-                    }
-                }
             raise AssertionError(f"unexpected provider open payload: {payload!r}")
 
         with mock.patch.object(
@@ -315,19 +282,18 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             "_post_json",
             side_effect=_post,
         ):
-            session = easy_sms_client.open_sms_session(
-                business_key="openai",
-                provider_blacklist=(),
-                allow_paid=False,
-                allow_reuse=False,
-                max_bindings_per_phone=1,
-                country_codes=("+46",),
-                selection_mode="balanced",
-            )
+            with self.assertRaisesRegex(RuntimeError, "sms_no_selection_plan_candidates"):
+                easy_sms_client.open_sms_session(
+                    business_key="openai",
+                    provider_blacklist=(),
+                    allow_paid=False,
+                    allow_reuse=False,
+                    max_bindings_per_phone=1,
+                    country_codes=("+46",),
+                    selection_mode="balanced",
+                )
 
-        self.assertEqual(["receive_smss", "onlinesim"], [payload["providerKey"] for payload in post_payloads])
-        self.assertEqual("onlinesim", session.provider_key)
-        self.assertEqual("sms_126", session.session_id)
+        self.assertEqual([], post_payloads)
 
     def test_easy_sms_client_rotates_country_codes_when_phone_is_blacklisted(self) -> None:
         post_payloads: list[dict[str, object]] = []
@@ -961,6 +927,69 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             captured_provider_country_blacklists,
         )
 
+    def test_open_phone_session_for_business_blocks_provider_from_repeated_phone_scoped_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "phones": {
+                            "+15550000001": {
+                                "blockedUntilTs": 9999999999,
+                                "blockedAt": "2026-01-01T00:00:00Z",
+                                "providerKey": "generic_provider",
+                                "reason": "phone_number_in_use",
+                            },
+                            "+15550000002": {
+                                "blockedUntilTs": 9999999999,
+                                "blockedAt": "2026-01-01T00:00:10Z",
+                                "providerKey": "generic_provider",
+                                "reason": "rate_limit_exceeded",
+                            },
+                            "+15550000003": {
+                                "blockedUntilTs": 9999999999,
+                                "blockedAt": "2026-01-01T00:00:20Z",
+                                "providerKey": "generic_provider",
+                                "reason": "phone_max_usage_exceeded",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            captured_blacklists: list[tuple[str, ...]] = []
+
+            def _open_sms_session(**kwargs):
+                captured_blacklists.append(tuple(kwargs["provider_blacklist"]))
+                return easy_sms_client.SmsSession(
+                    session_id="sms_2",
+                    phone_number="+15557654321",
+                    provider_key="other_provider",
+                )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD": "3",
+                    "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS": "9999999999",
+                    "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"enabled":true,"providerBlacklist":["static_blocked"],'
+                        '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
+                        '"countryCodes":[],"selectionMode":"balanced"}}'
+                    ),
+                },
+                clear=False,
+            ), mock.patch.object(
+                runtime_sms,
+                "open_sms_session",
+                side_effect=_open_sms_session,
+            ):
+                session = runtime_sms.open_phone_session_for_business(business_key="openai")
+
+        self.assertEqual("sms_2", session["sessionId"])
+        self.assertEqual(("generic_provider", "static_blocked"), captured_blacklists[0])
+
     def test_open_phone_session_for_business_retries_transient_open_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
@@ -1051,6 +1080,38 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertIn("+36707448042", payload["phones"])
         self.assertEqual("rate_limit_exceeded", payload["phones"]["+36707448042"]["reason"])
         self.assertNotIn("onlinesim", payload["providers"])
+
+    def test_record_terminal_phone_outcome_escalates_repeated_phone_scoped_failures_to_provider_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "3600",
+                    "REGISTER_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS": "1800",
+                    "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD": "3",
+                    "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS": "3600",
+                },
+                clear=False,
+            ):
+                for index, terminal_code in enumerate(
+                    ("phone_number_in_use", "rate_limit_exceeded", "phone_max_usage_exceeded"),
+                    start=1,
+                ):
+                    runtime_sms.record_terminal_phone_outcome(
+                        phone_number=f"+1555000000{index}",
+                        provider_key="generic_provider",
+                        terminal_code=terminal_code,
+                        terminal_message="Phone verification terminal.",
+                    )
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertIn("generic_provider", payload["providers"])
+        self.assertEqual("repeated_phone_scoped_terminal", payload["providers"]["generic_provider"]["reason"])
+        self.assertEqual(3, payload["providers"]["generic_provider"]["terminalFailureCount"])
 
     def test_open_phone_session_for_business_ignores_legacy_phone_scoped_provider_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
