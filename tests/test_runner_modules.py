@@ -309,6 +309,46 @@ class RunnerArtifactsTests(unittest.TestCase):
             self.assertTrue(copied_path.is_file())
             self.assertEqual("small-legacy.json", copied_path.name)
 
+    def test_copy_openai_oauth_artifacts_to_pool_ignores_seed_age_during_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_output_dir = Path(tmp_dir) / "run-1"
+            legacy_dir = run_output_dir / "small_success"
+            pool_dir = Path(tmp_dir) / "openai" / "failed-once"
+            legacy_dir.mkdir(parents=True, exist_ok=True)
+            payload_path = legacy_dir / "small-old-but-valid.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "email": "legacy@example.com",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                        "createdAt": "2000-01-01T00:00:00Z",
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "5",
+                },
+                clear=False,
+            ):
+                copied_paths = runner_artifacts.copy_openai_oauth_artifacts_to_pool(
+                    run_output_dir=run_output_dir,
+                    pool_dir=pool_dir,
+                    worker_label="worker-01",
+                    task_index=1,
+                )
+
+            self.assertEqual(1, len(copied_paths))
+            self.assertEqual("small-old-but-valid.json", Path(copied_paths[0]).name)
+
     def test_copy_openai_oauth_artifacts_to_pool_preserves_chatgpt_web_refresh_material(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_output_dir = Path(tmp_dir) / "run-1"

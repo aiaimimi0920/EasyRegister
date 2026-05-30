@@ -266,7 +266,7 @@ def copy_openai_oauth_artifacts_to_pool(
         except Exception as exc:
             discarded_paths.append({"source_path": str(resolved_source), "reason": f"load_failed:{exc}"})
             continue
-        valid, reason = validate_openai_oauth_seed_payload(payload)
+        valid, reason = validate_openai_oauth_seed_payload(payload, enforce_max_age=False)
         if not valid:
             discarded_paths.append({"source_path": str(resolved_source), "reason": reason})
             continue
