@@ -74,6 +74,7 @@ def _is_retryable_phone_code_submission_error(exc: BaseException) -> bool:
             "wrong code",
             "incorrect code",
             "invalid verification code",
+            "phone_code_submit_failed",
         )
     )
 

@@ -168,6 +168,7 @@ def extra_failure_cooldown_seconds(*, result: Any) -> float:
             ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
             ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
             ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+            ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
             ErrorCodes.PROXY_CONNECT_FAILED,
             ErrorCodes.TRANSPORT_ERROR,
             step_id=error_step,
@@ -185,6 +186,9 @@ def extra_failure_cooldown_seconds(*, result: Any) -> float:
                 "rate limit exceeded",
                 "oauth_authorize_repair_challenge",
                 "platform_oauth_token_exchange_failed",
+                "handshake operation timed out",
+                "operation timed out",
+                "timed out",
                 "unexpected_eof_while_reading",
                 "eof occurred in violation of protocol",
             )

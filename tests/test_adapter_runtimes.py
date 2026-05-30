@@ -1035,6 +1035,91 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             report_phone_outcome.call_args_list,
         )
 
+    def test_dispatch_obtain_codex_oauth_retries_generic_phone_code_submit_failed_with_next_number(self) -> None:
+        captured_inputs: list[dict[str, object]] = []
+        phone_sessions = [
+            {"sessionId": "sms_1", "phoneNumber": "+15550000011", "providerKey": "freepool"},
+            {"sessionId": "sms_2", "phoneNumber": "+15550000012", "providerKey": "freepool"},
+        ]
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured_inputs.append({"step_type": step_type, **dict(step_input)})
+            if step_type == "obtain_codex_oauth":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            if step_type == "submit_phone_verification_number":
+                return {
+                    "ok": True,
+                    "status": "phone_number_submitted",
+                    "pageType": "sms_verification",
+                    "resumeContext": {"flow": "oauth", "token": f"resume_{step_input['phone_session_id']}"},
+                }
+            if step_type == "submit_phone_verification_code" and step_input.get("phone_session_id") == "sms_1":
+                raise RuntimeError("phone_code_submit_failed")
+            if step_type == "submit_phone_verification_code" and step_input.get("phone_session_id") == "sms_2":
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "successPath": "C:/tmp/codex-free.json",
+                    "userId": "user_123",
+                }
+            raise AssertionError(f"unexpected invoke: {step_type} {step_input!r}")
+
+        with mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            side_effect=phone_sessions,
+        ) as open_phone_session_for_business, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+            side_effect=["111111", "222222"],
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "record_terminal_phone_outcome",
+            return_value={"ok": True},
+        ) as record_terminal_phone_outcome, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ) as report_phone_outcome:
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("sms_2", result["phoneSessionId"])
+        self.assertEqual(2, open_phone_session_for_business.call_count)
+        self.assertEqual(
+            ["sms_1", "sms_2"],
+            [
+                item["phone_session_id"]
+                for item in captured_inputs
+                if item["step_type"] == "submit_phone_verification_code"
+            ],
+        )
+        record_terminal_phone_outcome.assert_called_once_with(
+            phone_number="+15550000011",
+            provider_key="freepool",
+            terminal_code="wrong_otp_code",
+            terminal_message=mock.ANY,
+        )
+        self.assertEqual(
+            [mock.call(session_id="sms_1", outcome="failure", detail=mock.ANY), mock.call(session_id="sms_2", outcome="success", detail="codex_oauth_completed")],
+            report_phone_outcome.call_args_list,
+        )
+
     def test_open_phone_session_for_business_skips_blacklisted_phone_by_rotating_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
@@ -2061,7 +2146,7 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("mail2925", violation["provider"])
         self.assertEqual("ok.test", violation["domain"])
 
-    def test_create_mailbox_with_business_policy_falls_back_when_dynamic_blacklist_exhausted(self) -> None:
+    def test_create_mailbox_with_business_policy_fails_when_dynamic_blacklist_exhausted_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"
             state_path = output_root / "others" / "register-mailbox-domain-state.json"
@@ -2108,6 +2193,65 @@ class RuntimeMailboxTests(unittest.TestCase):
                     "REGISTER_OUTPUT_ROOT": str(output_root),
                     "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
                     "REGISTER_MAILBOX_BUSINESS_RETRY_ATTEMPTS": "2",
+                },
+                clear=True,
+            ), mock.patch.object(runtime_mailbox, "_release_mailbox_quiet") as release_mock:
+                with self.assertRaisesRegex(RuntimeError, "mailbox_business_policy_retries_exhausted"):
+                    runtime_mailbox._create_mailbox_with_business_policy(
+                        create_fn=lambda: mailboxes.pop(0),
+                        business_key="openai",
+                    )
+
+        self.assertEqual(2, release_mock.call_count)
+
+    def test_create_mailbox_with_business_policy_can_opt_into_dynamic_blacklist_exhausted_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "providers": {
+                                    "mail2925": {
+                                        "attempts": 20,
+                                        "successes": 0,
+                                        "failures": 20,
+                                        "blacklisted": True,
+                                        "blacklistReason": "provider_failure_rate_threshold",
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            mailboxes = [
+                runtime_mailbox.Mailbox(
+                    provider="mail2925",
+                    email="first@2925.com",
+                    ref="mail2925:first",
+                    session_id="first",
+                ),
+                runtime_mailbox.Mailbox(
+                    provider="mail2925",
+                    email="fallback@2925.com",
+                    ref="mail2925:fallback",
+                    session_id="fallback",
+                ),
+            ]
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_BUSINESS_RETRY_ATTEMPTS": "2",
+                    "REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK": "true",
                 },
                 clear=True,
             ), mock.patch.object(runtime_mailbox, "_release_mailbox_quiet") as release_mock:

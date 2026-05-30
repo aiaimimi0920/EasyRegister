@@ -121,6 +121,7 @@
 - `REGISTER_MAILBOX_DOMAIN_BLACKLIST` 是默认业务策略的显式域名黑名单；任何未单独声明的业务都会继承它
 - `REGISTER_MAILBOX_PROVIDER_BLACKLIST` 是默认业务策略的显式服务商黑名单；任何未单独声明的业务都会继承它
 - `REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD` 控制“同一业务下同一邮箱域名连续失败多少次后自动进入动态黑名单”，默认 `500`
+- `REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK=false` 是当前默认值；当 EasyEmail 反复返回已被动态黑名单拦截的 provider/domain 时，默认直接失败并释放邮箱，不再回落使用已判定异常的邮箱。只有显式设为 `true` 才保留旧的“耗尽后兜底使用最后一个邮箱”行为。
 - `REGISTER_MAILBOX_BUSINESS_POLICIES_JSON` 可以在同一个镜像实例里声明多套业务邮箱策略，按业务 key 选不同域名黑名单和服务商黑名单；如果没有命中业务专属规则，会自动回落到 `default` 业务策略
 
 当前默认部署会把同一套业务黑名单策略同时下发给默认业务和 `openai` 业务：

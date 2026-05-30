@@ -9,7 +9,7 @@ from typing import Any
 from errors import ensure_protocol_runtime_error
 from others.bootstrap import ensure_local_bundle_imports
 from others.common import json_log
-from others.config import MailboxRuntimeConfig, env_int, env_text
+from others.config import MailboxRuntimeConfig, env_bool, env_int, env_text
 from others.local_config import read_easyemail_server_api_key
 from others.paths import resolve_shared_root as _shared_root_from_output_root
 
@@ -310,6 +310,10 @@ def _resolve_mailbox_business_retry_attempts() -> int:
     return max(1, env_int("REGISTER_MAILBOX_BUSINESS_RETRY_ATTEMPTS", DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS))
 
 
+def _dynamic_blacklist_exhausted_fallback_enabled() -> bool:
+    return env_bool("REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK", False)
+
+
 def _mailbox_domain_from_email(email: str) -> str:
     normalized = str(email or "").strip().lower()
     if "@" not in normalized:
@@ -415,7 +419,11 @@ def _create_mailbox_with_business_policy(*, create_fn: Any, business_key: str | 
         if violation is None:
             return mailbox
         last_violation = violation
-        if attempt_index >= max_attempts and _mailbox_policy_violation_is_dynamic(violation):
+        if (
+            attempt_index >= max_attempts
+            and _mailbox_policy_violation_is_dynamic(violation)
+            and _dynamic_blacklist_exhausted_fallback_enabled()
+        ):
             json_log(
                 {
                     "event": "register_mailbox_business_dynamic_blacklist_exhausted_fallback",

@@ -245,6 +245,8 @@ def mailbox_domain_blacklist_reason(*, result_payload_value: dict[str, Any]) -> 
     message = str(create_error.get("message") or result_payload_value.get("error") or "").strip().lower()
     if "unsupported_email" in message or "the email you provided is not supported" in message:
         return "unsupported_email"
+    if "registration_disallowed" in message and "mailbox_provider=" in message:
+        return "registration_disallowed"
     return ""
 
 
@@ -318,6 +320,7 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
             ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
             ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
             ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+            ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
             ErrorCodes.PROXY_CONNECT_FAILED,
             ErrorCodes.TRANSPORT_ERROR,
             step_id=error_step,
@@ -336,7 +339,17 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
                 "unexpected_eof_while_reading",
                 "eof occurred in violation of protocol",
                 "easy_proxy_checkout_failed",
+                "handshake operation timed out",
+                "operation timed out",
+                "timed out",
                 "proxy connect",
+            )
+        ) and not any(
+            marker in combined
+            for marker in (
+                "timeout waiting for 6-digit code",
+                "chatgpt_login_email_otp_wait_failed",
+                "otp_timeout",
             )
         ):
             return "external_proxy_or_auth"

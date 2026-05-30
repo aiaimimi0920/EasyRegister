@@ -982,6 +982,24 @@ class RunnerFailuresTests(unittest.TestCase):
             cooldown = runner_failures.extra_failure_cooldown_seconds(result=payload)
         self.assertEqual(91.0, cooldown)
 
+    def test_extra_failure_cooldown_seconds_covers_oauth_flow_timeout(self) -> None:
+        payload = {
+            "errorStep": "obtain-codex-oauth",
+            "stepErrors": {
+                "obtain-codex-oauth": {
+                    "code": ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
+                    "message": "timed out",
+                }
+            },
+        }
+        with mock.patch.dict(
+            os.environ,
+            {"REGISTER_CREATE_ACCOUNT_COOLDOWN_SECONDS": "33"},
+            clear=True,
+        ):
+            cooldown = runner_failures.extra_failure_cooldown_seconds(result=payload)
+        self.assertEqual(33.0, cooldown)
+
     def test_classify_error_code_maps_oauth_repair_challenge_to_blocked(self) -> None:
         code = classify_error_code(
             step_type="obtain_codex_oauth",
@@ -1226,7 +1244,43 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("registration_disallowed", outcome["failureReason"])
             self.assertEqual("mailtm", outcome["provider"])
             self.assertEqual("provider-domain.test", outcome["domain"])
+            self.assertTrue(outcome["blacklisted"])
+            self.assertEqual("registration_disallowed", outcome["blacklistReason"])
             self.assertTrue(Path(outcome["statePath"]).is_file())
+
+    def test_record_business_mailbox_domain_outcome_ignores_oauth_network_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": False,
+                "errorStep": "obtain-codex-oauth",
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@not-mailbox-fault.test",
+                        "provider": "tempmail-lol",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "obtain-codex-oauth": {
+                        "code": ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
+                        "message": "<urlopen error _ssl.c:1000: The handshake operation timed out>",
+                    }
+                },
+            }
+
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertTrue(outcome["ignored"])
+            self.assertEqual("external_proxy_or_auth", outcome["ignoreReason"])
+            self.assertFalse(Path(outcome["statePath"]).is_file())
 
     def test_record_business_mailbox_domain_outcome_success_clears_dynamic_blacklists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

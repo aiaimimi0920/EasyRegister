@@ -82,6 +82,7 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
     ),
     "step-invite-recover": (
         ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED,
+        ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
         ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR,
@@ -91,6 +92,7 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
         ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
         ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+        ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
     ),
@@ -99,10 +101,20 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
         ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
         ErrorCodes.OTP_TIMEOUT,
+        ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
+        ErrorCodes.PROXY_CONNECT_FAILED,
+        ErrorCodes.TRANSPORT_ERROR,
+    ),
+    "step-oauth-recover": (
+        ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
+        ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
+        ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+        ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
     ),
     "step-proxy-refresh": (
+        ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
     ),
@@ -318,6 +330,14 @@ def classify_error_code(
         return ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR
     if ErrorCodes.OTP_TIMEOUT in lowered or "timeout waiting for 6-digit code" in lowered:
         return ErrorCodes.OTP_TIMEOUT
+    if (
+        "timed out" in combined
+        or "operation timed out" in combined
+        or "read timeout" in combined
+        or "request timeout" in combined
+        or "timeout exceeded" in combined
+    ):
+        return ErrorCodes.FLOW_TIMEOUT_EXCEEDED
     if "r2_upload_failed" in lowered or ErrorCodes.UPLOAD_FILE_TO_R2_FAILED in lowered:
         return ErrorCodes.UPLOAD_FILE_TO_R2_FAILED
     if ErrorCodes.OPENAI_OAUTH_POOL_EMPTY in lowered:

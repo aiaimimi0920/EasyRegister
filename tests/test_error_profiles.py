@@ -8,8 +8,10 @@ from pathlib import Path
 
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+PYTHON_SHARED_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "python_shared" / "src"
+for candidate in (SRC_ROOT, PYTHON_SHARED_ROOT):
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 import dst_flow  # noqa: E402
 from errors import (  # noqa: E402
@@ -46,6 +48,29 @@ class ErrorProfilesTests(unittest.TestCase):
             "step-proxy-refresh",
             by_id["initialize-platform-organization"]["metadata"]["retry"]["retryProfile"],
         )
+        self.assertEqual(
+            "step-oauth-recover",
+            by_id["obtain-codex-oauth"]["metadata"]["retry"]["retryProfile"],
+        )
+        self.assertEqual(
+            ["proxy_chain", "initialize_chatgpt_login_session"],
+            by_id["obtain-codex-oauth"]["metadata"]["retry"]["refreshSavedStates"],
+        )
+
+    def test_continue_flow_obtain_oauth_retries_after_login_refresh(self) -> None:
+        flow_path = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows" / "codex-openai-oauth-continue-v1.semantic-flow.json"
+        payload = json.loads(flow_path.read_text(encoding="utf-8"))
+        steps = payload["definition"]["steps"]
+        by_id = {str(step.get("id") or ""): step for step in steps}
+
+        self.assertEqual(
+            "step-oauth-recover",
+            by_id["obtain-codex-oauth"]["metadata"]["retry"]["retryProfile"],
+        )
+        self.assertEqual(
+            ["proxy_chain", "initialize_chatgpt_login_session"],
+            by_id["obtain-codex-oauth"]["metadata"]["retry"]["refreshSavedStates"],
+        )
 
     def test_build_error_details_classifies_team_auth_token_invalidated(self) -> None:
         details = build_error_details(
@@ -76,6 +101,7 @@ class ErrorProfilesTests(unittest.TestCase):
         self.assertEqual(
             {
                 ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED,
+                ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
                 ErrorCodes.PROXY_CONNECT_FAILED,
                 ErrorCodes.TRANSPORT_ERROR,
                 ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR,
@@ -90,6 +116,7 @@ class ErrorProfilesTests(unittest.TestCase):
                 ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
                 ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
                 ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+                ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
                 ErrorCodes.PROXY_CONNECT_FAILED,
                 ErrorCodes.TRANSPORT_ERROR,
             },
@@ -103,15 +130,30 @@ class ErrorProfilesTests(unittest.TestCase):
                 ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
                 ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
                 ErrorCodes.OTP_TIMEOUT,
+                ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
                 ErrorCodes.PROXY_CONNECT_FAILED,
                 ErrorCodes.TRANSPORT_ERROR,
             },
             resolve_retry_codes({"retryProfile": "step-login-init-recover"}),
         )
 
+    def test_resolve_retry_codes_uses_oauth_recover_profile(self) -> None:
+        self.assertEqual(
+            {
+                ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
+                ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
+                ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+                ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
+                ErrorCodes.PROXY_CONNECT_FAILED,
+                ErrorCodes.TRANSPORT_ERROR,
+            },
+            resolve_retry_codes({"retryProfile": "step-oauth-recover"}),
+        )
+
     def test_resolve_retry_codes_uses_proxy_refresh_profile(self) -> None:
         self.assertEqual(
             {
+                ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
                 ErrorCodes.PROXY_CONNECT_FAILED,
                 ErrorCodes.TRANSPORT_ERROR,
             },
@@ -153,6 +195,19 @@ class ErrorProfilesTests(unittest.TestCase):
         )
         self.assertEqual(ErrorCodes.PROXY_CONNECT_FAILED, details["code"])
         self.assertEqual("proxy_error", details["category"])
+
+    def test_build_error_details_classifies_oauth_timeouts_as_retryable_flow_timeout(self) -> None:
+        for message in (
+            "timed out",
+            "<urlopen error _ssl.c:1000: The handshake operation timed out>",
+            "Failed to perform, curl: (28) Operation timed out after 30001 milliseconds with 0 bytes received.",
+        ):
+            with self.subTest(message=message):
+                details = build_error_details(
+                    step_type="obtain_codex_oauth",
+                    message=message,
+                )
+                self.assertEqual(ErrorCodes.FLOW_TIMEOUT_EXCEEDED, details["code"])
 
     def test_protocol_runtime_error_carries_inferred_code(self) -> None:
         exc = ensure_protocol_runtime_error(

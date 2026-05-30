@@ -193,7 +193,16 @@
         "saveAs": "obtain_codex_oauth",
         "metadata": {
           "owner": "easyprotocol",
-          "stage": "oauth"
+          "stage": "oauth",
+          "retry": {
+            "maxAttempts": 2,
+            "backoffSeconds": 2,
+            "retryProfile": "step-oauth-recover",
+            "refreshSavedStates": [
+              "proxy_chain",
+              "initialize_chatgpt_login_session"
+            ]
+          }
         }
       },
       {
