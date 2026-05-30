@@ -653,7 +653,7 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual("sms24", result.outputs["obtain-codex-oauth"]["phoneProvider"])
         self.assertTrue(result.outputs["obtain-codex-oauth"]["phoneVerificationAttempted"])
 
-    def test_run_dst_flow_once_retries_obtain_after_phone_submission_lacks_sms_code(self) -> None:
+    def test_run_dst_flow_once_does_not_retry_obtain_after_phone_submission_lacks_sms_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             flow_path = Path(tmp_dir) / "temp-flow.json"
             oauth_path = Path(tmp_dir) / "oauth.json"
@@ -739,12 +739,7 @@ class DstFlowIntegrationTests(unittest.TestCase):
                             "phoneVerificationFailureStage": "wait_sms_code",
                             "phoneVerificationFailureDetail": "sms service failed: HTTP 502",
                         }
-                    return {
-                        "ok": True,
-                        "status": "completed",
-                        "successPath": str(oauth_path),
-                        "refresh_token": "rt",
-                    }
+                    raise AssertionError("phone-submitted small-success should not retry in the same task")
                 if step_type == "validate_free_personal_oauth":
                     validate_calls += 1
                     if bool(step_input.get("oauth_result", {}).get("phoneVerificationSubmitted")):
@@ -766,12 +761,15 @@ class DstFlowIntegrationTests(unittest.TestCase):
                     flow_path=flow_path,
                 )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(2, obtain_calls)
-        self.assertEqual(2, proxy_calls)
-        self.assertEqual(2, login_calls)
-        self.assertEqual(1, validate_calls)
-        self.assertEqual("ok", result.steps["validate-free-personal-oauth"])
+        self.assertEqual(1, obtain_calls)
+        self.assertEqual(1, proxy_calls)
+        self.assertEqual(1, login_calls)
+        self.assertEqual(0, validate_calls)
+        self.assertFalse(result.ok)
+        self.assertEqual("obtain-codex-oauth", result.error_step)
+        self.assertEqual("failed", result.steps["obtain-codex-oauth"])
+        self.assertEqual(ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS, result.step_errors["obtain-codex-oauth"]["code"])
+        self.assertEqual("skipped", result.steps["validate-free-personal-oauth"])
 
     def test_run_dst_flow_once_retries_chatgpt_login_after_proxy_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
