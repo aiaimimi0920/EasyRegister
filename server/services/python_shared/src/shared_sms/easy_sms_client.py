@@ -389,7 +389,7 @@ def open_sms_session(
     provider_country_blacklist: tuple[str, ...] = (),
 ) -> SmsSession:
     _wait_sms_service_ready()
-    selection_candidates = _query_provider_selection_candidates(
+    selection_plan_candidates = _query_provider_selection_candidates(
         provider_blacklist=provider_blacklist,
         allow_paid=allow_paid,
         country_codes=country_codes,
@@ -400,9 +400,14 @@ def open_sms_session(
         "allowReuse": bool(allow_reuse),
         "maxBindingsPerPhone": max(1, int(max_bindings_per_phone or 1)),
     }
-    if not selection_candidates:
+    candidate_provider_keys = list(selection_plan_candidates)
+    if not candidate_provider_keys:
+        candidate_provider_keys = _query_provider_catalog_candidates(
+            provider_blacklist=provider_blacklist,
+            allow_paid=allow_paid,
+        )
+    if not candidate_provider_keys:
         raise RuntimeError("sms_no_selection_plan_candidates")
-    candidate_provider_keys = list(selection_candidates)
     first_country_code = _first_country_code(country_codes)
     if first_country_code:
         base_payload["countryCode"] = first_country_code
@@ -469,8 +474,18 @@ def open_sms_session(
     selected_session = _try_provider_candidates(candidate_provider_keys)
     if selected_session is not None:
         return selected_session
-    if selection_candidates and opened_session_attempts == 0 and provider_country_skip_count > 0:
+    if selection_plan_candidates and opened_session_attempts == 0 and provider_country_skip_count > 0:
         raise RuntimeError("sms_no_unblocked_provider_country_candidates")
+    if selection_plan_candidates:
+        fallback_provider_keys = _query_provider_catalog_candidates(
+            provider_blacklist=provider_blacklist,
+            allow_paid=allow_paid,
+            exclude_provider_keys=tuple(candidate_provider_keys),
+        )
+        if fallback_provider_keys:
+            selected_session = _try_provider_candidates(fallback_provider_keys)
+            if selected_session is not None:
+                return selected_session
     if last_error is not None:
         raise last_error
     raise RuntimeError("sms service returned invalid sms session")
