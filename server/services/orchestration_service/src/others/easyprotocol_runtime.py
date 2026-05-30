@@ -19,6 +19,7 @@ DEFAULT_EASY_PROTOCOL_MODE = "strategy"
 DEFAULT_EASY_PROTOCOL_REQUESTED_SERVICE = ""
 DEFAULT_EASY_PROTOCOL_TIMEOUT_SECONDS = 900
 DEFAULT_EASY_PROTOCOL_OAUTH_TIMEOUT_SECONDS = 240
+DEFAULT_EASY_PROTOCOL_PHONE_TIMEOUT_SECONDS = 120
 DEFAULT_PROTOCOL_OUTPUT_TARGET_DIR = "/shared/register-output"
 DEFAULT_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS = 5
 PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
@@ -63,6 +64,16 @@ def easyprotocol_oauth_timeout_seconds() -> int:
         except Exception:
             return DEFAULT_EASY_PROTOCOL_OAUTH_TIMEOUT_SECONDS
     return min(easyprotocol_timeout_seconds(), DEFAULT_EASY_PROTOCOL_OAUTH_TIMEOUT_SECONDS)
+
+
+def easyprotocol_phone_timeout_seconds() -> int:
+    raw = str(os.environ.get("EASY_PROTOCOL_PHONE_TIMEOUT_SECONDS") or "").strip()
+    if raw:
+        try:
+            return max(1, int(float(raw)))
+        except Exception:
+            return DEFAULT_EASY_PROTOCOL_PHONE_TIMEOUT_SECONDS
+    return min(easyprotocol_timeout_seconds(), DEFAULT_EASY_PROTOCOL_PHONE_TIMEOUT_SECONDS)
 
 
 def phone_verification_terminal_retry_attempts() -> int:
@@ -398,10 +409,16 @@ def invoke_easyprotocol(
         headers={"Content-Type": "application/json"},
     )
     try:
+        normalized_step_type = str(step_type or "").strip()
         if timeout_seconds is not None:
             request_timeout = max(1, int(timeout_seconds))
-        elif str(step_type or "").strip() == "obtain_codex_oauth":
+        elif normalized_step_type == "obtain_codex_oauth":
             request_timeout = easyprotocol_oauth_timeout_seconds()
+        elif normalized_step_type in {
+            "submit_phone_verification_number",
+            "submit_phone_verification_code",
+        }:
+            request_timeout = easyprotocol_phone_timeout_seconds()
         else:
             request_timeout = easyprotocol_timeout_seconds()
         with urllib.request.urlopen(req, timeout=request_timeout) as resp:
