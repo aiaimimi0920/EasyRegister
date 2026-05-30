@@ -104,6 +104,7 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
         ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
         ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+        ErrorCodes.MAILBOX_UNAVAILABLE,
         ErrorCodes.OTP_TIMEOUT,
         ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.PROXY_CONNECT_FAILED,
@@ -294,6 +295,15 @@ def classify_error_code(
         return ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED
     if "chatgpt_login_otp_validate_failed" in lowered and "wrong_email_otp_code" in lowered:
         return ErrorCodes.OTP_TIMEOUT
+    if (
+        "chatgpt_login_email_otp_wait_failed" in lowered
+        and (
+            "no available moemail credentials for poll" in lowered
+            or "mail service get" in lowered
+            or "/mailboxes/" in lowered
+        )
+    ):
+        return ErrorCodes.MAILBOX_UNAVAILABLE
     if "platform_login" in lowered and ("just a moment" in lowered or "status=403" in lowered):
         return ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED
     if "authorize_continue" in lowered and ("status=429" in lowered or "rate limit exceeded" in lowered):

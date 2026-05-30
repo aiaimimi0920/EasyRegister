@@ -139,6 +139,7 @@ class ErrorProfilesTests(unittest.TestCase):
                 ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
                 ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
                 ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+                ErrorCodes.MAILBOX_UNAVAILABLE,
                 ErrorCodes.OTP_TIMEOUT,
                 ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
                 ErrorCodes.PROXY_CONNECT_FAILED,
@@ -197,6 +198,18 @@ class ErrorProfilesTests(unittest.TestCase):
             message='chatgpt_login_otp_validate_failed status=401 body={"error":{"code":"wrong_email_otp_code"}}',
         )
         self.assertEqual(ErrorCodes.OTP_TIMEOUT, details["code"])
+
+    def test_build_error_details_classifies_chatgpt_login_mailbox_poll_resource_busy(self) -> None:
+        details = build_error_details(
+            step_type="initialize_chatgpt_login_session",
+            message=(
+                "chatgpt_login_email_otp_wait_failed:mail service GET "
+                "/mail/mailboxes/mailbox_123/code failed: HTTP 500: "
+                "{\"error\":\"No available MoEmail credentials for poll.\"}"
+            ),
+        )
+        self.assertEqual(ErrorCodes.MAILBOX_UNAVAILABLE, details["code"])
+        self.assertEqual("flow_error", details["category"])
 
     def test_build_error_details_classifies_platform_login_blocked(self) -> None:
         details = build_error_details(
