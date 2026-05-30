@@ -418,11 +418,11 @@ class RunnerArtifactsTests(unittest.TestCase):
     def test_copy_openai_oauth_artifacts_to_pool_materializes_from_step_outputs_when_source_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_output_dir = Path(tmp_dir) / "run-1"
-            pool_dir = Path(tmp_dir) / "openai" / "failed-once"
+            pool_dir = Path(tmp_dir) / "openai" / "failed-twice"
             result_payload = {
                 "outputs": {
                     "create-openai-account": {
-                        "email": "materialized@example.com",
+                        "email": "agnese18417@ke.for4u.net",
                         "password": "pw",
                         "mailbox_provider": "moemail",
                         "mailbox_access_key": "mailbox-key",
@@ -433,7 +433,11 @@ class RunnerArtifactsTests(unittest.TestCase):
                         "birthdate": "1990-01-01",
                         "page_type": "platform_callback",
                         "final_url": "https://platform.openai.com/auth/callback",
-                        "storage_path": str(run_output_dir / "small_success" / "missing.json"),
+                        "storage_path": str(
+                            run_output_dir
+                            / "small_success"
+                            / "small-20260530-000254-agnese18417@ke.for4u.net-dcd88f.json"
+                        ),
                     },
                     "initialize-platform-organization": {
                         "status": "completed",
@@ -467,8 +471,9 @@ class RunnerArtifactsTests(unittest.TestCase):
             self.assertEqual(1, len(copied_paths))
             copied_path = Path(copied_paths[0])
             self.assertTrue(copied_path.is_file())
+            self.assertEqual("small-20260530-000254-agnese18417@ke.for4u.net-dcd88f.json", copied_path.name)
             payload = json.loads(copied_path.read_text(encoding="utf-8"))
-            self.assertEqual("materialized@example.com", payload["email"])
+            self.assertEqual("agnese18417@ke.for4u.net", payload["email"])
             self.assertEqual("completed", payload["platformOrganization"]["status"])
             self.assertEqual("completed", payload["chatgptLogin"]["status"])
 

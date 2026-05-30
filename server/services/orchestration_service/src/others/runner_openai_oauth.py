@@ -50,6 +50,10 @@ from others.runner_artifact_settings import (
 from others.storage import load_json_payload
 
 
+_INVALID_ARTIFACT_FILENAME_CHARS = set('<>:"/\\|?*')
+_SAFE_ARTIFACT_EMAIL_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@._+-")
+
+
 def _sort_file_paths_newest_first(paths: list[Path]) -> list[Path]:
     def _sort_key(path: Path) -> tuple[float, str]:
         try:
@@ -59,6 +63,50 @@ def _sort_file_paths_newest_first(paths: list[Path]) -> list[Path]:
         return (-modified_at, path.name.lower())
 
     return sorted(paths, key=_sort_key)
+
+
+def _safe_artifact_filename(value: str) -> str:
+    name = str(value or "").strip()
+    sanitized = "".join(
+        "_" if char in _INVALID_ARTIFACT_FILENAME_CHARS or ord(char) < 32 else char for char in name
+    ).strip(" .")
+    return sanitized
+
+
+def _safe_artifact_email_slug(value: str) -> str:
+    email = str(value or "").strip()
+    sanitized = "".join(char if char in _SAFE_ARTIFACT_EMAIL_CHARS else "_" for char in email).strip("._-")
+    return sanitized or "unknown"
+
+
+def _small_artifact_timestamp_from_output(create_output: dict[str, Any]) -> str:
+    for field_name in ("createdAt", "created_at", "timestamp"):
+        value = str(create_output.get(field_name) or "").strip()
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def _small_openai_oauth_artifact_name_from_output(
+    *,
+    create_output: dict[str, Any],
+    result_or_payload: Any,
+) -> str:
+    for path_text in all_output_texts(result_or_payload, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES):
+        candidate_name = _safe_artifact_filename(Path(path_text).name)
+        if candidate_name.lower().startswith("small-") and candidate_name.lower().endswith(".json"):
+            return candidate_name
+
+    timestamp = _small_artifact_timestamp_from_output(create_output)
+    email = _safe_artifact_email_slug(str(create_output.get("email") or ""))
+    return f"small-{timestamp}-{email}-{uuid.uuid4().hex[:6]}.json"
 
 
 def _iter_openai_oauth_artifacts(*, run_output_dir: Path, result_or_payload: Any | None = None) -> list[Path]:
@@ -166,7 +214,10 @@ def _materialize_openai_oauth_artifact_from_output(
     source_path = first_existing_output_path(result_or_payload, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES)
     if source_path is not None:
         source_name = source_path.name
-    artifact_name = source_name or f"materialized-{uuid.uuid4().hex[:12]}.json"
+    artifact_name = source_name or _small_openai_oauth_artifact_name_from_output(
+        create_output=create_output,
+        result_or_payload=result_or_payload,
+    )
     materialized_path = materialized_dir / artifact_name
     write_json_atomic(materialized_path, payload, include_pid=True, cleanup_temp=True)
     return materialized_path
