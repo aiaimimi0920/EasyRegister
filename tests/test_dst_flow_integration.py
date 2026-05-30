@@ -121,6 +121,21 @@ class DstFlowIntegrationTests(unittest.TestCase):
                 self.assertEqual(1, len(obtain_steps))
                 self.assertEqual("{{initialize_chatgpt_login_session}}", obtain_steps[0].input.get("login_session"))
 
+    def test_canonical_openai_flows_probe_chatgpt_login_surface(self) -> None:
+        flows_dir = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
+        flow_names = (
+            "codex-openai-account-v1.semantic-flow.json",
+            "codex-openai-oauth-continue-v1.semantic-flow.json",
+            "codex-team-expand-v1.semantic-flow.json",
+        )
+        for flow_name in flow_names:
+            with self.subTest(flow_name=flow_name):
+                plan = load_dst_flow(flows_dir / flow_name)
+                proxy_steps = [statement for statement in plan.steps if statement.step_id == "acquire-proxy-chain"]
+                self.assertEqual(1, len(proxy_steps))
+                self.assertEqual("https://chatgpt.com/auth/login", proxy_steps[0].input.get("probe_url"))
+                self.assertEqual([200], proxy_steps[0].input.get("probe_expected_statuses"))
+
     def test_run_dst_flow_once_claims_configured_input_file_and_releases_mailbox_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             input_dir = Path(tmp_dir) / "input"

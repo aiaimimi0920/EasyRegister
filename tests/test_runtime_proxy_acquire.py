@@ -90,7 +90,7 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                 ):
                 lease = runtime_proxy_acquire.acquire_flow_proxy_lease(
                     flow_name="codex_openai_account_task",
-                    probe_url="https://platform.openai.com/login",
+                    probe_url="https://chatgpt.com/auth/login",
                 )
 
             self.assertEqual("http://easy-proxy:25039", lease.proxy_url)
@@ -155,7 +155,7 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                 mock.patch.object(runtime_proxy_acquire, "report_usage") as report_usage_mock:
                 lease = runtime_proxy_acquire.acquire_flow_proxy_lease(
                     flow_name="codex_openai_account_task",
-                    probe_url="https://platform.openai.com/login",
+                    probe_url="https://chatgpt.com/auth/login",
                 )
 
             self.assertEqual("http://easy-proxy:25039", lease.proxy_url)
@@ -238,12 +238,12 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                 mock.patch.object(runtime_proxy_acquire, "report_usage") as report_usage_mock:
                 first = runtime_proxy_acquire.acquire_flow_proxy_lease(
                     flow_name="codex_openai_account_task",
-                    probe_url="https://platform.openai.com/login",
+                    probe_url="https://chatgpt.com/auth/login",
                 )
                 runtime_proxy_acquire._COMPAT_CHECKOUT_COOLDOWN_UNTIL.clear()
                 second = runtime_proxy_acquire.acquire_flow_proxy_lease(
                     flow_name="codex_openai_account_task",
-                    probe_url="https://platform.openai.com/login",
+                    probe_url="https://chatgpt.com/auth/login",
                 )
 
             self.assertEqual("random-node", first.acquisition_mode)
@@ -310,7 +310,7 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                     runtime_proxy_acquire,
                     "_probe_flow_proxy",
                     side_effect=[
-                        RuntimeError("easy_proxy_probe_failed status=403 target=https://platform.openai.com/login"),
+                        RuntimeError("easy_proxy_probe_failed status=403 target=https://chatgpt.com/auth/login"),
                         None,
                         None,
                     ],
@@ -322,7 +322,7 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                 ):
                 first = runtime_proxy_acquire.acquire_flow_proxy_lease(
                     flow_name="codex_openai_account_task",
-                    probe_url="https://platform.openai.com/login",
+                    probe_url="https://chatgpt.com/auth/login",
                 )
                 with runtime_proxy_acquire._ACTIVE_FLOW_PROXY_LOCK:
                     runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.clear()
@@ -330,7 +330,7 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                     runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
                 second = runtime_proxy_acquire.acquire_flow_proxy_lease(
                     flow_name="codex_openai_account_task",
-                    probe_url="https://platform.openai.com/login",
+                    probe_url="https://chatgpt.com/auth/login",
                 )
 
             self.assertEqual("http://easy-proxy:25002", first.proxy_url)
@@ -386,7 +386,7 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                     runtime_proxy_acquire,
                     "_probe_flow_proxy",
                     side_effect=[
-                        RuntimeError("easy_proxy_probe_failed status=403 target=https://platform.openai.com/login"),
+                        RuntimeError("easy_proxy_probe_failed status=403 target=https://chatgpt.com/auth/login"),
                         None,
                     ],
                 ), \
@@ -413,7 +413,7 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                 ):
                 lease = runtime_proxy_acquire.acquire_flow_proxy_lease(
                     flow_name="codex_openai_account_task",
-                    probe_url="https://platform.openai.com/login",
+                    probe_url="https://chatgpt.com/auth/login",
                 )
 
             self.assertEqual("http://easy-proxy:25039", lease.proxy_url)
