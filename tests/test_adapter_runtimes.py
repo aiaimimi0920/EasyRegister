@@ -1699,6 +1699,29 @@ class EasyEmailRuntimeTests(unittest.TestCase):
         self.assertEqual("not_found", result["detail"])
         self.assertEqual("im215", result["provider"])
 
+    def test_release_mailbox_treats_moemail_unauthorized_delete_as_not_found(self) -> None:
+        with mock.patch.object(
+            easyemail_runtime,
+            "release_mailbox",
+            side_effect=RuntimeError(
+                'mail service POST /mail/mailboxes/release failed: HTTP 500 '
+                '[code=MoEmail deleteMailboxWeb failed with status 401. 未授权]: '
+                '{"error":"MoEmail deleteMailboxWeb failed with status 401. 未授权"}'
+            ),
+        ):
+            result = easyemail_runtime.dispatch_easyemail_step(
+                step_type="release_mailbox",
+                step_input={
+                    "provider": "moemail",
+                    "mailbox_ref": "moemail:test",
+                    "mailbox_session_id": "mailbox_123",
+                },
+            )
+
+        self.assertFalse(result["released"])
+        self.assertEqual("not_found", result["detail"])
+        self.assertEqual("moemail", result["provider"])
+
     def test_release_mailbox_recovers_by_email_when_session_id_is_missing(self) -> None:
         with mock.patch.object(easyemail_runtime, "ensure_easyemail_runtime_defaults"), mock.patch.object(
             easyemail_runtime,
