@@ -113,6 +113,8 @@ class ErrorProfilesTests(unittest.TestCase):
         self.assertEqual(
             {
                 ErrorCodes.USER_REGISTER_400,
+                ErrorCodes.UNSUPPORTED_EMAIL,
+                ErrorCodes.INVALID_REQUEST_ERROR,
                 ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
                 ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
                 ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
@@ -208,6 +210,30 @@ class ErrorProfilesTests(unittest.TestCase):
                     message=message,
                 )
                 self.assertEqual(ErrorCodes.FLOW_TIMEOUT_EXCEEDED, details["code"])
+
+    def test_build_error_details_refines_invalid_request_unsupported_email(self) -> None:
+        details = build_error_details(
+            step_type="create_openai_account",
+            code=ErrorCodes.INVALID_REQUEST_ERROR,
+            message=(
+                "create_account status=400 body={\"error\":{\"code\":\"unsupported_email\","
+                "\"message\":\"The email you provided is not supported.\"}} "
+                "[mailbox_provider=etempmail email=user@example.test]"
+            ),
+        )
+        self.assertEqual(ErrorCodes.UNSUPPORTED_EMAIL, details["code"])
+
+    def test_build_error_details_keeps_attributed_registration_disallowed_retryable(self) -> None:
+        details = build_error_details(
+            step_type="create_openai_account",
+            code=ErrorCodes.INVALID_REQUEST_ERROR,
+            message=(
+                "create_account status=400 body={\"error\":{\"code\":\"registration_disallowed\","
+                "\"message\":\"Sorry, we cannot create your account with the given information.\"}} "
+                "[mailbox_provider=mailtm email=user@example.test]"
+            ),
+        )
+        self.assertEqual(ErrorCodes.INVALID_REQUEST_ERROR, details["code"])
 
     def test_protocol_runtime_error_carries_inferred_code(self) -> None:
         exc = ensure_protocol_runtime_error(

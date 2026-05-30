@@ -23,6 +23,7 @@ class ErrorCodes:
     TEAM_WORKSPACE_DEACTIVATED = "deactivated_workspace"
     TEAM_SEATS_FULL = "team_seats_full"
     TRANSPORT_ERROR = "transport_error"
+    UNSUPPORTED_EMAIL = "unsupported_email"
     UPLOAD_FILE_TO_R2_FAILED = "upload_file_to_r2_failed"
     USER_REGISTER_400 = "user_register_400"
 
@@ -47,6 +48,7 @@ CODE_CATEGORY_MAP: dict[str, str] = {
     ErrorCodes.TEAM_WORKSPACE_DEACTIVATED: "flow_error",
     ErrorCodes.TEAM_SEATS_FULL: "flow_error",
     ErrorCodes.TRANSPORT_ERROR: "proxy_error",
+    ErrorCodes.UNSUPPORTED_EMAIL: "flow_error",
     ErrorCodes.UPLOAD_FILE_TO_R2_FAILED: "flow_error",
     ErrorCodes.USER_REGISTER_400: "blocked",
 }
@@ -89,6 +91,8 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
     ),
     "step-create-account-recover": (
         ErrorCodes.USER_REGISTER_400,
+        ErrorCodes.UNSUPPORTED_EMAIL,
+        ErrorCodes.INVALID_REQUEST_ERROR,
         ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
         ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
         ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
@@ -206,13 +210,18 @@ def classify_error_code(
     code: str = "",
 ) -> str:
     normalized_code = normalize_error_code(code)
-    if normalized_code:
-        return normalized_code
-
     normalized_step_type = str(step_type or "").strip().lower()
     normalized_detail = str(detail or "").strip().lower()
     lowered = str(message or "").strip().lower()
     combined = " ".join(part for part in (normalized_detail, lowered) if part)
+
+    if "unsupported_email" in combined or "the email you provided is not supported" in combined:
+        return ErrorCodes.UNSUPPORTED_EMAIL
+    if "registration_disallowed" in combined and "mailbox_provider=" in combined:
+        return ErrorCodes.INVALID_REQUEST_ERROR
+
+    if normalized_code:
+        return normalized_code
 
     if ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING in combined:
         return ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING
