@@ -653,6 +653,126 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual("sms24", result.outputs["obtain-codex-oauth"]["phoneProvider"])
         self.assertTrue(result.outputs["obtain-codex-oauth"]["phoneVerificationAttempted"])
 
+    def test_run_dst_flow_once_retries_obtain_after_phone_submission_lacks_sms_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            oauth_path = Path(tmp_dir) / "oauth.json"
+            oauth_path.write_text('{"refresh_token":"rt"}', encoding="utf-8")
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "acquire-proxy-chain",
+                                    "type": "acquire_proxy_chain",
+                                    "metadata": {"owner": "easyproxy"},
+                                    "saveAs": "proxy_chain",
+                                },
+                                {
+                                    "id": "initialize-chatgpt-login-session",
+                                    "type": "initialize_chatgpt_login_session",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"proxy_url": "{{proxy_chain.proxy_url}}"},
+                                    "saveAs": "initialize_chatgpt_login_session",
+                                },
+                                {
+                                    "id": "obtain-codex-oauth",
+                                    "type": "obtain_codex_oauth",
+                                    "metadata": {
+                                        "owner": "easyprotocol",
+                                        "retry": {
+                                            "maxAttempts": 2,
+                                            "retryProfile": "step-oauth-recover",
+                                            "refreshSavedStates": [
+                                                "proxy_chain",
+                                                "initialize_chatgpt_login_session",
+                                            ],
+                                        },
+                                    },
+                                    "input": {
+                                        "proxy_url": "{{proxy_chain.proxy_url}}",
+                                        "login_session": "{{initialize_chatgpt_login_session}}",
+                                    },
+                                    "saveAs": "obtain_codex_oauth",
+                                },
+                                {
+                                    "id": "validate-free-personal-oauth",
+                                    "type": "validate_free_personal_oauth",
+                                    "metadata": {"owner": "orchestration"},
+                                    "input": {"oauth_result": "{{obtain_codex_oauth}}"},
+                                    "saveAs": "validate_free_personal_oauth",
+                                },
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proxy_calls = 0
+            login_calls = 0
+            obtain_calls = 0
+            validate_calls = 0
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                nonlocal proxy_calls, login_calls, obtain_calls, validate_calls
+                if step_type == "acquire_proxy_chain":
+                    proxy_calls += 1
+                    return {"proxy_url": f"http://proxy-{proxy_calls}"}
+                if step_type == "release_proxy_chain":
+                    return {"released": True}
+                if step_type == "initialize_chatgpt_login_session":
+                    login_calls += 1
+                    return {"ok": True, "session": f"login-{login_calls}"}
+                if step_type == "obtain_codex_oauth":
+                    obtain_calls += 1
+                    if obtain_calls == 1:
+                        return {
+                            "ok": True,
+                            "status": "phone_verification_submitted_small_success",
+                            "successPath": str(oauth_path),
+                            "phoneVerificationAttempted": True,
+                            "phoneVerificationSubmitted": True,
+                            "phoneVerificationAccepted": False,
+                            "phoneVerificationFailureStage": "wait_sms_code",
+                            "phoneVerificationFailureDetail": "sms service failed: HTTP 502",
+                        }
+                    return {
+                        "ok": True,
+                        "status": "completed",
+                        "successPath": str(oauth_path),
+                        "refresh_token": "rt",
+                    }
+                if step_type == "validate_free_personal_oauth":
+                    validate_calls += 1
+                    if bool(step_input.get("oauth_result", {}).get("phoneVerificationSubmitted")):
+                        raise AssertionError("validate should not run before retrying SMS failure")
+                    return {"ok": True, "status": "personal_oauth_confirmed"}
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "easyproxy": _dispatcher,
+                    "easyprotocol": _dispatcher,
+                    "orchestration": _dispatcher,
+                },
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(2, obtain_calls)
+        self.assertEqual(2, proxy_calls)
+        self.assertEqual(2, login_calls)
+        self.assertEqual(1, validate_calls)
+        self.assertEqual("ok", result.steps["validate-free-personal-oauth"])
+
     def test_run_dst_flow_once_retries_chatgpt_login_after_proxy_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             flow_path = Path(tmp_dir) / "temp-flow.json"

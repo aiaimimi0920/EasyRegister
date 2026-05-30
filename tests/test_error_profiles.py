@@ -154,12 +154,25 @@ class ErrorProfilesTests(unittest.TestCase):
                 ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
                 ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
                 ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+                ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS,
                 ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
                 ErrorCodes.PROXY_CONNECT_FAILED,
                 ErrorCodes.TRANSPORT_ERROR,
             },
             resolve_retry_codes({"retryProfile": "step-oauth-recover"}),
         )
+
+    def test_build_error_details_classifies_phone_submitted_without_sms_code(self) -> None:
+        details = build_error_details(
+            step_type="obtain_codex_oauth",
+            message=(
+                "phone_verification_submitted_small_success: "
+                "phoneVerificationFailureStage=wait_sms_code "
+                "sms service GET /sms/sessions/sms_session_123/code failed: HTTP 502"
+            ),
+        )
+        self.assertEqual(ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS, details["code"])
+        self.assertEqual("flow_error", details["category"])
 
     def test_resolve_retry_codes_uses_proxy_refresh_profile(self) -> None:
         self.assertEqual(

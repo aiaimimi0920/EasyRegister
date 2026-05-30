@@ -14,6 +14,7 @@ class ErrorCodes:
     MAILBOX_UNAVAILABLE = "mailbox_unavailable"
     OTP_TIMEOUT = "otp_timeout"
     PASSWORD_VERIFY_BLOCKED = "password_verify_blocked"
+    PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS = "phone_verification_submitted_small_success"
     PROXY_CONNECT_FAILED = "proxy_connect_failed"
     REFRESH_TOKEN_REUSED = "refresh_token_reused"
     OPENAI_OAUTH_POOL_EMPTY = "openai_oauth_pool_empty"
@@ -39,6 +40,7 @@ CODE_CATEGORY_MAP: dict[str, str] = {
     ErrorCodes.MAILBOX_UNAVAILABLE: "flow_error",
     ErrorCodes.OTP_TIMEOUT: "otp_timeout",
     ErrorCodes.PASSWORD_VERIFY_BLOCKED: "blocked",
+    ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS: "flow_error",
     ErrorCodes.PROXY_CONNECT_FAILED: "proxy_error",
     ErrorCodes.REFRESH_TOKEN_REUSED: "auth_error",
     ErrorCodes.OPENAI_OAUTH_POOL_EMPTY: "flow_error",
@@ -114,6 +116,7 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
         ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
         ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+        ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS,
         ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
@@ -236,6 +239,8 @@ def classify_error_code(
 
     if ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING in combined:
         return ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING
+    if ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS in combined:
+        return ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS
     if ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION in combined:
         return ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION
     if (

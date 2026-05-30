@@ -54,6 +54,26 @@ def step_output_ok(*, step_type: str, step_output: Any) -> tuple[bool, str]:
             or f"{normalized_step_type}_failed"
         ).strip()
     if normalized_step_type == "obtain_codex_oauth":
+        if isinstance(step_output, dict):
+            if bool(step_output.get("phoneVerificationTerminal")):
+                return False, str(
+                    step_output.get("phoneVerificationTerminalCode")
+                    or step_output.get("phoneVerificationTerminalMessage")
+                    or step_output.get("status")
+                    or "phone_verification_terminal"
+                ).strip()
+            if (
+                bool(step_output.get("phoneVerificationSubmitted"))
+                and step_output.get("phoneVerificationAccepted") is False
+            ):
+                detail = str(step_output.get("phoneVerificationFailureDetail") or "").strip()
+                stage = str(step_output.get("phoneVerificationFailureStage") or "").strip()
+                suffix = " ".join(part for part in (stage, detail) if part)
+                return False, (
+                    f"{ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS}: {suffix}"
+                    if suffix
+                    else ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS
+                )
         if isinstance(step_output, dict) and (
             bool(step_output.get("ok")) or bool(str(step_output.get("successPath") or "").strip())
         ):
