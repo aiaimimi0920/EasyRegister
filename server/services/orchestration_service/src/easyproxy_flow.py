@@ -13,6 +13,8 @@ from others.runtime import FlowProxyLease, acquire_flow_proxy_lease, release_flo
 
 def _proxy_failure_class_from_code(code: str) -> tuple[str, str]:
     normalized = str(code or "").strip().lower()
+    if normalized == "authorize_continue_blocked":
+        return ("route_failure", "high")
     if normalized in {
         "proxy_connect_failed",
         "user_register_400",
