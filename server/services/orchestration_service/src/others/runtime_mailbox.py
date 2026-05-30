@@ -20,7 +20,7 @@ from shared_mailbox.easy_email_client import Mailbox, create_mailbox, plan_mailb
 
 DEFAULT_ORCHESTRATION_HOST_ID = "python-register-orchestration"
 DEFAULT_EASY_EMAIL_BASE_URL = "http://localhost:18080"
-DEFAULT_MAILBOX_TTL_SECONDS = 90
+DEFAULT_MAILBOX_TTL_SECONDS = 1800
 DEFAULT_REGISTER_MOEMAIL_DOMAIN_POOL = (
     "sall.cc",
     "cnmlgb.de",
@@ -34,7 +34,7 @@ DEFAULT_REGISTER_MOEMAIL_DOMAIN_POOL = (
 DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS = 20
 DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE = 90.0
 DEFAULT_REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD = 500
-DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS = 4
+DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS = 12
 MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
 EMAIL_OTP_FAILURE_REASONS = {"email_otp_timeout", "email_otp_wrong_code"}
 _MAILBOX_DEFAULT_POLICY_KEYS = {"default", "*", "__default__"}
@@ -311,7 +311,7 @@ def _resolve_mailbox_business_retry_attempts() -> int:
 
 
 def _dynamic_blacklist_exhausted_fallback_enabled() -> bool:
-    return env_bool("REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK", False)
+    return env_bool("REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK", True)
 
 
 def _mailbox_domain_from_email(email: str) -> str:

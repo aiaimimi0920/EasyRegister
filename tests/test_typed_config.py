@@ -30,6 +30,26 @@ from others.paths import resolve_shared_root  # noqa: E402
 
 
 class TypedConfigTests(unittest.TestCase):
+    def test_preflight_default_mailbox_ttl_covers_full_openai_main_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(Path(tmp_dir) / "others" / "mixed-runs"),
+                    "REGISTER_FLOW_PATH": "",
+                    "REGISTER_FLOW_SPECS_JSON": "[]",
+                    "REGISTER_TEAM_AUTH_PATH": "",
+                    "REGISTER_OPENAI_UPLOAD_PERCENT": "0",
+                    "REGISTER_CODEX_FREE_UPLOAD_PERCENT": "0",
+                    "REGISTER_CODEX_TEAM_UPLOAD_PERCENT": "0",
+                    "REGISTER_CODEX_PLUS_UPLOAD_PERCENT": "0",
+                },
+                clear=True,
+            ):
+                preflight = validate_runtime_preflight()
+
+        self.assertGreaterEqual(preflight["mailbox"]["ttlSeconds"], 1800)
+
     def test_cleanup_runtime_config_parses_sms_no_selection_cooldown(self) -> None:
         with mock.patch.dict(
             os.environ,

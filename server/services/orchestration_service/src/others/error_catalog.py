@@ -219,6 +219,16 @@ def classify_error_code(
         return ErrorCodes.UNSUPPORTED_EMAIL
     if "registration_disallowed" in combined and "mailbox_provider=" in combined:
         return ErrorCodes.INVALID_REQUEST_ERROR
+    if "chat_requirements_failed" in lowered:
+        if "status=401" in lowered or '"detail":"unauthorized"' in lowered:
+            return ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION
+        if (
+            "status=403" in lowered
+            or "just a moment" in combined
+            or "cloudflare" in combined
+            or "<html" in lowered
+        ):
+            return ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED
 
     if normalized_code:
         return normalized_code

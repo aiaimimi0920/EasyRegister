@@ -26,6 +26,22 @@ class ComposeSmokeTests(unittest.TestCase):
         ):
             self.assertIn(expected, payload)
 
+    def test_compose_keeps_email_otp_provider_threshold_aligned_with_domain_threshold(self) -> None:
+        main_payload = MAIN_COMPOSE_PATH.read_text(encoding="utf-8")
+        test_payload = TEST_COMPOSE_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD:-6",
+            main_payload,
+        )
+        self.assertIn(
+            "REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD:-6",
+            main_payload,
+        )
+        self.assertIn(
+            "REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD:-6",
+            test_payload,
+        )
+
     def test_deploy_host_generates_protocol_bridge_mount_contract(self) -> None:
         payload = (REPO_ROOT / "deploy-host.ps1").read_text(encoding="utf-8")
         for expected in (

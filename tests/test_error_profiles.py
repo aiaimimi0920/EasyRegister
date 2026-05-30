@@ -53,6 +53,10 @@ class ErrorProfilesTests(unittest.TestCase):
             by_id["obtain-codex-oauth"]["metadata"]["retry"]["retryProfile"],
         )
         self.assertEqual(
+            3,
+            by_id["obtain-codex-oauth"]["metadata"]["retry"]["maxAttempts"],
+        )
+        self.assertEqual(
             ["proxy_chain", "initialize_chatgpt_login_session"],
             by_id["obtain-codex-oauth"]["metadata"]["retry"]["refreshSavedStates"],
         )
@@ -66,6 +70,10 @@ class ErrorProfilesTests(unittest.TestCase):
         self.assertEqual(
             "step-oauth-recover",
             by_id["obtain-codex-oauth"]["metadata"]["retry"]["retryProfile"],
+        )
+        self.assertEqual(
+            3,
+            by_id["obtain-codex-oauth"]["metadata"]["retry"]["maxAttempts"],
         )
         self.assertEqual(
             ["proxy_chain", "initialize_chatgpt_login_session"],
@@ -168,6 +176,13 @@ class ErrorProfilesTests(unittest.TestCase):
             message='chat_requirements_failed status=401 body={"detail":"Unauthorized"}',
         )
         self.assertEqual(ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION, details["code"])
+
+    def test_build_error_details_classifies_oauth_chat_requirements_403_as_blocked(self) -> None:
+        details = build_error_details(
+            step_type="obtain_codex_oauth",
+            message="chat_requirements_failed status=403 body=<html><title>Just a moment...</title>",
+        )
+        self.assertEqual(ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, details["code"])
 
     def test_build_error_details_classifies_chatgpt_login_authorize_init_blocked(self) -> None:
         details = build_error_details(
