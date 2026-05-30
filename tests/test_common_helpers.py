@@ -131,6 +131,26 @@ class CommonHelpersTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual("", reason)
 
+    def test_validate_openai_oauth_seed_payload_accepts_refresh_token_material_without_legacy_login(self) -> None:
+        payload = _valid_openai_oauth_payload()
+        payload.pop("chatgptLogin")
+        payload["refreshToken"] = "refresh.demo"
+        payload["idToken"] = "id.demo"
+        payload["accessToken"] = "access.demo"
+        payload["chatgptLoginDetails"] = {
+            "oauthTokens": {
+                "refresh_token": "refresh.demo",
+                "id_token": "id.demo",
+                "access_token": "access.demo",
+            }
+        }
+
+        with mock.patch.dict("os.environ", {}, clear=True):
+            ok, reason = validate_openai_oauth_seed_payload(payload)
+
+        self.assertTrue(ok)
+        self.assertEqual("", reason)
+
     def test_extract_account_id_supports_top_level_auth_claims(self) -> None:
         payload = {
             "https://api.openai.com/auth": {

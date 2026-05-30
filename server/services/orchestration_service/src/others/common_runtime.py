@@ -97,21 +97,28 @@ def validate_openai_oauth_seed_payload(
     if str(platform_org.get("status") or "").strip().lower() != "completed":
         return False, "platform_organization_not_completed"
 
+    login_details = payload.get("chatgptLoginDetails")
+    oauth_tokens = login_details.get("oauthTokens") if isinstance(login_details, dict) else None
+    has_refresh_material = bool(str(payload.get("refreshToken") or "").strip())
+    if isinstance(oauth_tokens, dict):
+        has_refresh_material = has_refresh_material or bool(str(oauth_tokens.get("refresh_token") or "").strip())
+
     chatgpt_login = payload.get("chatgptLogin")
     if not isinstance(chatgpt_login, dict):
-        return False, "missing_chatgpt_login"
-    if str(chatgpt_login.get("status") or "").strip().lower() != "completed":
-        return False, "chatgpt_login_not_completed"
+        if not has_refresh_material:
+            return False, "missing_chatgpt_login"
+    else:
+        if str(chatgpt_login.get("status") or "").strip().lower() != "completed":
+            return False, "chatgpt_login_not_completed"
 
-    personal_workspace_id = str(
-        chatgpt_login.get("personalWorkspaceId")
-        or chatgpt_login.get("workspaceId")
-        or ""
-    ).strip()
-    if not personal_workspace_id:
-        return False, "missing_personal_workspace_id"
+        personal_workspace_id = str(
+            chatgpt_login.get("personalWorkspaceId")
+            or chatgpt_login.get("workspaceId")
+            or ""
+        ).strip()
+        if not personal_workspace_id:
+            return False, "missing_personal_workspace_id"
 
-    login_details = payload.get("chatgptLoginDetails")
     if isinstance(login_details, dict):
         client_bootstrap = login_details.get("clientBootstrap")
         if isinstance(client_bootstrap, dict):
