@@ -17,7 +17,7 @@ param(
     [int]$MailboxDomainBlacklistMinAttempts = 50,
     [double]$MailboxDomainBlacklistFailureRate = 95,
     [int]$MailboxEmailOtpFailureBlacklistThreshold = 6,
-    [int]$MailboxEmailOtpProviderFailureBlacklistThreshold = 12,
+    [int]$MailboxEmailOtpProviderFailureBlacklistThreshold = 6,
     [string]$MailboxBusinessPoliciesJson = "",
     [string]$SmsServiceBaseUrl = "http://easy-sms:8080",
     [string]$SmsServiceApiKey = "",
@@ -632,7 +632,7 @@ $resolvedMailboxDomainConsecutiveFailureBlacklistThreshold = Resolve-EnvValue -P
 $resolvedMailboxDomainBlacklistMinAttempts = Resolve-EnvValue -ParameterName 'MailboxDomainBlacklistMinAttempts' -RuntimeKey 'REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS' -Fallback '50'
 $resolvedMailboxDomainBlacklistFailureRate = Resolve-EnvValue -ParameterName 'MailboxDomainBlacklistFailureRate' -RuntimeKey 'REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE' -Fallback '95'
 $resolvedMailboxEmailOtpFailureBlacklistThreshold = Resolve-EnvValue -ParameterName 'MailboxEmailOtpFailureBlacklistThreshold' -RuntimeKey 'REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD' -Fallback '6'
-$resolvedMailboxEmailOtpProviderFailureBlacklistThreshold = Resolve-EnvValue -ParameterName 'MailboxEmailOtpProviderFailureBlacklistThreshold' -RuntimeKey 'REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD' -Fallback '12'
+$resolvedMailboxEmailOtpProviderFailureBlacklistThreshold = Resolve-EnvValue -ParameterName 'MailboxEmailOtpProviderFailureBlacklistThreshold' -RuntimeKey 'REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD' -Fallback '6'
 $resolvedMailboxBusinessPoliciesJson = Resolve-EnvValue -ParameterName 'MailboxBusinessPoliciesJson' -RuntimeKey 'REGISTER_MAILBOX_BUSINESS_POLICIES_JSON' -Fallback $defaultMailboxBusinessPoliciesJson
 $resolvedSmsServiceBaseUrl = Resolve-EnvValue -ParameterName 'SmsServiceBaseUrl' -RuntimeKey 'SMS_SERVICE_BASE_URL' -Fallback $defaultSmsServiceBaseUrl -UseFallbackWhenBlank
 $resolvedSmsServiceApiKey = Resolve-EnvValue -ParameterName 'SmsServiceApiKey' -RuntimeKey 'SMS_SERVICE_API_KEY' -Fallback ''
