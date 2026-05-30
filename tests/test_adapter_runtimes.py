@@ -920,16 +920,56 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             "report_phone_outcome_for_session",
             return_value={"ok": True},
         ):
-            with self.assertRaisesRegex(RuntimeError, "easyprotocol_transport_failed"):
-                easyprotocol_runtime.dispatch_easyprotocol_step(
-                    step_type="obtain_codex_oauth",
-                    step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
-                )
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
 
         self.assertEqual("obtain_codex_oauth", captured_calls[0]["step_type"])
         self.assertEqual(45, captured_calls[0]["timeout_seconds"])
         self.assertEqual("submit_phone_verification_number", captured_calls[1]["step_type"])
         self.assertEqual(12, captured_calls[1]["timeout_seconds"])
+        self.assertEqual("phone_verification_attempted_small_success", result["status"])
+
+    def test_dispatch_obtain_codex_oauth_treats_phone_submit_timeout_as_intermediate_result(self) -> None:
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            if step_type == "obtain_codex_oauth":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            if step_type == "submit_phone_verification_number":
+                raise RuntimeError("easyprotocol_transport_failed:timed out")
+            raise AssertionError(f"unexpected invoke: {step_type}")
+
+        with mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            return_value={"sessionId": "sms_123", "phoneNumber": "+15551234567", "providerKey": "sms24"},
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ):
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertEqual("phone_verification_attempted_small_success", result["status"])
+        self.assertTrue(result["phoneVerificationAttempted"])
+        self.assertFalse(result["phoneVerificationSubmitted"])
+        self.assertEqual("submit_phone_verification_number", result["phoneVerificationFailureStage"])
+        self.assertEqual("sms24", result["phoneProvider"])
+        self.assertEqual("sms_123", result["phoneSessionId"])
 
     def test_dispatch_obtain_codex_oauth_treats_terminal_phone_verification_as_intermediate_result(self) -> None:
         captured_inputs: list[dict[str, object]] = []

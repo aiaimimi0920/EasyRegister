@@ -498,6 +498,24 @@ def validate_free_personal_oauth(*, step_input: dict[str, Any]) -> dict[str, Any
             "phone_failure_stage": str(oauth_result_dict.get("phoneVerificationFailureStage") or "").strip(),
             "phone_failure_detail": str(oauth_result_dict.get("phoneVerificationFailureDetail") or "").strip(),
         }
+    if bool(oauth_result_dict.get("phoneVerificationAttempted")):
+        return {
+            "ok": False,
+            "status": "phone_verification_attempted_small_success",
+            "code": "phone_verification_submitted_small_success",
+            "detail": "phone_verification_attempted_small_success",
+            "oauth_account_id": oauth_account_id,
+            "team_account_id": team_account_id,
+            "validation_mode": "phone_verification_attempted_small_success",
+            "chatgpt_plan_type": plan_type,
+            "organizations": organizations,
+            "phone_verification_attempted": True,
+            "phone_verification_submitted": False,
+            "phone_provider": str(oauth_result_dict.get("phoneProvider") or "").strip(),
+            "phone_session_id": str(oauth_result_dict.get("phoneSessionId") or "").strip(),
+            "phone_failure_stage": str(oauth_result_dict.get("phoneVerificationFailureStage") or "").strip(),
+            "phone_failure_detail": str(oauth_result_dict.get("phoneVerificationFailureDetail") or "").strip(),
+        }
 
     return {
         "ok": False,

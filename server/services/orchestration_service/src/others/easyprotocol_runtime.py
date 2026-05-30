@@ -679,7 +679,32 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
                     "phoneSessionId": phone_session["sessionId"],
                     "phoneNumber": phone_session["phoneNumber"],
                 }
-            raise
+            return {
+                "ok": True,
+                "status": "phone_verification_attempted_small_success",
+                "successPath": str(
+                    initial_result.get("successPath")
+                    or initial_result.get("sourcePath")
+                    or step_input.get("source_path")
+                    or ""
+                ).strip(),
+                "sourcePath": str(
+                    step_input.get("source_path")
+                    or initial_result.get("sourcePath")
+                    or initial_result.get("successPath")
+                    or ""
+                ).strip(),
+                "pageType": str((resume_context or {}).get("pageType") or "").strip() or "add_phone",
+                "resumeContext": dict(resume_context),
+                "phoneVerificationAttempted": True,
+                "phoneVerificationSubmitted": False,
+                "phoneVerificationAccepted": False,
+                "phoneVerificationFailureStage": phone_failure_stage,
+                "phoneVerificationFailureDetail": str(exc),
+                "phoneProvider": phone_session["providerKey"],
+                "phoneSessionId": phone_session["sessionId"],
+                "phoneNumber": phone_session["phoneNumber"],
+            }
         if isinstance(final_result, dict):
             final_result["phoneVerificationAttempted"] = True
             final_result["phoneProvider"] = phone_session["providerKey"]

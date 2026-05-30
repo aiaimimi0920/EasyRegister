@@ -13,6 +13,10 @@ SRC_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "orches
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+PYTHON_SHARED_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "python_shared" / "src"
+if str(PYTHON_SHARED_ROOT) not in sys.path:
+    sys.path.insert(0, str(PYTHON_SHARED_ROOT))
+
 from others import artifact_pool_claims, artifact_pool_common, artifact_pool_team_batch  # noqa: E402
 
 
@@ -104,6 +108,27 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
         self.assertEqual("phone_verification_submitted_small_success", result["status"])
         self.assertEqual("wait_sms_code", result["phone_failure_stage"])
         self.assertEqual("onlinesim", result["phone_provider"])
+
+    def test_validate_free_personal_oauth_preserves_phone_attempt_failure_as_small_success_failure(self) -> None:
+        result = artifact_pool_claims.validate_free_personal_oauth(
+            step_input={
+                "oauth_result": {
+                    "phoneVerificationAttempted": True,
+                    "phoneVerificationSubmitted": False,
+                    "phoneVerificationFailureStage": "submit_phone_verification_number",
+                    "phoneVerificationFailureDetail": "easyprotocol_transport_failed:timed out",
+                    "phoneProvider": "smstome",
+                    "phoneSessionId": "sms_session_789",
+                }
+            }
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual("phone_verification_submitted_small_success", result["code"])
+        self.assertEqual("phone_verification_attempted_small_success", result["status"])
+        self.assertEqual("phone_verification_attempted_small_success", result["detail"])
+        self.assertEqual("submit_phone_verification_number", result["phone_failure_stage"])
+        self.assertEqual("smstome", result["phone_provider"])
 
     def test_claim_openai_oauth_artifact_skips_email_when_codex_success_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
