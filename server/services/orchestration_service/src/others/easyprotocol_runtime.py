@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -26,6 +27,12 @@ PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
     "rate_limit_exceeded",
     "wrong_otp_code",
 }
+PHONE_WALL_RECOVERY_ERROR_MARKERS = (
+    "flow_timeout_exceeded",
+    "timed out",
+    "timeout",
+    "easyprotocol_transport_failed",
+)
 
 
 def normalize_easyprotocol_request_url(base_url: str) -> str:
@@ -288,6 +295,81 @@ def validate_login_session_handoff_for_oauth(step_input: dict[str, Any]) -> None
         raise RuntimeError(f"authorize_missing_login_session:{detail}")
 
 
+def _looks_like_phone_wall_recovery_error(exc: BaseException) -> bool:
+    message = str(exc or "").strip().lower()
+    return bool(message) and any(marker in message for marker in PHONE_WALL_RECOVERY_ERROR_MARKERS)
+
+
+def _phone_wall_artifact_base_dirs(step_input: dict[str, Any]) -> list[Path]:
+    bases: list[Path] = []
+    for key in ("output_dir", "outputDir"):
+        value = str(step_input.get(key) or "").strip()
+        if value:
+            bases.append(Path(value).expanduser())
+    source_path_text = str(step_input.get("source_path") or step_input.get("sourcePath") or "").strip()
+    if source_path_text:
+        source_path = resolve_protocol_artifact_path(source_path_text) or Path(source_path_text).expanduser()
+        if source_path.parent:
+            bases.append(source_path.parent.parent if source_path.parent.name == "small_success" else source_path.parent)
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for base in bases:
+        try:
+            key = str(base.resolve())
+        except Exception:
+            key = str(base)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(base)
+    return deduped
+
+
+def _load_latest_phone_wall_artifact_payload(step_input: dict[str, Any]) -> dict[str, Any] | None:
+    candidates: list[Path] = []
+    for base in _phone_wall_artifact_base_dirs(step_input):
+        first_phone_dir = base / "first_phone"
+        if not first_phone_dir.is_dir():
+            continue
+        for path in first_phone_dir.glob("*.json"):
+            if path.is_file():
+                candidates.append(path)
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        resume_context = payload.get("resumeContext")
+        if not isinstance(resume_context, dict) or not resume_context:
+            continue
+        outcome = str(payload.get("outcome") or "").strip().lower()
+        page_type = str(payload.get("pageType") or payload.get("page_type") or "").strip().lower()
+        if outcome != "phone_wall" and "phone" not in page_type:
+            continue
+        return {
+            "ok": True,
+            "status": "phone_verification_required",
+            "phoneVerificationRequired": True,
+            "pageType": str(payload.get("pageType") or payload.get("page_type") or "").strip() or "add_phone",
+            "finalUrl": str(payload.get("finalUrl") or payload.get("final_url") or "").strip(),
+            "resumeContext": dict(resume_context),
+            "successPath": str(path),
+            "sourcePath": str(step_input.get("source_path") or step_input.get("sourcePath") or "").strip(),
+            "recoveredFromPhoneWallArtifact": True,
+            "phoneWallArtifactPath": str(path),
+            "phoneWallArtifactMtime": int(path.stat().st_mtime),
+            "phoneWallArtifactRecoveredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+    return None
+
+
 def invoke_easyprotocol(*, step_type: str, step_input: dict[str, Any]) -> dict[str, Any]:
     base_url = str(os.environ.get("EASY_PROTOCOL_BASE_URL") or "").strip() or DEFAULT_EASY_PROTOCOL_BASE_URL
     request_url = normalize_easyprotocol_request_url(base_url)
@@ -390,6 +472,16 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
                 initial_result=result,
                 step_input=bridged_step_input,
             )
+    except Exception as exc:
+        if normalized_step_type != "obtain_codex_oauth" or not _looks_like_phone_wall_recovery_error(exc):
+            raise
+        recovered_result = _load_latest_phone_wall_artifact_payload(bridged_step_input)
+        if not isinstance(recovered_result, dict):
+            raise
+        result = _maybe_complete_phone_verification_for_oauth(
+            initial_result=recovered_result,
+            step_input=bridged_step_input,
+        )
     finally:
         sync_protocol_source_bridge_back(bridge_info=source_bridge_info)
     if isinstance(result, dict):
