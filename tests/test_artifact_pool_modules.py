@@ -355,6 +355,51 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
             self.assertFalse(claimed_path.exists())
             self.assertTrue((output_root / "openai" / "failed-twice" / "retry.json").exists())
 
+    def test_finalize_openai_oauth_artifact_normalizes_materialized_continue_failure_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260530-task000001"
+            continue_pool_dir = output_root / "openai" / "failed-once"
+            continue_pool_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir = output_root / "others" / "openai-oauth-claims"
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            claimed_path = claims_dir / "deadbeef-materialized-e22baa73f218.json"
+            claimed_path.write_text(
+                (
+                    '{"email":"agnese18417@ke.for4u.net",'
+                    '"mailboxRef":"mailbox-ref",'
+                    '"mailboxSessionId":"session-id",'
+                    '"createdAt":"2026-05-30T00:02:54Z",'
+                    '"platformOrganization":{"status":"completed"},'
+                    '"chatgptLogin":{"status":"completed","workspaceId":"ws_123"},'
+                    '"chatgptLoginDetails":{"clientBootstrap":{"authStatus":"logged_in","structure":"personal"}}}'
+                ),
+                encoding="utf-8",
+            )
+
+            result = artifact_pool_claims.finalize_openai_oauth_artifact(
+                step_input={
+                    "output_dir": str(run_output_dir),
+                    "artifact": {
+                        "claimed_path": str(claimed_path),
+                        "original_name": "materialized-e22baa73f218.json",
+                        "email": "agnese18417@ke.for4u.net",
+                        "pool_dir": str(continue_pool_dir),
+                    },
+                    "task_error_code": "obtain_codex_oauth_failed",
+                    "failure_mode": "delete",
+                }
+            )
+
+            self.assertEqual("restored", result["status"])
+            self.assertFalse(claimed_path.exists())
+            restored_path = Path(str(result["restored_path"]))
+            self.assertTrue(restored_path.is_file())
+            self.assertEqual(output_root / "openai" / "failed-twice", restored_path.parent)
+            self.assertTrue(restored_path.name.startswith("small-20260530-000254-agnese18417@ke.for4u.net-"))
+            self.assertTrue(restored_path.name.endswith(".json"))
+            self.assertNotIn("materialized", restored_path.name)
+
     def test_claim_team_member_candidates_short_circuits_when_target_is_satisfied(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             team_pre_pool_dir = Path(tmp_dir) / "team-pre-pool"

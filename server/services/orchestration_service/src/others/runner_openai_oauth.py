@@ -109,6 +109,24 @@ def _small_openai_oauth_artifact_name_from_output(
     return f"small-{timestamp}-{email}-{uuid.uuid4().hex[:6]}.json"
 
 
+def _is_materialized_openai_oauth_artifact_name(value: str) -> bool:
+    name = _safe_artifact_filename(value).lower()
+    return name.startswith("materialized-") or "-materialized-" in name
+
+
+def _small_openai_oauth_artifact_name_from_payload(payload: dict[str, Any]) -> str:
+    timestamp = _small_artifact_timestamp_from_output(payload)
+    email = _safe_artifact_email_slug(str(payload.get("email") or ""))
+    return f"small-{timestamp}-{email}-{uuid.uuid4().hex[:6]}.json"
+
+
+def _normalize_openai_oauth_artifact_name(*, payload: dict[str, Any], preferred_name: str) -> str:
+    artifact_name = _safe_artifact_filename(preferred_name) or "openai-oauth.json"
+    if _is_materialized_openai_oauth_artifact_name(artifact_name):
+        return _small_openai_oauth_artifact_name_from_payload(payload)
+    return artifact_name
+
+
 def _iter_openai_oauth_artifacts(*, run_output_dir: Path, result_or_payload: Any | None = None) -> list[Path]:
     candidates: dict[str, Path] = {}
     for directory_name in ("openai_oauth", "small_success"):
@@ -252,12 +270,13 @@ def copy_openai_oauth_artifacts_to_pool(
         if not valid:
             discarded_paths.append({"source_path": str(resolved_source), "reason": reason})
             continue
-        destination = (pool_dir / resolved_source.name).resolve()
+        artifact_name = _normalize_openai_oauth_artifact_name(payload=payload, preferred_name=resolved_source.name)
+        destination = (pool_dir / artifact_name).resolve()
         if resolved_source == destination:
             copied_paths.append(str(resolved_source))
             continue
         if destination.exists():
-            destination = pool_dir / f"{resolved_source.stem}-{uuid.uuid4().hex[:6]}{resolved_source.suffix}"
+            destination = pool_dir / f"{Path(artifact_name).stem}-{uuid.uuid4().hex[:6]}{Path(artifact_name).suffix}"
         shutil.copy2(resolved_source, destination)
         copied_paths.append(str(destination))
     json_log(
@@ -287,7 +306,14 @@ def route_openai_oauth_artifact(
     move_local: bool = False,
 ) -> dict[str, Any]:
     resolved_source = Path(source_path).resolve()
-    artifact_name = str(preferred_name or resolved_source.name).strip() or resolved_source.name
+    artifact_name = _safe_artifact_filename(str(preferred_name or resolved_source.name).strip() or resolved_source.name)
+    if _is_materialized_openai_oauth_artifact_name(artifact_name):
+        try:
+            payload = load_json_payload(resolved_source)
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            artifact_name = _normalize_openai_oauth_artifact_name(payload=payload, preferred_name=artifact_name)
     destination_dir = Path(destination_dir).resolve()
     if not move_local:
         candidate_destination = (destination_dir / artifact_name).resolve()
