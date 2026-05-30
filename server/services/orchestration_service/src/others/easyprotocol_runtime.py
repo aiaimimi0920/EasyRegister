@@ -17,6 +17,7 @@ DEFAULT_EASY_PROTOCOL_OPERATION = "codex.semantic.step"
 DEFAULT_EASY_PROTOCOL_MODE = "strategy"
 DEFAULT_EASY_PROTOCOL_REQUESTED_SERVICE = ""
 DEFAULT_EASY_PROTOCOL_TIMEOUT_SECONDS = 900
+DEFAULT_PROTOCOL_OUTPUT_TARGET_DIR = "/shared/register-output"
 DEFAULT_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS = 5
 PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
     "invalid_phone_number",
@@ -123,8 +124,8 @@ def maybe_bridge_step_artifact(*, step_type: str, step_result: dict[str, Any]) -
     ):
         return step_result
 
-    source_path = Path(storage_path_text).expanduser()
-    if not source_path.is_file():
+    source_path = resolve_protocol_artifact_path(storage_path_text)
+    if source_path is None or not source_path.is_file():
         return step_result
 
     bridge_root = Path(bridge_root_text).expanduser()
@@ -138,6 +139,141 @@ def maybe_bridge_step_artifact(*, step_type: str, step_result: dict[str, Any]) -
     bridged["storage_path"] = str(target_path)
     bridged["bridged_storage_path"] = str(target_path)
     return bridged
+
+
+def _split_relative_path_from_root(*, path_text: str, root_text: str) -> str | None:
+    path_value = str(path_text or "").strip()
+    root_value = str(root_text or "").strip().rstrip("/\\")
+    if not path_value or not root_value:
+        return None
+    if path_value == root_value:
+        return ""
+    for separator in ("/", "\\"):
+        prefix = f"{root_value}{separator}"
+        if path_value.startswith(prefix):
+            return path_value[len(prefix) :]
+    return None
+
+
+def _join_path_text(*, root_text: str, relative_text: str) -> str:
+    root_value = str(root_text or "").strip().rstrip("/\\")
+    relative_value = str(relative_text or "").strip().strip("/\\")
+    if not relative_value:
+        return root_value
+    relative_parts = [part for part in relative_value.replace("\\", "/").split("/") if part]
+    if "\\" in root_value and "/" not in root_value:
+        return str(Path(root_value).joinpath(*relative_parts))
+    return f"{root_value}/{'/'.join(relative_parts)}"
+
+
+def resolve_protocol_artifact_path(path_text: str) -> Path | None:
+    direct_path = Path(str(path_text or "").strip()).expanduser()
+    if direct_path.is_file():
+        return direct_path
+
+    protocol_target_dir = str(
+        os.environ.get("REGISTER_PROTOCOL_OUTPUT_TARGET_DIR") or DEFAULT_PROTOCOL_OUTPUT_TARGET_DIR
+    ).strip()
+    protocol_mirror_dir = str(os.environ.get("REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR") or "").strip()
+    relative_path = _split_relative_path_from_root(
+        path_text=str(path_text or "").strip(),
+        root_text=protocol_target_dir,
+    )
+    if relative_path is None or not protocol_mirror_dir:
+        return None
+
+    mirrored_path = Path(
+        _join_path_text(
+            root_text=protocol_mirror_dir,
+            relative_text=relative_path,
+        )
+    ).expanduser()
+    if mirrored_path.is_file():
+        return mirrored_path
+    return None
+
+
+def _protocol_bridge_target_dir_text(*, bridge_root: Path) -> str:
+    target_dir_text = str(os.environ.get("REGISTER_PROTOCOL_BRIDGE_TARGET_DIR") or "").strip()
+    if target_dir_text:
+        return target_dir_text.rstrip("/\\")
+    return str(bridge_root.resolve())
+
+
+def _join_bridge_target_path(*, target_dir_text: str, file_name: str) -> str:
+    if "\\" in target_dir_text and "/" not in target_dir_text:
+        return str(Path(target_dir_text) / file_name)
+    return f"{target_dir_text.rstrip('/')}/{file_name}"
+
+
+def maybe_bridge_source_path_for_protocol(*, step_input: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    bridge_root_text = str(os.environ.get("REGISTER_PROTOCOL_BRIDGE_DIR") or "").strip()
+    source_path_text = str(step_input.get("source_path") or "").strip()
+    if not bridge_root_text or not source_path_text:
+        return step_input, {}
+
+    source_path = Path(source_path_text).expanduser()
+    if not source_path.is_file():
+        return step_input, {}
+
+    bridge_root = Path(bridge_root_text).expanduser()
+    bridge_root.mkdir(parents=True, exist_ok=True)
+    local_bridge_path = (bridge_root / source_path.name).resolve()
+    if source_path.resolve() != local_bridge_path:
+        shutil.copy2(source_path, local_bridge_path)
+
+    target_dir_text = _protocol_bridge_target_dir_text(bridge_root=bridge_root)
+    target_source_path = _join_bridge_target_path(
+        target_dir_text=target_dir_text,
+        file_name=source_path.name,
+    )
+    bridged_input = dict(step_input)
+    bridged_input["source_path"] = target_source_path
+    return bridged_input, {
+        "original_source_path": str(source_path.resolve()),
+        "local_bridge_path": str(local_bridge_path),
+        "target_source_path": target_source_path,
+    }
+
+
+def sync_protocol_source_bridge_back(*, bridge_info: dict[str, str]) -> None:
+    if not bridge_info:
+        return
+    original_source_path = Path(str(bridge_info.get("original_source_path") or "")).expanduser()
+    local_bridge_path = Path(str(bridge_info.get("local_bridge_path") or "")).expanduser()
+    if not original_source_path or not local_bridge_path.is_file():
+        return
+    original_source_path.parent.mkdir(parents=True, exist_ok=True)
+    if original_source_path.resolve() != local_bridge_path.resolve():
+        shutil.copy2(local_bridge_path, original_source_path)
+
+
+def rewrite_protocol_source_bridge_result_paths(
+    *,
+    step_result: dict[str, Any],
+    bridge_info: dict[str, str],
+) -> dict[str, Any]:
+    if not bridge_info:
+        return step_result
+    original_source_path = str(bridge_info.get("original_source_path") or "").strip()
+    target_source_path = str(bridge_info.get("target_source_path") or "").strip()
+    local_bridge_path = str(bridge_info.get("local_bridge_path") or "").strip()
+    if not original_source_path or not target_source_path:
+        return step_result
+
+    rewritten = dict(step_result)
+    for key in (
+        "sourcePath",
+        "source_path",
+        "successPath",
+        "success_path",
+        "storage_path",
+        "output_path",
+    ):
+        value = str(rewritten.get(key) or "").strip()
+        if value and value in {target_source_path, local_bridge_path}:
+            rewritten[key] = original_source_path
+    return rewritten
 
 
 def validate_login_session_handoff_for_oauth(step_input: dict[str, Any]) -> None:
@@ -243,13 +379,23 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
                 )
             ),
         )
-    result = invoke_easyprotocol(step_type=normalized_step_type, step_input=normalized_step_input)
-    if normalized_step_type == "obtain_codex_oauth" and isinstance(result, dict):
-        result = _maybe_complete_phone_verification_for_oauth(
-            initial_result=result,
-            step_input=normalized_step_input,
-        )
+    bridged_step_input, source_bridge_info = maybe_bridge_source_path_for_protocol(
+        step_input=normalized_step_input,
+    )
+    try:
+        result = invoke_easyprotocol(step_type=normalized_step_type, step_input=bridged_step_input)
+        if normalized_step_type == "obtain_codex_oauth" and isinstance(result, dict):
+            result = _maybe_complete_phone_verification_for_oauth(
+                initial_result=result,
+                step_input=bridged_step_input,
+            )
+    finally:
+        sync_protocol_source_bridge_back(bridge_info=source_bridge_info)
     if isinstance(result, dict):
+        result = rewrite_protocol_source_bridge_result_paths(
+            step_result=result,
+            bridge_info=source_bridge_info,
+        )
         return maybe_bridge_step_artifact(
             step_type=normalized_step_type,
             step_result=result,

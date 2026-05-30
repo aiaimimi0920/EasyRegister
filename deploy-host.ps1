@@ -3,6 +3,11 @@ param(
     [string]$ImportCode = "",
     [string]$BootstrapFile = "",
     [string]$ComposeFile = "",
+    [string]$ProtocolRegisterOutputDirHost = "",
+    [string]$ProtocolContainerName = "easy-protocol",
+    [string]$ProtocolRegisterOutputContainerPath = "/shared/register-output",
+    [string]$ProtocolOutputMirrorContainerPath = "/shared/protocol-register-output",
+    [string]$ProtocolBridgeSubdir = "easyregister-bridge",
     [string]$MailboxServiceBaseUrl = "http://easy-email:8080",
     [string]$MailboxServiceApiKey = "J7L+RCwLIBEcMZHzz0rXjm4oyR9rymq9",
     [string]$MailboxDomainPool = "",
@@ -243,6 +248,91 @@ function Convert-HostPathToComposeSource {
     )
 
     return ([System.IO.Path]::GetFullPath($Path) -replace '\\', '/')
+}
+
+function Join-ContainerPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root,
+        [Parameter(Mandatory = $true)]
+        [string]$Child
+    )
+
+    $normalizedRoot = $Root.Trim().TrimEnd('/', '\')
+    $normalizedChild = $Child.Trim().TrimStart('/', '\')
+    if ([string]::IsNullOrWhiteSpace($normalizedChild)) {
+        return $normalizedRoot
+    }
+    return "$normalizedRoot/$normalizedChild"
+}
+
+function Get-DockerBindSourceForContainerTarget {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ContainerName,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ContainerName) -or [string]::IsNullOrWhiteSpace($TargetPath)) {
+        return ""
+    }
+    try {
+        $mountsJson = & docker inspect --format '{{json .Mounts}}' $ContainerName 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($mountsJson)) {
+            return ""
+        }
+        $mounts = $mountsJson | ConvertFrom-Json
+        foreach ($mount in @($mounts)) {
+            $destination = ""
+            if ($mount.PSObject.Properties.Name -contains "Destination") {
+                $destination = [string]$mount.Destination
+            }
+            if ($destination -ne $TargetPath) {
+                continue
+            }
+            if ($mount.PSObject.Properties.Name -contains "Source") {
+                return [string]$mount.Source
+            }
+        }
+    } catch {
+        return ""
+    }
+    return ""
+}
+
+function New-ProtocolBridgeMountOverrideFile {
+    param(
+        [string]$ProtocolRegisterOutputDirHost,
+        [Parameter(Mandatory = $true)]
+        [string]$ProtocolOutputMirrorContainerPath,
+        [Parameter(Mandatory = $true)]
+        [string]$OverridePath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ProtocolRegisterOutputDirHost)) {
+        if (Test-Path -LiteralPath $OverridePath) {
+            Remove-Item -LiteralPath $OverridePath -Force
+        }
+        return $null
+    }
+
+    $resolvedSource = [System.IO.Path]::GetFullPath($ProtocolRegisterOutputDirHost)
+    New-Item -ItemType Directory -Force -Path $resolvedSource | Out-Null
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('services:')
+    $lines.Add('  easy-register:')
+    $lines.Add('    volumes:')
+    $lines.Add('      - type: bind')
+    $lines.Add(("        source: ""{0}""" -f (Convert-HostPathToComposeSource -Path $resolvedSource)))
+    $lines.Add(("        target: ""{0}""" -f $ProtocolOutputMirrorContainerPath.TrimEnd('/', '\')))
+    Set-Content -LiteralPath $OverridePath -Value $lines -Encoding ASCII
+
+    return [pscustomobject]@{
+        SourcePath = $resolvedSource
+        TargetPath = $ProtocolOutputMirrorContainerPath.TrimEnd('/', '\')
+    }
 }
 
 function New-AliasMountOverrideFile {
@@ -575,6 +665,46 @@ $resolvedDashboardEnabled = if ($deployBoundParameters.ContainsKey('DashboardEna
 }
 $resolvedDashboardListen = if ($importedRuntimeValues.ContainsKey('REGISTER_DASHBOARD_LISTEN')) { [string]$importedRuntimeValues['REGISTER_DASHBOARD_LISTEN'] } else { [string]$env:REGISTER_DASHBOARD_LISTEN }
 $resolvedDashboardAllowRemote = if ($importedRuntimeValues.ContainsKey('REGISTER_DASHBOARD_ALLOW_REMOTE')) { [string]$importedRuntimeValues['REGISTER_DASHBOARD_ALLOW_REMOTE'] } else { [string]$env:REGISTER_DASHBOARD_ALLOW_REMOTE }
+$resolvedProtocolOutputTargetContainerPath = if ([string]::IsNullOrWhiteSpace($ProtocolRegisterOutputContainerPath)) {
+    "/shared/register-output"
+} else {
+    $ProtocolRegisterOutputContainerPath.TrimEnd('/', '\')
+}
+$resolvedProtocolOutputMirrorContainerPath = if ([string]::IsNullOrWhiteSpace($ProtocolOutputMirrorContainerPath)) {
+    "/shared/protocol-register-output"
+} else {
+    $ProtocolOutputMirrorContainerPath.TrimEnd('/', '\')
+}
+$resolvedProtocolBridgeSubdir = if ([string]::IsNullOrWhiteSpace($ProtocolBridgeSubdir)) {
+    "easyregister-bridge"
+} else {
+    $ProtocolBridgeSubdir.Trim().Trim('/', '\')
+}
+$resolvedProtocolRegisterOutputDirHost = if ($deployBoundParameters.ContainsKey('ProtocolRegisterOutputDirHost')) {
+    [string]$ProtocolRegisterOutputDirHost
+} elseif (-not [string]::IsNullOrWhiteSpace($env:REGISTER_PROTOCOL_REGISTER_OUTPUT_DIR_HOST)) {
+    [string]$env:REGISTER_PROTOCOL_REGISTER_OUTPUT_DIR_HOST
+} else {
+    Get-DockerBindSourceForContainerTarget `
+        -ContainerName $ProtocolContainerName `
+        -TargetPath $resolvedProtocolOutputTargetContainerPath
+}
+if (-not [string]::IsNullOrWhiteSpace($resolvedProtocolRegisterOutputDirHost)) {
+    $resolvedProtocolRegisterOutputDirHost = Resolve-AbsolutePath -Path $resolvedProtocolRegisterOutputDirHost -BaseDir $launcherRoot
+}
+$resolvedProtocolBridgeDir = if ($importedRuntimeValues.ContainsKey('REGISTER_PROTOCOL_BRIDGE_DIR')) { [string]$importedRuntimeValues['REGISTER_PROTOCOL_BRIDGE_DIR'] } else { [string]$env:REGISTER_PROTOCOL_BRIDGE_DIR }
+$resolvedProtocolBridgeTargetDir = if ($importedRuntimeValues.ContainsKey('REGISTER_PROTOCOL_BRIDGE_TARGET_DIR')) { [string]$importedRuntimeValues['REGISTER_PROTOCOL_BRIDGE_TARGET_DIR'] } else { [string]$env:REGISTER_PROTOCOL_BRIDGE_TARGET_DIR }
+$resolvedProtocolOutputMirrorDir = if ($importedRuntimeValues.ContainsKey('REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR')) { [string]$importedRuntimeValues['REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR'] } else { [string]$env:REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR }
+$resolvedProtocolOutputTargetDir = if ($importedRuntimeValues.ContainsKey('REGISTER_PROTOCOL_OUTPUT_TARGET_DIR')) { [string]$importedRuntimeValues['REGISTER_PROTOCOL_OUTPUT_TARGET_DIR'] } else { [string]$env:REGISTER_PROTOCOL_OUTPUT_TARGET_DIR }
+if (-not [string]::IsNullOrWhiteSpace($resolvedProtocolRegisterOutputDirHost)) {
+    $resolvedProtocolOutputMirrorDir = $resolvedProtocolOutputMirrorContainerPath
+    $resolvedProtocolOutputTargetDir = $resolvedProtocolOutputTargetContainerPath
+    $resolvedProtocolBridgeDir = Join-ContainerPath -Root $resolvedProtocolOutputMirrorContainerPath -Child $resolvedProtocolBridgeSubdir
+    $resolvedProtocolBridgeTargetDir = Join-ContainerPath -Root $resolvedProtocolOutputTargetContainerPath -Child $resolvedProtocolBridgeSubdir
+    New-Item -ItemType Directory -Force -Path (Join-Path $resolvedProtocolRegisterOutputDirHost $resolvedProtocolBridgeSubdir) | Out-Null
+} elseif ([string]::IsNullOrWhiteSpace($resolvedProtocolOutputTargetDir)) {
+    $resolvedProtocolOutputTargetDir = "/shared/register-output"
+}
 
 $env:REGISTER_OUTPUT_DIR_HOST = $resolvedOutputDirHost
 $env:REGISTER_TEAM_AUTH_DIR_HOST = $TeamAuthDirHost
@@ -646,6 +776,10 @@ elseif ([string]::IsNullOrWhiteSpace($env:EASY_PROTOCOL_BASE_URL)) {
 if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_EASY_PROTOCOL_BASE_URL)) {
     $env:EASYREGISTER_TEST_EASY_PROTOCOL_BASE_URL = $env:EASY_PROTOCOL_BASE_URL
 }
+$env:REGISTER_PROTOCOL_BRIDGE_DIR = $resolvedProtocolBridgeDir
+$env:REGISTER_PROTOCOL_BRIDGE_TARGET_DIR = $resolvedProtocolBridgeTargetDir
+$env:REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR = $resolvedProtocolOutputMirrorDir
+$env:REGISTER_PROTOCOL_OUTPUT_TARGET_DIR = $resolvedProtocolOutputTargetDir
 
 if (-not [string]::IsNullOrWhiteSpace($Image)) {
     $env:REGISTER_SERVICE_IMAGE = $Image
@@ -724,6 +858,10 @@ foreach ($entry in @{
     REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST = $env:REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST
     EASY_PROTOCOL_BASE_URL                    = $env:EASY_PROTOCOL_BASE_URL
     EASY_PROTOCOL_CONTROL_TOKEN               = $env:EASY_PROTOCOL_CONTROL_TOKEN
+    REGISTER_PROTOCOL_BRIDGE_DIR              = $env:REGISTER_PROTOCOL_BRIDGE_DIR
+    REGISTER_PROTOCOL_BRIDGE_TARGET_DIR       = $env:REGISTER_PROTOCOL_BRIDGE_TARGET_DIR
+    REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR       = $env:REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR
+    REGISTER_PROTOCOL_OUTPUT_TARGET_DIR       = $env:REGISTER_PROTOCOL_OUTPUT_TARGET_DIR
     REGISTER_DASHBOARD_ENABLED                = $env:REGISTER_DASHBOARD_ENABLED
     REGISTER_DASHBOARD_LISTEN                 = $env:REGISTER_DASHBOARD_LISTEN
     REGISTER_DASHBOARD_ALLOW_REMOTE           = $env:REGISTER_DASHBOARD_ALLOW_REMOTE
@@ -751,10 +889,18 @@ $aliasMounts = @(
         -OutputDirHost $resolvedOutputDirHost `
         -OverridePath $aliasMountOverridePath
 )
+$protocolBridgeOverridePath = Join-Path $launcherRoot '.deploy-compose.protocol-bridge.generated.yaml'
+$protocolBridgeMount = New-ProtocolBridgeMountOverrideFile `
+    -ProtocolRegisterOutputDirHost $resolvedProtocolRegisterOutputDirHost `
+    -ProtocolOutputMirrorContainerPath $resolvedProtocolOutputMirrorContainerPath `
+    -OverridePath $protocolBridgeOverridePath
 
 if ($MaterializeOnly) {
     if ($aliasMounts.Count -gt 0) {
         $aliasMounts | Format-Table -AutoSize
+    }
+    if ($null -ne $protocolBridgeMount) {
+        $protocolBridgeMount | Format-List
     }
     return
 }
@@ -769,6 +915,13 @@ $deployComposeParams = @{
 }
 if ($aliasMounts.Count -gt 0) {
     $deployComposeParams["AdditionalComposeFiles"] = @($aliasMountOverridePath)
+}
+if ($null -ne $protocolBridgeMount) {
+    if ($deployComposeParams.ContainsKey("AdditionalComposeFiles")) {
+        $deployComposeParams["AdditionalComposeFiles"] = @($deployComposeParams["AdditionalComposeFiles"]) + $protocolBridgeOverridePath
+    } else {
+        $deployComposeParams["AdditionalComposeFiles"] = @($protocolBridgeOverridePath)
+    }
 }
 if ($ForceLinks) {
     $deployComposeParams["ForceLinks"] = $true

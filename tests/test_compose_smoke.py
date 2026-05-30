@@ -16,6 +16,29 @@ class ComposeSmokeTests(unittest.TestCase):
         payload = MAIN_COMPOSE_PATH.read_text(encoding="utf-8")
         self.assertIn("EasyAiMi", payload)
 
+    def test_main_compose_exposes_protocol_bridge_env_vars(self) -> None:
+        payload = MAIN_COMPOSE_PATH.read_text(encoding="utf-8")
+        for expected in (
+            "REGISTER_PROTOCOL_BRIDGE_DIR",
+            "REGISTER_PROTOCOL_BRIDGE_TARGET_DIR",
+            "REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR",
+            "REGISTER_PROTOCOL_OUTPUT_TARGET_DIR",
+        ):
+            self.assertIn(expected, payload)
+
+    def test_deploy_host_generates_protocol_bridge_mount_contract(self) -> None:
+        payload = (REPO_ROOT / "deploy-host.ps1").read_text(encoding="utf-8")
+        for expected in (
+            "ProtocolRegisterOutputDirHost",
+            "REGISTER_PROTOCOL_BRIDGE_DIR",
+            "REGISTER_PROTOCOL_BRIDGE_TARGET_DIR",
+            "REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR",
+            "REGISTER_PROTOCOL_OUTPUT_TARGET_DIR",
+            "/shared/protocol-register-output",
+            "easyregister-bridge",
+        ):
+            self.assertIn(expected, payload)
+
     def test_test_compose_keeps_isolated_contract_strings(self) -> None:
         payload = TEST_COMPOSE_PATH.read_text(encoding="utf-8")
         for expected in (
