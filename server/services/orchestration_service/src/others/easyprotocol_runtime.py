@@ -18,6 +18,7 @@ DEFAULT_EASY_PROTOCOL_OPERATION = "codex.semantic.step"
 DEFAULT_EASY_PROTOCOL_MODE = "strategy"
 DEFAULT_EASY_PROTOCOL_REQUESTED_SERVICE = ""
 DEFAULT_EASY_PROTOCOL_TIMEOUT_SECONDS = 900
+DEFAULT_EASY_PROTOCOL_OAUTH_TIMEOUT_SECONDS = 240
 DEFAULT_PROTOCOL_OUTPUT_TARGET_DIR = "/shared/register-output"
 DEFAULT_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS = 5
 PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
@@ -52,6 +53,16 @@ def easyprotocol_timeout_seconds() -> int:
         return max(1, int(float(raw)))
     except Exception:
         return DEFAULT_EASY_PROTOCOL_TIMEOUT_SECONDS
+
+
+def easyprotocol_oauth_timeout_seconds() -> int:
+    raw = str(os.environ.get("EASY_PROTOCOL_OAUTH_TIMEOUT_SECONDS") or "").strip()
+    if raw:
+        try:
+            return max(1, int(float(raw)))
+        except Exception:
+            return DEFAULT_EASY_PROTOCOL_OAUTH_TIMEOUT_SECONDS
+    return min(easyprotocol_timeout_seconds(), DEFAULT_EASY_PROTOCOL_OAUTH_TIMEOUT_SECONDS)
 
 
 def phone_verification_terminal_retry_attempts() -> int:
@@ -370,7 +381,12 @@ def _load_latest_phone_wall_artifact_payload(step_input: dict[str, Any]) -> dict
     return None
 
 
-def invoke_easyprotocol(*, step_type: str, step_input: dict[str, Any]) -> dict[str, Any]:
+def invoke_easyprotocol(
+    *,
+    step_type: str,
+    step_input: dict[str, Any],
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
     base_url = str(os.environ.get("EASY_PROTOCOL_BASE_URL") or "").strip() or DEFAULT_EASY_PROTOCOL_BASE_URL
     request_url = normalize_easyprotocol_request_url(base_url)
     request_payload = build_easyprotocol_request(step_type=step_type, step_input=step_input)
@@ -382,7 +398,13 @@ def invoke_easyprotocol(*, step_type: str, step_input: dict[str, Any]) -> dict[s
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=easyprotocol_timeout_seconds()) as resp:
+        if timeout_seconds is not None:
+            request_timeout = max(1, int(timeout_seconds))
+        elif str(step_type or "").strip() == "obtain_codex_oauth":
+            request_timeout = easyprotocol_oauth_timeout_seconds()
+        else:
+            request_timeout = easyprotocol_timeout_seconds()
+        with urllib.request.urlopen(req, timeout=request_timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
@@ -466,7 +488,10 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
         step_input=normalized_step_input,
     )
     try:
-        result = invoke_easyprotocol(step_type=normalized_step_type, step_input=bridged_step_input)
+        result = invoke_easyprotocol(
+            step_type=normalized_step_type,
+            step_input=bridged_step_input,
+        )
         if normalized_step_type == "obtain_codex_oauth" and isinstance(result, dict):
             result = _maybe_complete_phone_verification_for_oauth(
                 initial_result=result,
