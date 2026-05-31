@@ -308,6 +308,9 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
     ):
         return "external_phone_verification"
 
+    if error_step in {"acquire-proxy-chain", "release-proxy-chain"}:
+        return "external_proxy_or_auth"
+
     if error_step in {
         "create-openai-account",
         "initialize-chatgpt-login-session",

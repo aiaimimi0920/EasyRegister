@@ -311,7 +311,7 @@ def _resolve_mailbox_business_retry_attempts() -> int:
 
 
 def _dynamic_blacklist_exhausted_fallback_enabled() -> bool:
-    return env_bool("REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK", True)
+    return env_bool("REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK", False)
 
 
 def _mailbox_domain_from_email(email: str) -> str:

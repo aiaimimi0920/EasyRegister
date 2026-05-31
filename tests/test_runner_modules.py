@@ -1369,6 +1369,43 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("external_proxy_or_auth", outcome["ignoreReason"])
             self.assertFalse(Path(outcome["statePath"]).is_file())
 
+    def test_record_business_mailbox_domain_outcome_ignores_proxy_acquire_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": False,
+                "errorStep": "acquire-proxy-chain",
+                "error": "easy_proxy_checkout_failed: all nodes unavailable",
+                "steps": {
+                    "acquire-mailbox": "ok",
+                    "acquire-proxy-chain": "error",
+                },
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@not-mailbox-fault.test",
+                        "provider": "tempmail-lol",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "acquire-proxy-chain": {
+                        "message": "easy_proxy_checkout_failed: all nodes unavailable",
+                    }
+                },
+            }
+
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertTrue(outcome["ignored"])
+            self.assertEqual("external_proxy_or_auth", outcome["ignoreReason"])
+            self.assertFalse(Path(outcome["statePath"]).is_file())
+
     def test_record_business_mailbox_domain_outcome_success_clears_dynamic_blacklists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"
