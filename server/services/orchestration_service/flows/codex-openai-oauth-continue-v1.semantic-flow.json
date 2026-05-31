@@ -51,6 +51,11 @@
             "teamAuthPath": "{{task.team_auth_path}}"
           },
           "probe_url": "https://chatgpt.com/auth/login",
+          "probe_urls": [
+            "https://chatgpt.com/auth/login",
+            "https://platform.openai.com/login",
+            "https://auth.openai.com/log-in-or-create-account"
+          ],
           "probe_expected_statuses": [
             200
           ],

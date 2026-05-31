@@ -53,6 +53,31 @@ class EasyProxyFlowTests(unittest.TestCase):
         self.assertEqual("route_failure", release_lease.call_args.kwargs["failure_class"])
         self.assertEqual("high", release_lease.call_args.kwargs["route_confidence"])
 
+    def test_acquire_proxy_chain_passes_all_probe_urls_to_runtime_acquire(self) -> None:
+        probe_urls = [
+            "https://chatgpt.com/auth/login",
+            "https://platform.openai.com/login",
+            "https://auth.openai.com/log-in-or-create-account",
+        ]
+        with mock.patch.object(easyproxy_flow, "acquire_flow_proxy_lease", return_value=easyproxy_flow.FlowProxyLease.direct(flow_name="test")) as acquire_lease:
+            result = easyproxy_flow.dispatch_easyproxy_step(
+                step_type="acquire_proxy_chain",
+                step_input={
+                    "flow_name": "codex_openai_account_task",
+                    "probe_url": "https://chatgpt.com/auth/login",
+                    "probe_urls": probe_urls,
+                    "probe_expected_statuses": [200],
+                    "max_acquire_attempts": 1,
+                    "required": True,
+                },
+            )
+
+        self.assertEqual("direct", result["acquisition_mode"])
+        acquire_lease.assert_called_once()
+        self.assertEqual("https://chatgpt.com/auth/login", acquire_lease.call_args.kwargs["probe_url"])
+        self.assertEqual(probe_urls, acquire_lease.call_args.kwargs["probe_urls"])
+        self.assertEqual({200}, acquire_lease.call_args.kwargs["probe_expected_statuses"])
+
 
 if __name__ == "__main__":
     unittest.main()

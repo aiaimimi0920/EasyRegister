@@ -16,6 +16,12 @@ from others import runtime_proxy_acquire  # noqa: E402
 
 
 class RuntimeProxyAcquireTests(unittest.TestCase):
+    OPENAI_PROXY_PROBE_URLS = [
+        "https://chatgpt.com/auth/login",
+        "https://platform.openai.com/login",
+        "https://auth.openai.com/log-in-or-create-account",
+    ]
+
     def setUp(self) -> None:
         self._output_root = tempfile.TemporaryDirectory()
         self.addCleanup(self._output_root.cleanup)
@@ -337,6 +343,92 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
             self.assertEqual("http://easy-proxy:25003", second.proxy_url)
             self.assertIn("http://easy-proxy:25001", random_calls[1])
             self.assertIn("http://easy-proxy:25001", random_calls[2])
+        finally:
+            with runtime_proxy_acquire._ACTIVE_FLOW_PROXY_LOCK:
+                runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.update(original_active)
+                runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.update(original_recent)
+                runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.update(original_failed)
+
+    def test_random_node_requires_all_configured_probe_urls_before_selecting_route(self) -> None:
+        config = SimpleNamespace(
+            enabled=True,
+            required_by_default=True,
+            management_base_url="http://easy-proxy:29888",
+            api_key="",
+            ttl_minutes=30,
+        )
+
+        with runtime_proxy_acquire._ACTIVE_FLOW_PROXY_LOCK:
+            original_active = set(runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS)
+            original_recent = dict(runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS)
+            original_failed = dict(runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS)
+            runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.clear()
+            runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.clear()
+            runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
+
+        random_calls: list[set[str]] = []
+        probe_calls: list[tuple[str, str]] = []
+        random_candidates = [
+            {
+                "proxyUrl": "http://easy-proxy:25001",
+                "metadata": {"selectedNodeTag": "chatgpt-only", "selectedNodePort": "25001"},
+            },
+            {
+                "proxyUrl": "http://easy-proxy:25002",
+                "metadata": {"selectedNodeTag": "openai-ready", "selectedNodePort": "25002"},
+            },
+        ]
+
+        def _random_candidate(**kwargs):
+            random_calls.append(set(kwargs.get("excluded_proxy_urls") or set()))
+            return random_candidates[len(random_calls) - 1]
+
+        def _probe_candidate(*, proxy_url: str, probe_url: str, expected_statuses: set[int] | None) -> None:
+            probe_calls.append((proxy_url, probe_url))
+            self.assertEqual({200}, expected_statuses)
+            if proxy_url == "http://easy-proxy:25001" and probe_url == "https://platform.openai.com/login":
+                raise RuntimeError("easy_proxy_probe_failed status=403 url=https://platform.openai.com/login")
+
+        try:
+            with mock.patch.object(runtime_proxy_acquire, "_proxy_runtime_config", return_value=config), \
+                mock.patch.object(runtime_proxy_acquire, "ensure_easy_proxy_env_defaults"), \
+                mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_mode", return_value="random-node"), \
+                mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_unique_attempts", return_value=2), \
+                mock.patch.object(runtime_proxy_acquire, "_default_easy_proxy_service_key", return_value="service-key"), \
+                mock.patch.object(runtime_proxy_acquire, "_default_easy_proxy_stage", return_value="registration"), \
+                mock.patch.object(runtime_proxy_acquire, "runtime_reachable_proxy_url", side_effect=lambda value: value), \
+                mock.patch.object(
+                    runtime_proxy_acquire,
+                    "_probe_flow_proxy",
+                    side_effect=_probe_candidate,
+                ), \
+                mock.patch.object(
+                    runtime_proxy_acquire,
+                    "checkout_random_node_proxy",
+                    side_effect=_random_candidate,
+                ):
+                lease = runtime_proxy_acquire.acquire_flow_proxy_lease(
+                    flow_name="codex_openai_account_task",
+                    probe_urls=self.OPENAI_PROXY_PROBE_URLS,
+                    probe_expected_statuses={200},
+                )
+
+            self.assertEqual("http://easy-proxy:25002", lease.proxy_url)
+            self.assertEqual("random-node", lease.acquisition_mode)
+            self.assertIn("http://easy-proxy:25001", random_calls[1])
+            self.assertEqual(
+                [
+                    ("http://easy-proxy:25001", "https://chatgpt.com/auth/login"),
+                    ("http://easy-proxy:25001", "https://platform.openai.com/login"),
+                    ("http://easy-proxy:25002", "https://chatgpt.com/auth/login"),
+                    ("http://easy-proxy:25002", "https://platform.openai.com/login"),
+                    ("http://easy-proxy:25002", "https://auth.openai.com/log-in-or-create-account"),
+                ],
+                probe_calls,
+            )
         finally:
             with runtime_proxy_acquire._ACTIVE_FLOW_PROXY_LOCK:
                 runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.clear()

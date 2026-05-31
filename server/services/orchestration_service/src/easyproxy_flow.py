@@ -11,6 +11,24 @@ ensure_local_bundle_imports()
 from others.runtime import FlowProxyLease, acquire_flow_proxy_lease, release_flow_proxy_lease
 
 
+def _coerce_string_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        items = []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item or "").strip()
+        key = text.lower()
+        if text and key not in seen:
+            normalized.append(text)
+            seen.add(key)
+    return normalized
+
+
 def _proxy_failure_class_from_code(code: str) -> tuple[str, str]:
     normalized = str(code or "").strip().lower()
     if normalized == "authorize_continue_blocked":
@@ -49,13 +67,16 @@ def dispatch_easyproxy_step(*, step_type: str, step_input: dict[str, Any]) -> di
                 expected_status_set = None
         else:
             expected_status_set = None
+        probe_url = str(step_input.get("probe_url") or "").strip() or None
+        probe_urls = _coerce_string_list(step_input.get("probe_urls"))
         last_error: Exception | None = None
         for _ in range(max_acquire_attempts):
             lease = acquire_flow_proxy_lease(
                 flow_name=str(step_input.get("flow_name") or "").strip() or "codex_openai_account_task",
                 metadata=metadata if isinstance(metadata, dict) else None,
                 required=bool(step_input.get("required", True)),
-                probe_url=str(step_input.get("probe_url") or "").strip() or None,
+                probe_url=probe_url,
+                probe_urls=probe_urls,
                 probe_expected_statuses=expected_status_set,
             )
             if str(lease.proxy_url or "").strip().lower() not in avoid_proxy_urls:

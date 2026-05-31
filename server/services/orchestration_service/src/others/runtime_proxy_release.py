@@ -49,6 +49,7 @@ def lease_flow_proxy(
     metadata: dict[str, str] | None = None,
     required: bool | None = None,
     probe_url: str | None = None,
+    probe_urls: object = None,
     probe_expected_statuses: set[int] | None = None,
 ) -> Iterator[FlowProxyLease]:
     lease = acquire_flow_proxy_lease(
@@ -56,6 +57,7 @@ def lease_flow_proxy(
         metadata=metadata,
         required=required,
         probe_url=probe_url,
+        probe_urls=probe_urls,
         probe_expected_statuses=probe_expected_statuses,
     )
     try:
