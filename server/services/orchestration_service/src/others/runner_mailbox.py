@@ -300,6 +300,9 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
     ):
         return "external_sms_no_selection"
 
+    if error_step == "obtain-codex-oauth" and "missing_workspace" in combined:
+        return "external_oauth_workspace"
+
     if (
         "cannot create your account with the given information" in combined
         or "registration_disallowed" in combined

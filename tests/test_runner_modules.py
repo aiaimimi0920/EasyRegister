@@ -1242,6 +1242,46 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("external_sms_no_selection", outcome["ignoreReason"])
             self.assertFalse(Path(outcome["statePath"]).is_file())
 
+    def test_record_business_mailbox_domain_outcome_ignores_oauth_missing_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            message = (
+                "{'category': 'operation_error', 'counts_toward_cooling': False, "
+                "'message': 'missing_workspace', "
+                "'details': {'step_type': 'obtain_codex_oauth'}}"
+            )
+            payload = {
+                "ok": False,
+                "errorStep": "obtain-codex-oauth",
+                "error": message,
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@not-mailbox-workspace.test",
+                        "provider": "tempmail-lol",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "obtain-codex-oauth": {
+                        "code": "obtain_codex_oauth_failed",
+                        "message": message,
+                    }
+                },
+            }
+
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="continue",
+            )
+
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertTrue(outcome["ignored"])
+            self.assertEqual("external_oauth_workspace", outcome["ignoreReason"])
+            self.assertFalse(Path(outcome["statePath"]).is_file())
+
     def test_record_business_mailbox_domain_outcome_records_email_otp_failure_reason(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"
