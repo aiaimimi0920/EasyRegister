@@ -499,6 +499,158 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                 runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
                 runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.update(original_failed)
 
+    def test_compat_route_failure_is_shared_before_random_fallback(self) -> None:
+        config = SimpleNamespace(
+            enabled=True,
+            required_by_default=True,
+            management_base_url="http://easy-proxy:29888",
+            api_key="",
+            ttl_minutes=30,
+        )
+
+        bad_proxy = "http://easy-proxy:25007"
+        with runtime_proxy_acquire._ACTIVE_FLOW_PROXY_LOCK:
+            original_active = set(runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS)
+            original_recent = dict(runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS)
+            original_failed = dict(runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS)
+            runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.clear()
+            runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.clear()
+            runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
+
+        random_calls: list[set[str]] = []
+
+        def _random_candidate(**kwargs):
+            random_calls.append(set(kwargs.get("excluded_proxy_urls") or set()))
+            return {
+                "proxyUrl": "http://easy-proxy:25039",
+                "metadata": {"selectedNodeTag": "good", "selectedNodePort": "25039"},
+            }
+
+        try:
+            with mock.patch.object(runtime_proxy_acquire, "_proxy_runtime_config", return_value=config), \
+                mock.patch.object(runtime_proxy_acquire, "ensure_easy_proxy_env_defaults"), \
+                mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_mode", return_value="auto"), \
+                mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_unique_attempts", return_value=3), \
+                mock.patch.object(runtime_proxy_acquire, "_default_easy_proxy_service_key", return_value="service-key"), \
+                mock.patch.object(runtime_proxy_acquire, "_default_easy_proxy_stage", return_value="registration"), \
+                mock.patch.object(runtime_proxy_acquire, "_build_easy_proxy_host_id", return_value="host-1"), \
+                mock.patch.object(runtime_proxy_acquire, "runtime_reachable_proxy_url", side_effect=lambda value: value), \
+                mock.patch.object(
+                    runtime_proxy_acquire,
+                    "checkout_proxy",
+                    return_value={"id": "lease-bad", "proxyUrl": bad_proxy},
+                ), \
+                mock.patch.object(
+                    runtime_proxy_acquire,
+                    "_probe_flow_proxy",
+                    side_effect=[
+                        RuntimeError("easy_proxy_probe_failed status=403 target=https://chatgpt.com/auth/login"),
+                        None,
+                    ],
+                ), \
+                mock.patch.object(
+                    runtime_proxy_acquire,
+                    "checkout_random_node_proxy",
+                    side_effect=_random_candidate,
+                ), \
+                mock.patch.object(runtime_proxy_acquire, "release_lease"), \
+                mock.patch.object(runtime_proxy_acquire, "report_usage"):
+                lease = runtime_proxy_acquire.acquire_flow_proxy_lease(
+                    flow_name="codex_openai_account_task",
+                    probe_url="https://chatgpt.com/auth/login",
+                )
+
+            self.assertEqual("http://easy-proxy:25039", lease.proxy_url)
+            self.assertEqual("random-node", lease.acquisition_mode)
+            self.assertEqual(1, len(random_calls))
+            self.assertIn(bad_proxy, random_calls[0])
+            with runtime_proxy_acquire._ACTIVE_FLOW_PROXY_LOCK:
+                self.assertIn(bad_proxy, runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS)
+        finally:
+            with runtime_proxy_acquire._ACTIVE_FLOW_PROXY_LOCK:
+                runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.update(original_active)
+                runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.update(original_recent)
+                runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.update(original_failed)
+
+    def test_compat_checkout_reuses_recent_success_after_fresh_lease_attempts_are_exhausted(self) -> None:
+        released_lease_ids: list[str] = []
+        reported_lease_ids: list[str] = []
+        config = SimpleNamespace(
+            enabled=True,
+            required_by_default=True,
+            management_base_url="http://easy-proxy:29888",
+            api_key="",
+            ttl_minutes=30,
+        )
+
+        recent_proxy = "http://easy-proxy:25027"
+        with runtime_proxy_acquire._ACTIVE_FLOW_PROXY_LOCK:
+            original_active = set(runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS)
+            original_recent = dict(runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS)
+            original_failed = dict(runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS)
+            runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.clear()
+            runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.clear()
+            runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
+            runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS[recent_proxy] = 999999999.0
+
+        try:
+            with mock.patch.object(runtime_proxy_acquire, "_proxy_runtime_config", return_value=config), \
+                mock.patch.object(runtime_proxy_acquire, "ensure_easy_proxy_env_defaults"), \
+                mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_mode", return_value="auto"), \
+                mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_unique_attempts", return_value=2), \
+                mock.patch.object(runtime_proxy_acquire, "_default_easy_proxy_service_key", return_value="service-key"), \
+                mock.patch.object(runtime_proxy_acquire, "_default_easy_proxy_stage", return_value="registration"), \
+                mock.patch.object(runtime_proxy_acquire, "_build_easy_proxy_host_id", return_value="host-1"), \
+                mock.patch.object(runtime_proxy_acquire, "runtime_reachable_proxy_url", side_effect=lambda value: value), \
+                mock.patch.object(runtime_proxy_acquire, "_probe_flow_proxy"), \
+                mock.patch.object(
+                    runtime_proxy_acquire,
+                    "checkout_proxy",
+                    side_effect=[
+                        {"id": "lease-1", "proxyUrl": recent_proxy},
+                        {"id": "lease-2", "proxyUrl": recent_proxy},
+                        {"id": "lease-3", "proxyUrl": recent_proxy},
+                    ],
+                ) as checkout_proxy_mock, \
+                mock.patch.object(
+                    runtime_proxy_acquire,
+                    "checkout_random_node_proxy",
+                    side_effect=RuntimeError("EasyProxy random node checkout exhausted available nodes"),
+                ) as checkout_random_mock, \
+                mock.patch.object(
+                    runtime_proxy_acquire,
+                    "release_lease",
+                    side_effect=lambda lease_id, **_: released_lease_ids.append(str(lease_id)),
+                ), \
+                mock.patch.object(
+                    runtime_proxy_acquire,
+                    "report_usage",
+                    side_effect=lambda lease_id, **_: reported_lease_ids.append(str(lease_id)),
+                ):
+                lease = runtime_proxy_acquire.acquire_flow_proxy_lease(
+                    flow_name="codex_openai_account_task",
+                    probe_url="https://chatgpt.com/auth/login",
+                )
+
+            self.assertEqual(recent_proxy, lease.proxy_url)
+            self.assertEqual("lease", lease.acquisition_mode)
+            self.assertEqual("lease-3", lease.lease_id)
+            self.assertEqual(3, checkout_proxy_mock.call_count)
+            checkout_random_mock.assert_not_called()
+            self.assertEqual(["lease-1", "lease-2"], released_lease_ids)
+            self.assertEqual([], reported_lease_ids)
+        finally:
+            with runtime_proxy_acquire._ACTIVE_FLOW_PROXY_LOCK:
+                runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._ACTIVE_FLOW_PROXY_URLS.update(original_active)
+                runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._RECENT_FLOW_PROXY_URLS.update(original_recent)
+                runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
+                runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.update(original_failed)
+
     def test_route_failure_aborts_compat_retries_and_falls_back_once(self) -> None:
         reported_lease_ids: list[str] = []
         released_lease_ids: list[str] = []

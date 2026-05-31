@@ -338,9 +338,10 @@ def acquire_flow_proxy_lease(
 
     def _try_compat_checkout() -> FlowProxyLease | None:
         nonlocal last_error, host_id
-        for attempt in range(unique_attempts):
+        for attempt in range(unique_attempts + 1):
             candidate = None
             try:
+                allow_recent_reuse = attempt >= unique_attempts
                 host_id = _build_easy_proxy_host_id(flow_name)
                 candidate = checkout_proxy(
                     host_id=host_id,
@@ -360,7 +361,7 @@ def acquire_flow_proxy_lease(
                     _purge_recent_flow_proxy_cache(time.monotonic())
                     if unique_key in _ACTIVE_FLOW_PROXY_URLS:
                         raise RuntimeError(f"easy_proxy_duplicate_active_route: {proxy_url}")
-                    if unique_key in _RECENT_FLOW_PROXY_URLS:
+                    if not allow_recent_reuse and unique_key in _RECENT_FLOW_PROXY_URLS:
                         raise RuntimeError(f"easy_proxy_recent_route_reuse: {proxy_url}")
                     _ACTIVE_FLOW_PROXY_URLS.add(unique_key)
                 selected = FlowProxyLease(
@@ -402,6 +403,8 @@ def acquire_flow_proxy_lease(
                 )
                 if candidate_lease_id:
                     error_code, failure_class, route_confidence = _classify_easy_proxy_error(exc, probe_url=primary_probe_url)
+                    if failure_class == "route_failure" and candidate_proxy_url:
+                        _mark_failed_flow_proxy(candidate_proxy_url.lower())
                     if not local_route_reuse:
                         report_usage(
                             candidate_lease_id,
@@ -416,6 +419,9 @@ def acquire_flow_proxy_lease(
                             api_key=api_key,
                         )
                     release_lease(candidate_lease_id, base_url=management_base, api_key=api_key)
+                if _is_local_route_reuse_error(str(exc)) and "recent_route_reuse" in str(exc).strip().lower():
+                    time.sleep(0.1 * (attempt + 1))
+                    continue
                 if _should_abort_compat_retry(exc):
                     if not local_route_reuse and not candidate_lease_id and not candidate_proxy_url:
                         _mark_compat_checkout_cooldown(exc)
