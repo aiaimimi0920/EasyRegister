@@ -284,6 +284,22 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
     if "sms_no_selection_plan_candidates" in combined:
         return "external_sms_no_selection"
 
+    if error_step == "obtain-codex-oauth" and (
+        (
+            "sms service post /sms/sessions/open failed" in combined
+            and any(
+                marker in combined
+                for marker in (
+                    "no eligible public numbers",
+                    "currently unavailable",
+                    "synthetic activation session",
+                )
+            )
+        )
+        or ("no eligible public numbers" in combined and "synthetic activation session" in combined)
+    ):
+        return "external_sms_no_selection"
+
     if (
         "cannot create your account with the given information" in combined
         or "registration_disallowed" in combined

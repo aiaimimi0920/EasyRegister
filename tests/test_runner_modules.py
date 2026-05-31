@@ -1202,6 +1202,46 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("external_sms_no_selection", outcome["ignoreReason"])
             self.assertFalse(Path(outcome["statePath"]).is_file())
 
+    def test_record_business_mailbox_domain_outcome_ignores_easy_sms_provider_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            message = (
+                'sms service POST /sms/sessions/open failed: HTTP 503 [code=Provider "yunduanxin" '
+                "is currently unavailable: No eligible public numbers were available for a synthetic "
+                'activation session.]: {"error":"Provider \\"yunduanxin\\" is currently unavailable"}'
+            )
+            payload = {
+                "ok": False,
+                "errorStep": "obtain-codex-oauth",
+                "error": message,
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@sms-provider-empty.test",
+                        "provider": "m2u",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "obtain-codex-oauth": {
+                        "code": "obtain_codex_oauth_failed",
+                        "message": message,
+                    }
+                },
+            }
+
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertTrue(outcome["ignored"])
+            self.assertEqual("external_sms_no_selection", outcome["ignoreReason"])
+            self.assertFalse(Path(outcome["statePath"]).is_file())
+
     def test_record_business_mailbox_domain_outcome_records_email_otp_failure_reason(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"
