@@ -77,6 +77,62 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual("missing_session_id", result.step_errors["release-mailbox"]["message"])
         self.assertEqual("", result.error_step)
 
+    def test_cleanup_release_mailbox_accepts_moemail_upstream_delete_unauthorized(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "main-work",
+                                    "type": "noop_success",
+                                    "metadata": {"owner": "orchestration"},
+                                    "saveAs": "main_work",
+                                },
+                                {
+                                    "id": "release-mailbox",
+                                    "type": "release_mailbox",
+                                    "metadata": {
+                                        "owner": "easyemail",
+                                        "stage": "cleanup",
+                                        "alwaysRun": True,
+                                    },
+                                    "input": {"mailbox_session_id": "mailbox_123"},
+                                    "saveAs": "release_mailbox",
+                                },
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "noop_success":
+                    return {"ok": True, "status": "ok"}
+                if step_type == "release_mailbox":
+                    return {"released": False, "detail": "upstream_delete_unauthorized"}
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {"orchestration": _dispatcher, "easyemail": _dispatcher},
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual("ok", result.steps["main-work"])
+        self.assertEqual("ok", result.steps["release-mailbox"])
+        self.assertNotIn("release-mailbox", result.step_errors)
+        self.assertEqual("upstream_delete_unauthorized", result.outputs["release-mailbox"]["detail"])
+
     def test_obtain_codex_oauth_false_result_fails_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             flow_path = Path(tmp_dir) / "temp-flow.json"

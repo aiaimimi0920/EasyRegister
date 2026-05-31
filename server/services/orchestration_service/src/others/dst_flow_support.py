@@ -100,6 +100,7 @@ def step_output_ok(*, step_type: str, step_output: Any) -> tuple[bool, str]:
                 "provider_does_not_support_release",
                 "skipped_non_moemail",
                 "skipped_preserved_for_manual_oauth",
+                "upstream_delete_unauthorized",
             }:
                 return True, ""
             return False, str(step_output.get("detail") or "release_mailbox_failed").strip()
