@@ -334,6 +334,15 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
         "obtain-codex-oauth",
         "validate-free-personal-oauth",
     }:
+        if (
+            "no execution worker became available before acquire timeout" in combined
+            or (
+                "service_unavailable" in combined
+                and "codex.semantic.step" in combined
+                and "acquire timeout" in combined
+            )
+        ):
+            return "external_protocol_capacity"
         if result_error_matches(
             result_payload_value,
             ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,

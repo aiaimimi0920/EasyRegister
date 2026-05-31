@@ -1409,6 +1409,47 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("external_proxy_or_auth", outcome["ignoreReason"])
             self.assertFalse(Path(outcome["statePath"]).is_file())
 
+    def test_record_business_mailbox_domain_outcome_ignores_protocol_worker_capacity_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            message = (
+                "{'category': 'service_unavailable', 'counts_toward_cooling': False, "
+                "'message': 'no execution worker became available before acquire timeout', "
+                "'details': {'operation': 'codex.semantic.step', "
+                "'step_type': 'initialize_platform_organization'}}"
+            )
+            payload = {
+                "ok": False,
+                "errorStep": "initialize-platform-organization",
+                "error": message,
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@not-mailbox-capacity.test",
+                        "provider": "duckmail",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "initialize-platform-organization": {
+                        "code": "initialize_platform_organization_failed",
+                        "message": message,
+                    }
+                },
+            }
+
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="continue",
+            )
+
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertTrue(outcome["ignored"])
+            self.assertEqual("external_protocol_capacity", outcome["ignoreReason"])
+            self.assertFalse(Path(outcome["statePath"]).is_file())
+
     def test_record_business_mailbox_domain_outcome_ignores_proxy_acquire_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"
