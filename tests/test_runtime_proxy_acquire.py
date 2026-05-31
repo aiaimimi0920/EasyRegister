@@ -352,7 +352,7 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                 runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.clear()
                 runtime_proxy_acquire._FAILED_FLOW_PROXY_URLS.update(original_failed)
 
-    def test_random_node_requires_all_configured_probe_urls_before_selecting_route(self) -> None:
+    def test_random_node_accepts_route_when_any_configured_probe_url_succeeds(self) -> None:
         config = SimpleNamespace(
             enabled=True,
             required_by_default=True,
@@ -389,8 +389,8 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
         def _probe_candidate(*, proxy_url: str, probe_url: str, expected_statuses: set[int] | None) -> None:
             probe_calls.append((proxy_url, probe_url))
             self.assertEqual({200}, expected_statuses)
-            if proxy_url == "http://easy-proxy:25001" and probe_url == "https://platform.openai.com/login":
-                raise RuntimeError("easy_proxy_probe_failed status=403 url=https://platform.openai.com/login")
+            if proxy_url == "http://easy-proxy:25001" and probe_url == "https://chatgpt.com/auth/login":
+                raise RuntimeError("easy_proxy_probe_failed status=403 url=https://chatgpt.com/auth/login")
 
         try:
             with mock.patch.object(runtime_proxy_acquire, "_proxy_runtime_config", return_value=config), \
@@ -416,16 +416,12 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                     probe_expected_statuses={200},
                 )
 
-            self.assertEqual("http://easy-proxy:25002", lease.proxy_url)
+            self.assertEqual("http://easy-proxy:25001", lease.proxy_url)
             self.assertEqual("random-node", lease.acquisition_mode)
-            self.assertIn("http://easy-proxy:25001", random_calls[1])
             self.assertEqual(
                 [
                     ("http://easy-proxy:25001", "https://chatgpt.com/auth/login"),
                     ("http://easy-proxy:25001", "https://platform.openai.com/login"),
-                    ("http://easy-proxy:25002", "https://chatgpt.com/auth/login"),
-                    ("http://easy-proxy:25002", "https://platform.openai.com/login"),
-                    ("http://easy-proxy:25002", "https://auth.openai.com/log-in-or-create-account"),
                 ],
                 probe_calls,
             )

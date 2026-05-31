@@ -238,12 +238,19 @@ def acquire_flow_proxy_lease(
         )
 
     def _probe_candidate(raw_proxy_url: str) -> None:
+        last_probe_error: Exception | None = None
         for target in probe_targets:
-            _probe_flow_proxy(
-                proxy_url=raw_proxy_url,
-                probe_url=target,
-                expected_statuses=probe_expected_statuses,
-            )
+            try:
+                _probe_flow_proxy(
+                    proxy_url=raw_proxy_url,
+                    probe_url=target,
+                    expected_statuses=probe_expected_statuses,
+                )
+                return
+            except Exception as exc:
+                last_probe_error = exc
+        if last_probe_error is not None:
+            raise last_probe_error
 
     def _try_random_nodes() -> FlowProxyLease | None:
         nonlocal last_error
