@@ -255,18 +255,20 @@ def acquire_flow_proxy_lease(
     def _try_random_nodes() -> FlowProxyLease | None:
         nonlocal last_error
         attempted_proxy_urls: set[str] = set()
-        for attempt in range(unique_attempts):
+        for attempt in range(unique_attempts + 1):
             candidate = None
             try:
+                allow_recent_reuse = attempt >= unique_attempts
                 with _ACTIVE_FLOW_PROXY_LOCK:
                     _purge_recent_flow_proxy_cache(time.monotonic())
                     _purge_failed_flow_proxy_cache(time.monotonic())
                     excluded = (
                         set(_ACTIVE_FLOW_PROXY_URLS)
-                        | set(_RECENT_FLOW_PROXY_URLS.keys())
                         | set(_FAILED_FLOW_PROXY_URLS.keys())
                         | set(attempted_proxy_urls)
                     )
+                    if not allow_recent_reuse:
+                        excluded |= set(_RECENT_FLOW_PROXY_URLS.keys())
                 candidate = checkout_random_node_proxy(
                     base_url=management_base,
                     api_key=api_key,
@@ -283,7 +285,7 @@ def acquire_flow_proxy_lease(
                     _purge_recent_flow_proxy_cache(time.monotonic())
                     if unique_key in _ACTIVE_FLOW_PROXY_URLS:
                         raise RuntimeError(f"easy_proxy_duplicate_active_route: {proxy_url}")
-                    if unique_key in _RECENT_FLOW_PROXY_URLS:
+                    if not allow_recent_reuse and unique_key in _RECENT_FLOW_PROXY_URLS:
                         raise RuntimeError(f"easy_proxy_recent_route_reuse: {proxy_url}")
                     _ACTIVE_FLOW_PROXY_URLS.add(unique_key)
                 node_tag = str((candidate.get("metadata") or {}).get("selectedNodeTag") or "").strip()
