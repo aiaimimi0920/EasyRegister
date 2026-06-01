@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import random
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS = 20
 DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE = 90.0
 DEFAULT_REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD = 500
 DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS = 12
+DEFAULT_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS = 6 * 60 * 60
 MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
 EMAIL_OTP_FAILURE_REASONS = {"email_otp_timeout", "email_otp_wrong_code"}
 _MAILBOX_DEFAULT_POLICY_KEYS = {"default", "*", "__default__"}
@@ -203,6 +205,38 @@ def _resolve_mailbox_email_otp_provider_failure_blacklist_threshold() -> int:
     return max(0, env_int("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD", 3))
 
 
+def _resolve_mailbox_dynamic_blacklist_ttl_seconds() -> int:
+    return max(0, env_int("REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS", DEFAULT_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS))
+
+
+def _parse_mailbox_state_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _mailbox_dynamic_blacklist_expired(stats: dict[str, Any]) -> bool:
+    ttl_seconds = _resolve_mailbox_dynamic_blacklist_ttl_seconds()
+    if ttl_seconds <= 0:
+        return False
+    last_failure = (
+        _parse_mailbox_state_timestamp(stats.get("lastFailureAt"))
+        or _parse_mailbox_state_timestamp(stats.get("lastOutcomeAt"))
+    )
+    if last_failure is None:
+        return False
+    return (datetime.now(timezone.utc) - last_failure).total_seconds() >= ttl_seconds
+
+
 def _mailbox_failure_reason_total(failure_reasons: Any, reasons: set[str]) -> int:
     if not isinstance(failure_reasons, dict):
         return 0
@@ -258,6 +292,8 @@ def _mailbox_domain_is_business_blacklisted(domain: str, state_payload: dict[str
     if domain in set(_resolve_mailbox_explicit_blacklist_domains(business_key=business_key)):
         return True
     stats = _mailbox_domain_stats(domain, state_payload, business_key=business_key)
+    if stats and _mailbox_dynamic_blacklist_expired(stats):
+        return False
     if bool(stats.get("blacklisted")):
         return True
     threshold = _resolve_mailbox_email_otp_failure_blacklist_threshold()
@@ -274,6 +310,8 @@ def _mailbox_provider_is_business_blacklisted(provider: str, state_payload: dict
     if normalized_provider in set(_resolve_mailbox_explicit_blacklist_providers(business_key=business_key)):
         return True
     stats = _mailbox_provider_stats(normalized_provider, state_payload, business_key=business_key)
+    if stats and _mailbox_dynamic_blacklist_expired(stats):
+        return False
     if bool(stats.get("blacklisted")):
         return True
     threshold = _resolve_mailbox_email_otp_provider_failure_blacklist_threshold()

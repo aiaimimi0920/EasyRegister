@@ -46,6 +46,14 @@ class ComposeSmokeTests(unittest.TestCase):
         main_payload = MAIN_COMPOSE_PATH.read_text(encoding="utf-8")
         test_payload = TEST_COMPOSE_PATH.read_text(encoding="utf-8")
         self.assertIn(
+            "REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS:-21600",
+            main_payload,
+        )
+        self.assertIn(
+            "REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS:-21600",
+            test_payload,
+        )
+        self.assertIn(
             "REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK:-false",
             main_payload,
         )

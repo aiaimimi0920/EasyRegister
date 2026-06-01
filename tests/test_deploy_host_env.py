@@ -82,6 +82,7 @@ class DeployHostEnvTests(unittest.TestCase):
             self.assertEqual("true", env_values.get("REGISTER_DASHBOARD_ENABLED"))
             self.assertEqual("6", env_values.get("REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD"))
             self.assertEqual("6", env_values.get("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD"))
+            self.assertEqual("21600", env_values.get("REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS"))
             self.assertEqual("http://easy-sms:8080", env_values.get("SMS_SERVICE_BASE_URL"))
             self.assertEqual("sms-test-key", env_values.get("SMS_SERVICE_API_KEY"))
             self.assertEqual("openai", env_values.get("REGISTER_SMS_BUSINESS_KEY"))

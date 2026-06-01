@@ -2536,6 +2536,107 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("m2u", violation["provider"])
         self.assertEqual("cnmlgb.de", violation["domain"])
 
+    def test_mailbox_domain_policy_violation_ignores_expired_dynamic_business_provider_blacklist(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="m2u",
+            email="allowed@cnmlgb.de",
+            ref="m2u:test",
+            session_id="m2u-session",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "providers": {
+                                    "m2u": {
+                                        "attempts": 3,
+                                        "successes": 0,
+                                        "failures": 3,
+                                        "failureRate": 100.0,
+                                        "blacklisted": True,
+                                        "blacklistReason": "provider_failure_rate_threshold",
+                                        "lastFailureAt": "2000-01-01T00:00:00+00:00",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS": "60",
+                },
+                clear=True,
+            ):
+                violation = runtime_mailbox._mailbox_domain_policy_violation(
+                    mailbox,
+                    business_key="openai",
+                )
+
+        self.assertIsNone(violation)
+
+    def test_mailbox_domain_policy_violation_ignores_expired_dynamic_business_domain_blacklist(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="moemail",
+            email="allowed@zhooo.org",
+            ref="moemail:test",
+            session_id="moemail-session",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "domains": {
+                                    "zhooo.org": {
+                                        "provider": "moemail",
+                                        "attempts": 3,
+                                        "successes": 0,
+                                        "failures": 3,
+                                        "blacklisted": True,
+                                        "blacklistReason": "email_otp_failure_threshold",
+                                        "lastFailureAt": "2000-01-01T00:00:00+00:00",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_POOL": "zhooo.org",
+                    "REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS": "60",
+                },
+                clear=True,
+            ):
+                violation = runtime_mailbox._mailbox_domain_policy_violation(
+                    mailbox,
+                    business_key="openai",
+                )
+
+        self.assertIsNone(violation)
+
     def test_mailbox_domain_policy_violation_applies_dynamic_email_otp_provider_threshold(self) -> None:
         mailbox = runtime_mailbox.Mailbox(
             provider="mail2925",
