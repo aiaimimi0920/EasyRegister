@@ -394,10 +394,15 @@ def mailbox_failure_reason(*, result_payload_value: dict[str, Any]) -> str:
     error_step = str(result_payload_value.get("errorStep") or "").strip().lower()
     combined = _mailbox_result_error_text(result_payload_value=result_payload_value)
 
+    explicit_reason = str(result_payload_value.get("mailboxFailureReason") or "").strip().lower()
+    if explicit_reason:
+        return explicit_reason
     if "unsupported_email" in combined or "the email you provided is not supported" in combined:
         return "unsupported_email"
     if "registration_disallowed" in combined and "mailbox_provider=" in combined:
         return "registration_disallowed"
+    if error_step == "create-openai-account" and "user_register_400" in combined:
+        return "create_account_user_register_400"
     if "wrong_email_otp_code" in combined or "chatgpt_login_otp_validate_failed" in combined:
         return "email_otp_wrong_code"
     if (
@@ -489,15 +494,96 @@ def extract_mailbox_business_outcome_context(*, result_payload_value: dict[str, 
     }
 
 
+def _mailbox_attempt_outcome_payload(attempt: dict[str, Any]) -> dict[str, Any]:
+    email = str(attempt.get("email") or "").strip().lower()
+    provider = str(attempt.get("provider") or "").strip().lower()
+    mailbox_ref = str(attempt.get("mailbox_ref") or attempt.get("mailboxRef") or "").strip()
+    if not provider and mailbox_ref:
+        provider = mailbox_provider_from_ref(mailbox_ref)
+    failure_reason = str(attempt.get("failureReason") or "").strip().lower()
+    error_code = str(attempt.get("errorCode") or failure_reason or "").strip().lower()
+    step_id = str(attempt.get("stepId") or "create-openai-account").strip() or "create-openai-account"
+    message = " ".join(
+        part
+        for part in (
+            error_code,
+            failure_reason,
+            str(attempt.get("failureClass") or "").strip(),
+        )
+        if part
+    )
+    return {
+        "ok": False,
+        "errorStep": step_id,
+        "error": message,
+        "mailboxFailureReason": failure_reason,
+        "steps": {"acquire-mailbox": "ok", step_id: "failed"},
+        "outputs": {
+            "acquire-mailbox": {
+                "email": email,
+                "provider": provider,
+                "mailbox_ref": mailbox_ref,
+                "business_key": str(attempt.get("business_key") or attempt.get("businessKey") or "").strip().lower(),
+            }
+        },
+        "stepErrors": {
+            step_id: {
+                "code": error_code,
+                "message": message,
+            }
+        },
+    }
+
+
+def _record_mailbox_attempt_outcomes(
+    *,
+    shared_root: Path,
+    result_payload_value: dict[str, Any],
+    instance_role: str,
+) -> list[dict[str, Any]]:
+    outputs = result_payload_value.get("outputs") if isinstance(result_payload_value, dict) else {}
+    if not isinstance(outputs, dict):
+        return []
+    raw_attempts = outputs.get("mailbox-attempt-outcomes")
+    if not isinstance(raw_attempts, list):
+        return []
+    recorded: list[dict[str, Any]] = []
+    for raw_attempt in raw_attempts:
+        if not isinstance(raw_attempt, dict):
+            continue
+        if str(raw_attempt.get("outcome") or "").strip().lower() != "failure":
+            continue
+        attempt_payload = _mailbox_attempt_outcome_payload(raw_attempt)
+        attempt_outcome = record_business_mailbox_domain_outcome(
+            shared_root=shared_root,
+            result_payload_value=attempt_payload,
+            instance_role=instance_role,
+            _record_attempt_outcomes=False,
+        )
+        if attempt_outcome:
+            recorded.append(attempt_outcome)
+    return recorded
+
+
 def record_business_mailbox_domain_outcome(
     *,
     shared_root: Path,
     result_payload_value: dict[str, Any],
     instance_role: str,
+    _record_attempt_outcomes: bool = True,
 ) -> dict[str, Any] | None:
     normalized_role = str(instance_role or "").strip().lower()
     if normalized_role not in {"main", "continue"}:
         return None
+    attempt_outcomes = (
+        _record_mailbox_attempt_outcomes(
+            shared_root=shared_root,
+            result_payload_value=result_payload_value,
+            instance_role=instance_role,
+        )
+        if _record_attempt_outcomes
+        else []
+    )
     context = extract_mailbox_business_outcome_context(result_payload_value=result_payload_value)
     provider = str(context.get("provider") or "").strip().lower()
     domain = str(context.get("domain") or "").strip().lower()
@@ -676,7 +762,7 @@ def record_business_mailbox_domain_outcome(
     payload["updatedAt"] = now
     payload["businesses"] = businesses
     write_mailbox_domain_stats_state(shared_root=shared_root, payload=payload)
-    return {
+    outcome = {
         "businessKey": business_key,
         "provider": provider,
         "domain": domain,
@@ -701,6 +787,9 @@ def record_business_mailbox_domain_outcome(
         "consecutiveFailureThreshold": threshold,
         "statePath": str(mailbox_domain_stats_path(shared_root=shared_root)),
     }
+    if attempt_outcomes:
+        outcome["attemptOutcomes"] = attempt_outcomes
+    return outcome
 
 
 def mark_mailbox_capacity_failure(*, shared_root: Path, detail: str) -> dict[str, Any]:

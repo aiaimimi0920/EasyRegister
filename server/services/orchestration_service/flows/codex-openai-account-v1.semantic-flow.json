@@ -34,7 +34,11 @@
           "preallocated_session_id": "{{task.preallocated_session_id}}",
           "preallocated_mailbox_ref": "{{task.preallocated_mailbox_ref}}",
           "recreate_preallocated_email": "{{task.mailbox_recreate_preallocated}}",
-          "business_key": "{{task.mailbox_business_key}}"
+          "business_key": "{{task.mailbox_business_key}}",
+          "avoid_emails": "{{task.avoidMailboxEmails}}",
+          "avoid_domains": "{{task.avoidMailboxDomains}}",
+          "avoid_providers": "{{task.avoidMailboxProviders}}",
+          "avoid_reason": "{{task.avoidMailboxReason}}"
         },
         "saveAs": "mailbox",
         "metadata": {

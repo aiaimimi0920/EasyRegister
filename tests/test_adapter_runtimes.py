@@ -2435,6 +2435,91 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual(2, create_mailbox.call_count)
         release_mailbox.assert_called_once()
 
+    def test_resolve_mailbox_retries_attempt_local_avoidance_without_state_write(self) -> None:
+        first_mailbox = runtime_mailbox.Mailbox(
+            provider="m2u",
+            email="user1@kkb.qzz.io",
+            ref="m2u:first",
+            session_id="first",
+        )
+        second_mailbox = runtime_mailbox.Mailbox(
+            provider="cloudflare_temp_email",
+            email="user2@example.com",
+            ref="cloudflare_temp_email:second",
+            session_id="second",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_BUSINESS_RETRY_ATTEMPTS": "2",
+                },
+                clear=True,
+            ), mock.patch.object(
+                runtime_mailbox,
+                "_resolve_planned_mailbox_provider",
+                return_value="m2u",
+            ), mock.patch.object(
+                runtime_mailbox,
+                "create_mailbox",
+                side_effect=[first_mailbox, second_mailbox],
+            ) as create_mailbox, mock.patch.object(runtime_mailbox, "release_mailbox") as release_mailbox:
+                mailbox = runtime_mailbox.resolve_mailbox(
+                    preallocated_email=None,
+                    preallocated_session_id=None,
+                    preallocated_mailbox_ref=None,
+                    business_key="openai",
+                    avoid_emails=["user1@kkb.qzz.io"],
+                    avoid_domains=["kkb.qzz.io"],
+                    avoid_providers=["m2u"],
+                    avoid_reason="create_account_user_register_400",
+                )
+
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+
+        self.assertEqual("user2@example.com", mailbox.email)
+        self.assertEqual(2, create_mailbox.call_count)
+        release_mailbox.assert_called_once()
+        self.assertFalse(state_path.exists())
+
+    def test_easyemail_acquire_mailbox_passes_attempt_local_avoidance(self) -> None:
+        captured_kwargs: dict[str, object] = {}
+        mailbox = runtime_mailbox.Mailbox(
+            provider="cloudflare_temp_email",
+            email="user2@example.com",
+            ref="cloudflare_temp_email:second",
+            session_id="second",
+        )
+
+        def _resolve_mailbox(**kwargs: object) -> runtime_mailbox.Mailbox:
+            captured_kwargs.update(kwargs)
+            return mailbox
+
+        with mock.patch.object(easyemail_runtime, "ensure_easyemail_runtime_defaults"), mock.patch.object(
+            easyemail_runtime,
+            "resolve_mailbox",
+            side_effect=_resolve_mailbox,
+        ):
+            result = easyemail_runtime.dispatch_easyemail_step(
+                step_type="acquire_mailbox",
+                step_input={
+                    "business_key": "openai",
+                    "avoid_emails": ["user1@kkb.qzz.io"],
+                    "avoid_domains": ["kkb.qzz.io"],
+                    "avoid_providers": ["m2u"],
+                    "avoid_reason": "create_account_user_register_400",
+                },
+            )
+
+        self.assertEqual("user2@example.com", result["email"])
+        self.assertEqual(["user1@kkb.qzz.io"], captured_kwargs["avoid_emails"])
+        self.assertEqual(["kkb.qzz.io"], captured_kwargs["avoid_domains"])
+        self.assertEqual(["m2u"], captured_kwargs["avoid_providers"])
+        self.assertEqual("create_account_user_register_400", captured_kwargs["avoid_reason"])
+
     def test_mailbox_domain_policy_violation_applies_business_blacklist_to_m2u(self) -> None:
         mailbox = runtime_mailbox.Mailbox(
             provider="m2u",

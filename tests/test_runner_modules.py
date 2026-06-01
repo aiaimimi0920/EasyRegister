@@ -1633,6 +1633,104 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual({}, provider_stats["failureReasons"])
             self.assertEqual(0, provider_stats["consecutiveFailures"])
 
+    def test_record_business_mailbox_domain_outcome_records_retry_attempt_failure_before_final_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": True,
+                "steps": {"acquire-mailbox": "ok", "create-openai-account": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user2@example.com",
+                        "provider": "cloudflare_temp_email",
+                        "business_key": "openai",
+                    },
+                    "mailbox-attempt-outcomes": [
+                        {
+                            "outcome": "failure",
+                            "failureReason": "create_account_user_register_400",
+                            "failureClass": "weak_attributed_generic_register_400",
+                            "errorCode": "user_register_400",
+                            "provider": "m2u",
+                            "domain": "kkb.qzz.io",
+                            "email": "user1@kkb.qzz.io",
+                            "mailbox_ref": "m2u:first",
+                            "mailbox_session_id": "first",
+                            "business_key": "openai",
+                            "stepId": "create-openai-account",
+                            "attempt": 1,
+                        }
+                    ],
+                },
+            }
+
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertEqual("example.com", outcome["domain"])
+            self.assertIn("attemptOutcomes", outcome)
+            self.assertEqual("kkb.qzz.io", outcome["attemptOutcomes"][0]["domain"])
+            self.assertFalse(outcome["attemptOutcomes"][0]["blacklisted"])
+            self.assertEqual("", outcome["attemptOutcomes"][0]["blacklistReason"])
+            state_payload = json.loads(Path(outcome["statePath"]).read_text(encoding="utf-8"))
+            domains = state_payload["businesses"]["openai"]["domains"]
+            providers = state_payload["businesses"]["openai"]["providers"]
+            self.assertEqual("create_account_user_register_400", domains["kkb.qzz.io"]["lastFailureReason"])
+            self.assertEqual({"create_account_user_register_400": 1}, domains["kkb.qzz.io"]["failureReasons"])
+            self.assertEqual("success", domains["example.com"]["lastOutcome"])
+            self.assertEqual({"create_account_user_register_400": 1}, providers["m2u"]["failureReasons"])
+
+    def test_record_business_mailbox_domain_outcome_blacklists_strong_retry_attempt_before_final_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": True,
+                "steps": {"acquire-mailbox": "ok", "create-openai-account": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user2@example.com",
+                        "provider": "cloudflare_temp_email",
+                        "business_key": "openai",
+                    },
+                    "mailbox-attempt-outcomes": [
+                        {
+                            "outcome": "failure",
+                            "failureReason": "unsupported_email",
+                            "failureClass": "strong_mailbox_unsupported",
+                            "errorCode": "unsupported_email",
+                            "provider": "mailtm",
+                            "domain": "blocked.test",
+                            "email": "user1@blocked.test",
+                            "mailbox_ref": "mailtm:first",
+                            "mailbox_session_id": "first",
+                            "business_key": "openai",
+                            "stepId": "create-openai-account",
+                            "attempt": 1,
+                        }
+                    ],
+                },
+            }
+
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertTrue(outcome["attemptOutcomes"][0]["blacklisted"])
+            self.assertEqual("unsupported_email", outcome["attemptOutcomes"][0]["blacklistReason"])
+            state_payload = json.loads(Path(outcome["statePath"]).read_text(encoding="utf-8"))
+            blocked_stats = state_payload["businesses"]["openai"]["domains"]["blocked.test"]
+            self.assertTrue(blocked_stats["blacklisted"])
+            self.assertEqual("unsupported_email", blocked_stats["blacklistReason"])
+
     def test_record_business_mailbox_domain_outcome_blacklists_email_otp_failures_quickly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"

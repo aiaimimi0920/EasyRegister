@@ -1059,6 +1059,13 @@ class DstFlowIntegrationTests(unittest.TestCase):
                                     "id": "acquire-mailbox",
                                     "type": "acquire_mailbox",
                                     "metadata": {"owner": "easyemail"},
+                                    "input": {
+                                        "business_key": "{{task.mailbox_business_key}}",
+                                        "avoid_emails": "{{task.avoidMailboxEmails}}",
+                                        "avoid_domains": "{{task.avoidMailboxDomains}}",
+                                        "avoid_providers": "{{task.avoidMailboxProviders}}",
+                                        "avoid_reason": "{{task.avoidMailboxReason}}",
+                                    },
                                     "saveAs": "mailbox",
                                 },
                                 {
@@ -1099,19 +1106,22 @@ class DstFlowIntegrationTests(unittest.TestCase):
             mailbox_call_count = 0
             proxy_call_count = 0
             create_inputs: list[tuple[str, str]] = []
+            mailbox_inputs: list[dict[str, object]] = []
             released_mailboxes: list[tuple[str, str]] = []
             released_proxies: list[tuple[str, str]] = []
 
             def _easyemail_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
                 nonlocal mailbox_call_count
                 if step_type == "acquire_mailbox":
+                    mailbox_inputs.append(dict(step_input))
                     mailbox_call_count += 1
                     return {
                         "ok": True,
-                        "provider": "moemail",
-                        "email": f"user{mailbox_call_count}@example.com",
+                        "provider": "m2u" if mailbox_call_count == 1 else "cloudflare_temp_email",
+                        "email": "user1@kkb.qzz.io" if mailbox_call_count == 1 else "user2@example.com",
                         "mailbox_ref": f"mailbox-ref-{mailbox_call_count}",
                         "session_id": f"mailbox-session-{mailbox_call_count}",
+                        "business_key": "openai",
                     }
                 if step_type == "release_mailbox":
                     released_mailboxes.append(
@@ -1182,10 +1192,34 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual(2, result.step_attempts["acquire-proxy-chain"])
         self.assertEqual(
             [
-                ("user1@example.com", "http://proxy-1"),
+                ("user1@kkb.qzz.io", "http://proxy-1"),
                 ("user2@example.com", "http://proxy-2"),
             ],
             create_inputs,
+        )
+        self.assertEqual("", mailbox_inputs[0]["avoid_emails"])
+        self.assertEqual(["user1@kkb.qzz.io"], mailbox_inputs[1]["avoid_emails"])
+        self.assertEqual(["kkb.qzz.io"], mailbox_inputs[1]["avoid_domains"])
+        self.assertEqual(["m2u"], mailbox_inputs[1]["avoid_providers"])
+        self.assertEqual("create_account_user_register_400", mailbox_inputs[1]["avoid_reason"])
+        self.assertEqual(
+            [
+                {
+                    "outcome": "failure",
+                    "failureReason": "create_account_user_register_400",
+                    "failureClass": "weak_attributed_generic_register_400",
+                    "errorCode": "user_register_400",
+                    "provider": "m2u",
+                    "domain": "kkb.qzz.io",
+                    "email": "user1@kkb.qzz.io",
+                    "mailbox_ref": "mailbox-ref-1",
+                    "mailbox_session_id": "mailbox-session-1",
+                    "business_key": "openai",
+                    "stepId": "create-openai-account",
+                    "attempt": 1,
+                }
+            ],
+            result.outputs["mailbox-attempt-outcomes"],
         )
         self.assertEqual([("mailbox-ref-1", "mailbox-session-1")], released_mailboxes)
         self.assertEqual([("http://proxy-1", "lease-1")], released_proxies)
@@ -1203,6 +1237,13 @@ class DstFlowIntegrationTests(unittest.TestCase):
                                     "id": "acquire-mailbox",
                                     "type": "acquire_mailbox",
                                     "metadata": {"owner": "easyemail"},
+                                    "input": {
+                                        "business_key": "{{task.mailbox_business_key}}",
+                                        "avoid_emails": "{{task.avoidMailboxEmails}}",
+                                        "avoid_domains": "{{task.avoidMailboxDomains}}",
+                                        "avoid_providers": "{{task.avoidMailboxProviders}}",
+                                        "avoid_reason": "{{task.avoidMailboxReason}}",
+                                    },
                                     "saveAs": "mailbox",
                                 },
                                 {

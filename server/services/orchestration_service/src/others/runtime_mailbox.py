@@ -359,6 +359,64 @@ def _mailbox_domain_from_email(email: str) -> str:
     return normalized.rsplit("@", 1)[-1].strip().lower()
 
 
+def _normalize_mailbox_avoid_values(value: Any, *, kind: str) -> tuple[str, ...]:
+    raw_items: list[Any]
+    if isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        text = str(value or "").strip()
+        raw_items = text.split(",") if text else []
+    normalized: list[str] = []
+    for item in raw_items:
+        text = str(item or "").strip().lower()
+        if not text:
+            continue
+        if kind == "provider":
+            text = _normalize_mailbox_provider(text)
+        elif kind == "email":
+            text = _normalize_requested_email_address(text)
+        elif kind == "domain":
+            text = text.strip().lower()
+        if text and text not in normalized:
+            normalized.append(text)
+    return tuple(normalized)
+
+
+def _mailbox_attempt_local_avoidance_violation(
+    mailbox: Mailbox,
+    *,
+    business_key: str | None = None,
+    avoid_emails: Any = None,
+    avoid_domains: Any = None,
+    avoid_providers: Any = None,
+    avoid_reason: str = "",
+) -> dict[str, Any] | None:
+    resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
+    provider = _normalize_mailbox_provider(str(getattr(mailbox, "provider", "") or ""))
+    email = _normalize_requested_email_address(str(getattr(mailbox, "email", "") or ""))
+    domain = _mailbox_domain_from_email(email)
+    normalized_avoid_emails = set(_normalize_mailbox_avoid_values(avoid_emails, kind="email"))
+    normalized_avoid_domains = set(_normalize_mailbox_avoid_values(avoid_domains, kind="domain"))
+    normalized_avoid_providers = set(_normalize_mailbox_avoid_values(avoid_providers, kind="provider"))
+    reason = ""
+    if email and email in normalized_avoid_emails:
+        reason = "attempt_local_mailbox_email"
+    elif domain and domain in normalized_avoid_domains:
+        reason = "attempt_local_mailbox_domain"
+    elif provider and provider in normalized_avoid_providers:
+        reason = "attempt_local_mailbox_provider"
+    if not reason:
+        return None
+    return {
+        "reason": reason,
+        "business_key": resolved_business_key,
+        "provider": provider,
+        "domain": domain,
+        "email": email,
+        "avoidReason": str(avoid_reason or "").strip(),
+    }
+
+
 def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | None = None) -> dict[str, Any] | None:
     resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
     provider = _normalize_mailbox_provider(str(getattr(mailbox, "provider", "") or ""))
@@ -448,12 +506,27 @@ def _release_mailbox_quiet(mailbox: Mailbox, *, reason: str) -> None:
         pass
 
 
-def _create_mailbox_with_business_policy(*, create_fn: Any, business_key: str | None = None) -> Mailbox:
+def _create_mailbox_with_business_policy(
+    *,
+    create_fn: Any,
+    business_key: str | None = None,
+    avoid_emails: Any = None,
+    avoid_domains: Any = None,
+    avoid_providers: Any = None,
+    avoid_reason: str = "",
+) -> Mailbox:
     max_attempts = _resolve_mailbox_business_retry_attempts()
     last_violation: dict[str, Any] | None = None
     for attempt_index in range(1, max_attempts + 1):
         mailbox = create_fn()
-        violation = _mailbox_domain_policy_violation(mailbox, business_key=business_key)
+        violation = _mailbox_attempt_local_avoidance_violation(
+            mailbox,
+            business_key=business_key,
+            avoid_emails=avoid_emails,
+            avoid_domains=avoid_domains,
+            avoid_providers=avoid_providers,
+            avoid_reason=avoid_reason,
+        ) or _mailbox_domain_policy_violation(mailbox, business_key=business_key)
         if violation is None:
             return mailbox
         last_violation = violation
@@ -477,10 +550,15 @@ def _create_mailbox_with_business_policy(*, create_fn: Any, business_key: str | 
             return mailbox
         json_log(
             {
-                "event": "register_mailbox_business_domain_rejected",
+                "event": (
+                    "register_mailbox_attempt_local_avoidance_applied"
+                    if str(violation.get("reason") or "").startswith("attempt_local_mailbox_")
+                    else "register_mailbox_business_domain_rejected"
+                ),
                 "attempt": attempt_index,
                 "maxAttempts": max_attempts,
                 "reason": str(violation.get("reason") or ""),
+                "avoidReason": str(violation.get("avoidReason") or ""),
                 "businessKey": str(violation.get("business_key") or ""),
                 "provider": str(violation.get("provider") or ""),
                 "domain": str(violation.get("domain") or ""),
@@ -544,6 +622,10 @@ def resolve_mailbox(
     preallocated_mailbox_ref: str | None,
     recreate_preallocated_email: bool = False,
     business_key: str | None = None,
+    avoid_emails: Any = None,
+    avoid_domains: Any = None,
+    avoid_providers: Any = None,
+    avoid_reason: str = "",
 ) -> Mailbox:
     ensure_easy_email_env_defaults()
     mailbox_config = _mailbox_runtime_config()
@@ -566,6 +648,10 @@ def resolve_mailbox(
                     **_resolve_mailbox_strategy_kwargs(),
                 ),
                 business_key=resolved_business_key,
+                avoid_emails=avoid_emails,
+                avoid_domains=avoid_domains,
+                avoid_providers=avoid_providers,
+                avoid_reason=avoid_reason,
             )
         except Exception as exc:
             raise ensure_protocol_runtime_error(
@@ -647,6 +733,10 @@ def resolve_mailbox(
                     **strategy_kwargs,
                 ),
                 business_key=resolved_business_key,
+                avoid_emails=avoid_emails,
+                avoid_domains=avoid_domains,
+                avoid_providers=avoid_providers,
+                avoid_reason=avoid_reason,
             )
         if _resolve_business_mailbox_domain_pool(business_key=resolved_business_key):
             json_log(
@@ -666,6 +756,10 @@ def resolve_mailbox(
                 **strategy_kwargs,
             ),
             business_key=resolved_business_key,
+            avoid_emails=avoid_emails,
+            avoid_domains=avoid_domains,
+            avoid_providers=avoid_providers,
+            avoid_reason=avoid_reason,
         )
     except Exception as exc:
         raise ensure_protocol_runtime_error(

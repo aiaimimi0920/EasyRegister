@@ -17,6 +17,171 @@ from others.dst_flow_support import step_output_ok
 from others.dst_flow_support import step_retry_policy
 
 
+def _normalize_mailbox_provider(provider: Any) -> str:
+    value = str(provider or "").strip().lower()
+    alias_map = {
+        "cloudflare-temp-email": "cloudflare_temp_email",
+        "cloudflaretempemail": "cloudflare_temp_email",
+        "mail-to-you": "m2u",
+        "mailtoyou": "m2u",
+        "tempmaillol": "tempmail-lol",
+        "tempmail.lol": "tempmail-lol",
+    }
+    return alias_map.get(value, value)
+
+
+def _mailbox_provider_from_ref(mailbox_ref: Any) -> str:
+    value = str(mailbox_ref or "").strip()
+    if not value:
+        return ""
+    if ":" not in value:
+        return "moemail"
+    return _normalize_mailbox_provider(value.split(":", 1)[0])
+
+
+def _normalize_mailbox_email(email: Any) -> str:
+    normalized = str(email or "").strip().lower()
+    if "@" not in normalized:
+        return ""
+    local_part, _, domain = normalized.partition("@")
+    local_part = local_part.strip()
+    domain = domain.strip().lower()
+    if not local_part or not domain:
+        return ""
+    return f"{local_part}@{domain}"
+
+
+def _mailbox_domain_from_email(email: Any) -> str:
+    normalized = _normalize_mailbox_email(email)
+    if "@" not in normalized:
+        return ""
+    return normalized.rsplit("@", 1)[-1].strip().lower()
+
+
+def _append_unique_text(existing: Any, value: str) -> list[str]:
+    values: list[str] = []
+    if isinstance(existing, list):
+        values = [str(item or "").strip() for item in existing if str(item or "").strip()]
+    elif str(existing or "").strip():
+        values = [str(existing or "").strip()]
+    if value and value not in values:
+        values.append(value)
+    return values
+
+
+def _mailbox_retry_failure_class(*, error_code: str, error_message: str) -> tuple[str, str]:
+    normalized_code = str(error_code or "").strip().lower()
+    lowered = str(error_message or "").strip().lower()
+    if normalized_code == ErrorCodes.UNSUPPORTED_EMAIL or "unsupported_email" in lowered or "the email you provided is not supported" in lowered:
+        return "unsupported_email", "strong_mailbox_unsupported"
+    if "registration_disallowed" in lowered and "mailbox_provider=" in lowered:
+        return "registration_disallowed", "strong_mailbox_registration_disallowed"
+    if normalized_code == ErrorCodes.USER_REGISTER_400:
+        return "create_account_user_register_400", "weak_attributed_generic_register_400"
+    if normalized_code == ErrorCodes.INVALID_REQUEST_ERROR:
+        return "create_account_invalid_request_error", "weak_attributed_invalid_request_error"
+    return "", ""
+
+
+def _current_mailbox_context(*, state: dict[str, Any], result: DstExecutionResult) -> dict[str, str]:
+    mailbox_output = state.get("mailbox")
+    if not isinstance(mailbox_output, dict):
+        mailbox_output = result.outputs.get("acquire-mailbox")
+    mailbox_output = mailbox_output if isinstance(mailbox_output, dict) else {}
+    email = _normalize_mailbox_email(
+        mailbox_output.get("email")
+        or mailbox_output.get("emailAddress")
+        or ""
+    )
+    mailbox_ref = str(
+        mailbox_output.get("mailbox_ref")
+        or mailbox_output.get("mailboxRef")
+        or ""
+    ).strip()
+    mailbox_session_id = str(
+        mailbox_output.get("session_id")
+        or mailbox_output.get("sessionId")
+        or mailbox_output.get("mailbox_session_id")
+        or mailbox_output.get("mailboxSessionId")
+        or ""
+    ).strip()
+    provider = _normalize_mailbox_provider(
+        mailbox_output.get("provider")
+        or mailbox_output.get("providerTypeKey")
+        or ""
+    )
+    if not provider and mailbox_ref:
+        provider = _mailbox_provider_from_ref(mailbox_ref)
+    return {
+        "provider": provider,
+        "domain": _mailbox_domain_from_email(email),
+        "email": email,
+        "mailbox_ref": mailbox_ref,
+        "mailbox_session_id": mailbox_session_id,
+        "business_key": str(
+            mailbox_output.get("business_key")
+            or mailbox_output.get("businessKey")
+            or ""
+        ).strip().lower(),
+    }
+
+
+def _prepare_create_account_mailbox_retry_context(
+    *,
+    statement: DstStatement,
+    state: dict[str, Any],
+    result: DstExecutionResult,
+    error_details: dict[str, Any],
+    attempt_index: int,
+) -> None:
+    if str(statement.step_type or "").strip().lower() != "create_openai_account":
+        return
+    error_code = str(error_details.get("code") or "").strip().lower()
+    error_message = str(error_details.get("message") or "").strip()
+    failure_reason, failure_class = _mailbox_retry_failure_class(
+        error_code=error_code,
+        error_message=error_message,
+    )
+    if not failure_reason:
+        return
+    context = _current_mailbox_context(state=state, result=result)
+    if not context.get("email") and not context.get("provider") and not context.get("mailbox_ref"):
+        return
+    task_state = state.get("task")
+    if not isinstance(task_state, dict):
+        return
+    email = str(context.get("email") or "").strip().lower()
+    domain = str(context.get("domain") or "").strip().lower()
+    provider = str(context.get("provider") or "").strip().lower()
+    if email:
+        task_state["avoidMailboxEmails"] = _append_unique_text(task_state.get("avoidMailboxEmails"), email)
+    if domain:
+        task_state["avoidMailboxDomains"] = _append_unique_text(task_state.get("avoidMailboxDomains"), domain)
+    if provider:
+        task_state["avoidMailboxProviders"] = _append_unique_text(task_state.get("avoidMailboxProviders"), provider)
+    task_state["avoidMailboxReason"] = failure_reason
+    outcomes = result.outputs.get("mailbox-attempt-outcomes")
+    if not isinstance(outcomes, list):
+        outcomes = []
+    outcomes.append(
+        {
+            "outcome": "failure",
+            "failureReason": failure_reason,
+            "failureClass": failure_class,
+            "errorCode": error_code,
+            "provider": provider,
+            "domain": domain,
+            "email": email,
+            "mailbox_ref": str(context.get("mailbox_ref") or "").strip(),
+            "mailbox_session_id": str(context.get("mailbox_session_id") or "").strip(),
+            "business_key": str(context.get("business_key") or "").strip().lower(),
+            "stepId": statement.step_id,
+            "attempt": max(1, int(attempt_index or 1)),
+        }
+    )
+    result.outputs["mailbox-attempt-outcomes"] = outcomes
+
+
 def _cleanup_saved_state_before_refresh(*, refresh_statement: DstStatement, state: dict[str, Any], result: DstExecutionResult) -> None:
     save_as_name = str(refresh_statement.save_as or "").strip()
     if not save_as_name:
@@ -215,11 +380,20 @@ def refresh_retry_state(
     state: dict[str, Any],
     result: DstExecutionResult,
     save_as_index: dict[str, DstStatement],
+    error_details: dict[str, Any] | None = None,
+    attempt_index: int = 1,
 ) -> None:
     retry = step_retry_policy(statement)
     refresh_saved_states = retry.get("refreshSavedStates")
     if not isinstance(refresh_saved_states, list):
         return
+    _prepare_create_account_mailbox_retry_context(
+        statement=statement,
+        state=state,
+        result=result,
+        error_details=error_details or {},
+        attempt_index=attempt_index,
+    )
     for saved_state_name in refresh_saved_states:
         normalized_name = str(saved_state_name or "").strip()
         refresh_statement = save_as_index.get(normalized_name)
@@ -450,6 +624,8 @@ def run_dst_flow_once(
                                 state=state,
                                 result=result,
                                 save_as_index=save_as_index,
+                                error_details=error_details,
+                                attempt_index=attempt_index,
                             )
                             continue
                         except Exception as refresh_exc:
