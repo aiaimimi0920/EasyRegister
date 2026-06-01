@@ -573,10 +573,19 @@ def resolve_mailbox(
                     "businessKey": resolved_business_key,
                 }
             )
-        if planned_provider == "moemail":
+        planned_provider_blocked = False
+        if planned_provider and planned_provider != "moemail":
+            planned_provider_blocked = _mailbox_provider_is_business_blacklisted(
+                planned_provider,
+                _load_mailbox_domain_state(),
+                business_key=resolved_business_key,
+            )
+        if planned_provider == "moemail" or planned_provider_blocked:
             selected_domain, domain_selection_reason = _select_business_mailbox_domain(
                 business_key=resolved_business_key,
             )
+            if planned_provider_blocked:
+                domain_selection_reason = f"planned_provider_blacklisted:{domain_selection_reason}"
         else:
             selected_domain = ""
             domain_selection_reason = "planned_provider_not_moemail" if planned_provider else "no_planned_provider"

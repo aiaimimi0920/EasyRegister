@@ -27,6 +27,9 @@ PHONE_SCOPED_TERMINAL_CODES = {
     "phone_number_in_use",
     "phone_max_usage_exceeded",
     "rate_limit_exceeded",
+    "sms_code_timeout",
+    "wait_code_timeout",
+    "wait_sms_code_timeout",
     "wrong_otp_code",
 }
 PROVIDER_TERMINAL_OUTCOMES_KEY = "providerTerminalOutcomes"

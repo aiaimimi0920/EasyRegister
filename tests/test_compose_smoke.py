@@ -42,6 +42,18 @@ class ComposeSmokeTests(unittest.TestCase):
             test_payload,
         )
 
+    def test_compose_disables_dynamic_mailbox_blacklist_exhausted_fallback_by_default(self) -> None:
+        main_payload = MAIN_COMPOSE_PATH.read_text(encoding="utf-8")
+        test_payload = TEST_COMPOSE_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK:-false",
+            main_payload,
+        )
+        self.assertIn(
+            "REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK:-false",
+            test_payload,
+        )
+
     def test_deploy_host_generates_protocol_bridge_mount_contract(self) -> None:
         payload = (REPO_ROOT / "deploy-host.ps1").read_text(encoding="utf-8")
         for expected in (

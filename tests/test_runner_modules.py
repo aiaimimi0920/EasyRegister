@@ -661,6 +661,36 @@ class RunnerTeamArtifactsTests(unittest.TestCase):
             self.assertEqual(1, len(result["localized"]))
             self.assertEqual(str(existing_team_path), result["localized"][0]["stored_path"])
 
+    def test_sync_team_member_artifacts_treats_unavailable_claim_dir_as_idle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared-root"
+            output_root = shared_root / "others" / "mixed-runs"
+            claims_dir = shared_root / "others" / "team-mother-claims"
+
+            original_is_dir = Path.is_dir
+
+            def _is_dir(path: Path) -> bool:
+                if path == claims_dir:
+                    raise OSError("[Errno 5] Input/output error")
+                return original_is_dir(path)
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_TEAM_LOCAL_SPLIT_PERCENT": "100",
+                },
+                clear=False,
+            ), mock.patch.object(Path, "is_dir", _is_dir):
+                result = runner_team_artifacts.sync_team_member_artifacts_from_active_claims(
+                    output_root=output_root,
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("claims_dir_unavailable", result["status"])
+        self.assertEqual([], result["localized"])
+        self.assertEqual([], result["failures"])
+
 
 class RunnerFlowSchedulerTests(unittest.TestCase):
     def test_choose_runnable_flow_spec_skips_empty_continue_pool(self) -> None:

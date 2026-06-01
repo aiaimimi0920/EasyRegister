@@ -108,6 +108,21 @@ def _is_retryable_phone_code_submission_error(exc: BaseException) -> bool:
     )
 
 
+def _is_retryable_phone_code_wait_error(exc: BaseException) -> bool:
+    message = str(exc or "").strip().lower()
+    if not message:
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "timeout waiting for sms verification code",
+            "wait_code_timeout",
+            "wait_sms_code_timeout",
+            "sms_code_timeout",
+        )
+    )
+
+
 def build_easyprotocol_request(*, step_type: str, step_input: dict[str, Any]) -> dict[str, Any]:
     request_mode = str(
         os.environ.get("EASY_PROTOCOL_REQUEST_MODE") or DEFAULT_EASY_PROTOCOL_MODE
@@ -639,6 +654,19 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
                 outcome="failure",
                 detail=str(exc),
             )
+            if (
+                phone_number_submitted
+                and phone_failure_stage == "wait_sms_code"
+                and _is_retryable_phone_code_wait_error(exc)
+            ):
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number=phone_session["phoneNumber"],
+                    provider_key=phone_session["providerKey"],
+                    terminal_code="sms_code_timeout",
+                    terminal_message=str(exc),
+                )
+                if phone_attempt_index + 1 < max_phone_attempts:
+                    continue
             if (
                 phone_number_submitted
                 and phone_failure_stage == "submit_phone_verification_code"

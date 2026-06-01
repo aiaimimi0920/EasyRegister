@@ -168,14 +168,37 @@ def sync_team_member_artifacts_from_active_claims(
         return {"ok": True, "status": "disabled", "localized": [], "failures": []}
 
     claims_dir = shared_root_from_output_root(output_root) / "others" / "team-mother-claims"
-    if not claims_dir.is_dir():
+    try:
+        claims_dir_available = claims_dir.is_dir()
+    except OSError as exc:
+        return {
+            "ok": True,
+            "status": "claims_dir_unavailable",
+            "localized": [],
+            "failures": [],
+            "claims_dir": str(claims_dir),
+            "detail": str(exc),
+        }
+    if not claims_dir_available:
         return {"ok": True, "status": "idle", "localized": [], "failures": []}
 
     local_dir = resolve_team_local_dir(output_root=output_root)
     localized: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
 
-    for claim_path in sorted(claims_dir.glob("*.json"), key=lambda item: item.name.lower()):
+    try:
+        claim_paths = sorted(claims_dir.glob("*.json"), key=lambda item: item.name.lower())
+    except OSError as exc:
+        return {
+            "ok": True,
+            "status": "claims_dir_unavailable",
+            "localized": [],
+            "failures": [],
+            "claims_dir": str(claims_dir),
+            "detail": str(exc),
+        }
+
+    for claim_path in claim_paths:
         if not claim_path.is_file():
             continue
         claim_payload = load_json_payload(claim_path)
