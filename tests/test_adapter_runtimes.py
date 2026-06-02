@@ -2274,6 +2274,37 @@ class EasyEmailRuntimeTests(unittest.TestCase):
         self.assertEqual(2, result["released_count"])
         self.assertEqual(0, result["failed_count"])
 
+    def test_release_mailbox_sessions_by_email_accepts_provider_release_noop(self) -> None:
+        with mock.patch.object(easyemail_runtime, "ensure_easyemail_runtime_defaults"):
+            with mock.patch.object(
+                easyemail_runtime,
+                "release_mailbox_sessions_by_email",
+                return_value=[
+                    {
+                        "sessionId": "sess-1",
+                        "email": "user@example.com",
+                        "release": {
+                            "released": False,
+                            "detail": "provider_does_not_support_release",
+                        },
+                    },
+                ],
+            ):
+                result = easyemail_runtime.dispatch_easyemail_step(
+                    step_type="release_mailbox_sessions_by_email",
+                    step_input={
+                        "email_address": "user@example.com",
+                        "provider": "cloudflare_temp_email",
+                        "reason": "openai_login_recover",
+                    },
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("released_sessions", result["status"])
+        self.assertEqual(1, result["matched_session_count"])
+        self.assertEqual(1, result["released_count"])
+        self.assertEqual(0, result["failed_count"])
+
     def test_release_mailbox_sessions_by_email_rejects_missing_email(self) -> None:
         with mock.patch.object(easyemail_runtime, "ensure_easyemail_runtime_defaults"):
             result = easyemail_runtime.dispatch_easyemail_step(
@@ -2342,6 +2373,24 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertNotIn("providerRoutingProfileId", payload)
         self.assertNotIn("providerStrategyModeId", payload)
         self.assertNotIn("providerGroupSelections", payload)
+
+    def test_mailbox_request_payload_passes_excluded_provider_type_keys_to_easyemail(self) -> None:
+        self.assertIn(
+            "excluded_provider_type_keys",
+            easy_email_client._build_mailbox_request_payload.__code__.co_varnames,
+        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(easy_email_client, "_wait_mail_service_ready"):
+                payload, provider_key, requested_email = easy_email_client._build_mailbox_request_payload(
+                    provider="auto",
+                    default_host_id="python-register-orchestration",
+                    ttl_seconds=90,
+                    excluded_provider_type_keys=["M2U", "mail-to-you", "moe", ""],
+                )
+
+        self.assertEqual("", provider_key)
+        self.assertEqual("", requested_email)
+        self.assertEqual(["m2u", "moemail"], payload["excludedProviderTypeKeys"])
 
     def test_release_mailbox_client_treats_missing_session_as_not_found(self) -> None:
         with mock.patch.object(
@@ -3394,6 +3443,275 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual(1, len(create_kwargs))
         self.assertEqual("moemail", create_kwargs[0].get("provider"))
         self.assertEqual("zhooo.org", create_kwargs[0].get("mailcreate_domain"))
+
+    def test_resolve_mailbox_defers_to_auto_when_business_domain_pool_is_dynamically_exhausted(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="cloudflare_temp_email",
+            email="candidate@safe-mail.test",
+            ref="cloudflare_temp_email:session",
+            session_id="session",
+        )
+        create_kwargs: list[dict[str, object]] = []
+
+        def _create_mailbox(**kwargs):
+            create_kwargs.append(dict(kwargs))
+            return mailbox
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "domains": {
+                                    "zhooo.org": {
+                                        "provider": "moemail",
+                                        "attempts": 6,
+                                        "successes": 0,
+                                        "failures": 6,
+                                        "blacklisted": True,
+                                        "blacklistReason": "email_otp_failure_threshold",
+                                        "lastFailureAt": "2026-06-02T00:00:00+00:00",
+                                    },
+                                    "cnmlgb.de": {
+                                        "provider": "moemail",
+                                        "attempts": 6,
+                                        "successes": 0,
+                                        "failures": 6,
+                                        "blacklisted": True,
+                                        "blacklistReason": "email_otp_failure_threshold",
+                                        "lastFailureAt": "2026-06-02T00:00:00+00:00",
+                                    },
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"domainPool":["zhooo.org","cnmlgb.de"],'
+                        '"explicitBlacklistDomains":["coolkid.icu"]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                with mock.patch.object(
+                    runtime_mailbox,
+                    "_resolve_planned_mailbox_provider",
+                    return_value="moemail",
+                ):
+                    with mock.patch.object(
+                        runtime_mailbox,
+                        "create_mailbox",
+                        side_effect=_create_mailbox,
+                    ):
+                        resolved = runtime_mailbox.resolve_mailbox(
+                            preallocated_email=None,
+                            preallocated_session_id=None,
+                            preallocated_mailbox_ref=None,
+                            business_key="openai",
+                        )
+
+        self.assertEqual("candidate@safe-mail.test", resolved.email)
+        self.assertEqual(1, len(create_kwargs))
+        self.assertEqual("auto", create_kwargs[0].get("provider"))
+        self.assertNotIn("mailcreate_domain", create_kwargs[0])
+
+    def test_resolve_mailbox_auto_fallback_excludes_known_bad_providers(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="cloudflare_temp_email",
+            email="candidate@safe-mail.test",
+            ref="cloudflare_temp_email:session",
+            session_id="session",
+        )
+        create_kwargs: list[dict[str, object]] = []
+
+        def _create_mailbox(**kwargs):
+            create_kwargs.append(dict(kwargs))
+            return mailbox
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "domains": {
+                                    "zhooo.org": {
+                                        "provider": "moemail",
+                                        "attempts": 6,
+                                        "successes": 0,
+                                        "failures": 6,
+                                        "blacklisted": True,
+                                        "blacklistReason": "email_otp_failure_threshold",
+                                        "lastFailureAt": "2026-06-02T00:00:00+00:00",
+                                    },
+                                    "cnmlgb.de": {
+                                        "provider": "moemail",
+                                        "attempts": 6,
+                                        "successes": 0,
+                                        "failures": 6,
+                                        "blacklisted": True,
+                                        "blacklistReason": "email_otp_failure_threshold",
+                                        "lastFailureAt": "2026-06-02T00:00:00+00:00",
+                                    },
+                                },
+                                "providers": {
+                                    "mail2925": {
+                                        "attempts": 4,
+                                        "successes": 0,
+                                        "failures": 4,
+                                        "failureReasons": {"email_otp_timeout": 3},
+                                    }
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD": "3",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"domainPool":["zhooo.org","cnmlgb.de"],'
+                        '"providerBlacklist":["m2u"],'
+                        '"explicitBlacklistDomains":["coolkid.icu"]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                with mock.patch.object(
+                    runtime_mailbox,
+                    "_resolve_planned_mailbox_provider",
+                    return_value="moemail",
+                ):
+                    with mock.patch.object(
+                        runtime_mailbox,
+                        "create_mailbox",
+                        side_effect=_create_mailbox,
+                    ):
+                        resolved = runtime_mailbox.resolve_mailbox(
+                            preallocated_email=None,
+                            preallocated_session_id=None,
+                            preallocated_mailbox_ref=None,
+                            business_key="openai",
+                            avoid_providers=["im215"],
+                            avoid_reason="create_account_user_register_400",
+                        )
+
+        self.assertEqual("candidate@safe-mail.test", resolved.email)
+        self.assertEqual(1, len(create_kwargs))
+        self.assertEqual("auto", create_kwargs[0].get("provider"))
+        self.assertEqual(
+            ("im215", "m2u", "mail2925", "moemail"),
+            tuple(create_kwargs[0].get("excluded_provider_type_keys") or ()),
+        )
+        self.assertNotIn("mailcreate_domain", create_kwargs[0])
+
+    def test_resolve_mailbox_auto_fallback_excludes_moemail_after_blocked_planned_provider_exhausts_domain_pool(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="cloudflare_temp_email",
+            email="candidate@safe-mail.test",
+            ref="cloudflare_temp_email:session",
+            session_id="session",
+        )
+        create_kwargs: list[dict[str, object]] = []
+
+        def _create_mailbox(**kwargs):
+            create_kwargs.append(dict(kwargs))
+            return mailbox
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "domains": {
+                                    "zhooo.org": {
+                                        "provider": "moemail",
+                                        "attempts": 6,
+                                        "successes": 0,
+                                        "failures": 6,
+                                        "blacklisted": True,
+                                        "blacklistReason": "email_otp_failure_threshold",
+                                        "lastFailureAt": "2026-06-02T00:00:00+00:00",
+                                    }
+                                },
+                                "providers": {
+                                    "mail2925": {
+                                        "attempts": 4,
+                                        "successes": 0,
+                                        "failures": 4,
+                                        "failureReasons": {"email_otp_timeout": 3},
+                                    }
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD": "3",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"domainPool":["zhooo.org"],'
+                        '"explicitBlacklistDomains":["coolkid.icu"]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                with mock.patch.object(
+                    runtime_mailbox,
+                    "_resolve_planned_mailbox_provider",
+                    return_value="mail2925",
+                ):
+                    with mock.patch.object(
+                        runtime_mailbox,
+                        "create_mailbox",
+                        side_effect=_create_mailbox,
+                    ):
+                        resolved = runtime_mailbox.resolve_mailbox(
+                            preallocated_email=None,
+                            preallocated_session_id=None,
+                            preallocated_mailbox_ref=None,
+                            business_key="openai",
+                        )
+
+        self.assertEqual("candidate@safe-mail.test", resolved.email)
+        self.assertEqual(1, len(create_kwargs))
+        self.assertEqual("auto", create_kwargs[0].get("provider"))
+        self.assertEqual(
+            ("mail2925", "moemail"),
+            tuple(create_kwargs[0].get("excluded_provider_type_keys") or ()),
+        )
+        self.assertNotIn("mailcreate_domain", create_kwargs[0])
 
     def test_resolve_mailbox_provider_selections_defaults_to_easyemail_unfiltered(self) -> None:
         with mock.patch.dict(

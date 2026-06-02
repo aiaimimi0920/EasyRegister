@@ -429,6 +429,22 @@ def _normalize_provider(provider: str) -> str:
     return p  # pass through unknown providers instead of defaulting
 
 
+def _normalize_provider_type_key_list(value: list[str] | tuple[str, ...] | set[str] | None) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        raw = str(item or "").strip()
+        if not raw:
+            continue
+        provider = _normalize_provider(raw)
+        if provider and provider not in seen:
+            normalized.append(provider)
+            seen.add(provider)
+    return normalized
+
+
 def _resolve_mailbox_strategy_payload(
     *,
     provider_strategy_mode_id: str | None = None,
@@ -545,6 +561,7 @@ def _build_mailbox_request_payload(
     provider_routing_profile_id: Optional[str] = None,
     provider_strategy_mode_id: Optional[str] = None,
     provider_group_selections: list[str] | tuple[str, ...] | None = None,
+    excluded_provider_type_keys: list[str] | tuple[str, ...] | set[str] | None = None,
     mailcreate_base_url: str = "",
     mailcreate_custom_auth: str = "",
     mailcreate_domain: str = "",
@@ -638,6 +655,9 @@ def _build_mailbox_request_payload(
                 provider_group_selections=provider_group_selections,
             )
         )
+    excluded_provider_keys = _normalize_provider_type_key_list(excluded_provider_type_keys)
+    if excluded_provider_keys:
+        payload["excludedProviderTypeKeys"] = excluded_provider_keys
     if normalized_requested_email:
         payload["metadata"]["requestedEmailAddress"] = normalized_requested_email
     if normalized_requested_local_part:
@@ -656,6 +676,7 @@ def plan_mailbox(
     provider_routing_profile_id: Optional[str] = None,
     provider_strategy_mode_id: Optional[str] = None,
     provider_group_selections: list[str] | tuple[str, ...] | None = None,
+    excluded_provider_type_keys: list[str] | tuple[str, ...] | set[str] | None = None,
     mailcreate_base_url: str = "",
     mailcreate_custom_auth: str = "",
     mailcreate_domain: str = "",
@@ -677,6 +698,7 @@ def plan_mailbox(
         provider_routing_profile_id=provider_routing_profile_id,
         provider_strategy_mode_id=provider_strategy_mode_id,
         provider_group_selections=provider_group_selections,
+        excluded_provider_type_keys=excluded_provider_type_keys,
         mailcreate_base_url=mailcreate_base_url,
         mailcreate_custom_auth=mailcreate_custom_auth,
         mailcreate_domain=mailcreate_domain,
@@ -704,6 +726,7 @@ def create_mailbox(
     provider_routing_profile_id: Optional[str] = None,
     provider_strategy_mode_id: Optional[str] = None,
     provider_group_selections: list[str] | tuple[str, ...] | None = None,
+    excluded_provider_type_keys: list[str] | tuple[str, ...] | set[str] | None = None,
     mailcreate_base_url: str = "",
     mailcreate_custom_auth: str = "",
     mailcreate_domain: str = "",
@@ -726,6 +749,7 @@ def create_mailbox(
         provider_routing_profile_id=provider_routing_profile_id,
         provider_strategy_mode_id=provider_strategy_mode_id,
         provider_group_selections=provider_group_selections,
+        excluded_provider_type_keys=excluded_provider_type_keys,
         mailcreate_base_url=mailcreate_base_url,
         mailcreate_custom_auth=mailcreate_custom_auth,
         mailcreate_domain=mailcreate_domain,

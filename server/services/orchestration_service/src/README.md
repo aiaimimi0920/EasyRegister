@@ -83,7 +83,8 @@ provider 的具体能力差异都由 `EasyEmail` 内部处理。对调度层来�
 - 业务层当前只根据“域名黑名单 + 服务商黑名单”决定是否立即释放邮箱并重试，不再因为域名不在某个白名单池里而拒绝
 - 对同一业务下同一邮箱域名，连续失败达到阈值后会进入运行态动态黑名单；默认阈值为 `500`
 - 运行态动态黑名单默认 6 小时后过期并允许重新试探；显式域名/provider 黑名单不受影响
-- 动态黑名单耗尽时默认直接失败并释放邮箱；只有显式设置 `REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK=true` 才会恢复旧的“使用最后一个动态黑名单邮箱兜底”行为
+- 业务域名池全部命中运行态动态黑名单时，不再强制指定 MoEmail 业务域，而是回到 `EasyEmail` 的 `auto` 路由选择其他可用 provider/domain
+- 如果 `EasyEmail auto` 仍连续返回已被动态黑名单拦截的 provider/domain，默认直接失败并释放邮箱；只有显式设置 `REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK=true` 才会恢复旧的“使用最后一个动态黑名单邮箱兜底”行为
 - `obtain_codex_oauth` 现在默认仍先走无手机号路径；只有当 `EasyProtocol` 返回 `phoneVerificationRequired=true` 时，调度层才会调用 `EasySms`
 - 当前开发默认通过 `REGISTER_SMS_PROVIDER_BLACKLIST=hero_sms` 禁用付费 `hero_sms`
 - `REGISTER_SMS_SELECTION_MODE` 仅在后续显式走 `hero_sms` 这类付费短信 provider 时才有意义；当前默认值使用 `balanced` 以保持与 `EasySms` 原生 API 的合法枚举一致

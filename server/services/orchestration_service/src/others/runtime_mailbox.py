@@ -321,6 +321,53 @@ def _mailbox_provider_is_business_blacklisted(provider: str, state_payload: dict
     )
 
 
+def _state_mailbox_provider_keys(state_payload: dict[str, Any], *, business_key: str | None = None) -> tuple[str, ...]:
+    providers: list[str] = []
+
+    def _append_provider_keys(value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+        for key in value:
+            normalized = _normalize_mailbox_provider(str(key or ""))
+            if normalized and normalized not in providers:
+                providers.append(normalized)
+
+    resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
+    businesses = state_payload.get("businesses")
+    if isinstance(businesses, dict):
+        business_payload = businesses.get(resolved_business_key)
+        if isinstance(business_payload, dict):
+            _append_provider_keys(business_payload.get("providers"))
+    _append_provider_keys(state_payload.get("providers"))
+    return tuple(providers)
+
+
+def _resolve_mailbox_auto_excluded_provider_type_keys(
+    *,
+    business_key: str | None = None,
+    avoid_providers: Any = None,
+    exclude_moemail: bool = False,
+) -> tuple[str, ...]:
+    state_payload = _load_mailbox_domain_state()
+    excluded: list[str] = []
+
+    def _append(provider: str) -> None:
+        normalized = _normalize_mailbox_provider(provider)
+        if normalized and normalized not in excluded:
+            excluded.append(normalized)
+
+    for provider in _normalize_mailbox_avoid_values(avoid_providers, kind="provider"):
+        _append(provider)
+    for provider in _resolve_mailbox_explicit_blacklist_providers(business_key=business_key):
+        _append(provider)
+    for provider in _state_mailbox_provider_keys(state_payload, business_key=business_key):
+        if _mailbox_provider_is_business_blacklisted(provider, state_payload, business_key=business_key):
+            _append(provider)
+    if exclude_moemail:
+        _append("moemail")
+    return tuple(excluded)
+
+
 def _select_business_mailbox_domain(*, business_key: str | None = None) -> tuple[str, str]:
     domain_pool = _resolve_business_mailbox_domain_pool(business_key=business_key)
     if not domain_pool:
@@ -341,7 +388,7 @@ def _select_business_mailbox_domain(*, business_key: str | None = None) -> tuple
     )
     if eligible:
         return random.choice(eligible), "eligible"
-    return random.choice(candidates), "dynamic_blacklist_exhausted"
+    return "", "dynamic_blacklist_exhausted"
 
 
 def _resolve_mailbox_business_retry_attempts() -> int:
@@ -753,6 +800,11 @@ def resolve_mailbox(
                 default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
                 prefer_raw_self_hosted_ref=True,
                 ttl_seconds=ttl_seconds,
+                excluded_provider_type_keys=_resolve_mailbox_auto_excluded_provider_type_keys(
+                    business_key=resolved_business_key,
+                    avoid_providers=avoid_providers,
+                    exclude_moemail=domain_selection_reason.endswith("dynamic_blacklist_exhausted"),
+                ),
                 **strategy_kwargs,
             ),
             business_key=resolved_business_key,

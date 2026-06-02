@@ -105,6 +105,10 @@ def mailbox_release_result_ok(release_result: Any) -> bool:
         "deleted",
         "not_found",
         "already_deleted",
+        "provider_does_not_support_release",
+        "skipped_non_moemail",
+        "skipped_preserved_for_manual_oauth",
+        "upstream_delete_unauthorized",
     }
 
 
