@@ -102,6 +102,19 @@ class ComposeSmokeTests(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, msg=result.stderr or result.stdout)
 
+    def test_main_compose_config_parses_with_default_output_mount_when_docker_is_available(self) -> None:
+        docker_path = shutil.which("docker")
+        if not docker_path:
+            self.skipTest("docker not available")
+        result = subprocess.run(
+            [docker_path, "compose", "-f", str(MAIN_COMPOSE_PATH), "config"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, result.returncode, msg=result.stderr or result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

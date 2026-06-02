@@ -113,7 +113,7 @@ services:
       REGISTER_DASHBOARD_ALLOW_REMOTE: ${REGISTER_DASHBOARD_ALLOW_REMOTE:-true}
       REGISTER_DASHBOARD_RECENT_WINDOW_SECONDS: ${REGISTER_DASHBOARD_RECENT_WINDOW_SECONDS:-900}
     volumes:
-      - ${REGISTER_OUTPUT_DIR_HOST}:/shared/register-output
+      - ${REGISTER_OUTPUT_DIR_HOST:-../tmp/easyregister-output}:/shared/register-output
       - ${REGISTER_TEAM_AUTH_DIR_HOST:-C:/Users/vmjcv/.cli-proxy-api/team}:/shared/team-auth:ro
     ports:
       - ${REGISTER_DASHBOARD_PORT_HOST:-19790}:9790
