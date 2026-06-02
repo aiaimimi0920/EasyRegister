@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -176,6 +177,132 @@ class DstFlowIntegrationTests(unittest.TestCase):
                 obtain_steps = [statement for statement in plan.steps if statement.step_id == "obtain-codex-oauth"]
                 self.assertEqual(1, len(obtain_steps))
                 self.assertEqual("{{initialize_chatgpt_login_session}}", obtain_steps[0].input.get("login_session"))
+
+    def test_canonical_continue_flow_recovers_mailbox_for_claimed_artifact_email(self) -> None:
+        flows_dir = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
+        plan = load_dst_flow(flows_dir / "codex-openai-oauth-continue-v1.semantic-flow.json")
+
+        ordered_ids = [statement.step_id for statement in plan.steps]
+        self.assertLess(
+            ordered_ids.index("acquire-openai-oauth-artifact"),
+            ordered_ids.index("acquire-mailbox"),
+        )
+        acquire_steps = [statement for statement in plan.steps if statement.step_id == "acquire-mailbox"]
+        self.assertEqual(1, len(acquire_steps))
+        acquire_input = acquire_steps[0].input
+        self.assertEqual("{{openai_oauth_artifact.email}}", acquire_input.get("preallocated_email"))
+        self.assertEqual("{{openai_oauth_artifact.mailboxRef}}", acquire_input.get("preallocated_mailbox_ref"))
+        self.assertEqual("{{openai_oauth_artifact.mailboxSessionId}}", acquire_input.get("preallocated_session_id"))
+        self.assertTrue(acquire_input.get("recover_preallocated_email"))
+
+    def test_continue_flow_uses_claimed_artifact_email_mailbox_for_chatgpt_login(self) -> None:
+        flows_dir = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
+        flow_path = flows_dir / "codex-openai-oauth-continue-v1.semantic-flow.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260602-task000001"
+            source_pool_dir = output_root / "openai" / "failed-once"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            seed_path = source_pool_dir / "small-seed@example.com.json"
+            seed_path.write_text(
+                json.dumps(
+                    {
+                        "email": "seed@example.com",
+                        "mailboxRef": "cloudflare_temp_email:old-ref",
+                        "mailboxSessionId": "old-session",
+                        "createdAt": "2026-05-01T00:00:00Z",
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {
+                                "authStatus": "logged_in",
+                                "structure": "personal",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            calls: list[tuple[str, dict[str, object]]] = []
+
+            def _easyemail_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                calls.append((step_type, dict(step_input)))
+                if step_type == "acquire_mailbox":
+                    self.assertEqual("seed@example.com", step_input.get("preallocated_email"))
+                    self.assertEqual("cloudflare_temp_email:old-ref", step_input.get("preallocated_mailbox_ref"))
+                    self.assertEqual("old-session", step_input.get("preallocated_session_id"))
+                    self.assertTrue(step_input.get("recover_preallocated_email"))
+                    return {
+                        "ok": True,
+                        "provider": "cloudflare_temp_email",
+                        "email": "seed@example.com",
+                        "mailbox_ref": "cloudflare_temp_email:recovered-ref",
+                        "session_id": "mailbox_recovered",
+                    }
+                if step_type == "release_mailbox":
+                    return {"released": True, "detail": "deleted"}
+                raise AssertionError(step_type)
+
+            def _easyproxy_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                calls.append((step_type, dict(step_input)))
+                if step_type == "acquire_proxy_chain":
+                    return {"ok": True, "proxy_url": "http://proxy.local:25000", "lease_id": "lease-1"}
+                if step_type == "release_proxy_chain":
+                    return {"released": True}
+                raise AssertionError(step_type)
+
+            def _easyprotocol_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                calls.append((step_type, dict(step_input)))
+                if step_type == "initialize_platform_organization":
+                    return {"ok": True, "status": "already_initialized"}
+                if step_type == "initialize_chatgpt_login_session":
+                    self.assertEqual("cloudflare_temp_email:recovered-ref", step_input.get("mailbox_ref"))
+                    self.assertEqual("mailbox_recovered", step_input.get("mailbox_session_id"))
+                    return {"ok": True, "status": "completed", "mailboxEmail": "seed@example.com"}
+                if step_type == "obtain_codex_oauth":
+                    self.assertEqual("cloudflare_temp_email:recovered-ref", step_input.get("mailbox_ref"))
+                    self.assertEqual("mailbox_recovered", step_input.get("mailbox_session_id"))
+                    return {"ok": True, "status": "completed", "successPath": str(Path(tmp_dir) / "success.json")}
+                if step_type == "revoke_codex_member":
+                    return {"ok": True, "status": "skipped"}
+                if step_type == "upload_file_to_r2":
+                    return {"ok": True}
+                raise AssertionError(step_type)
+
+            def _orchestration_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                calls.append((step_type, dict(step_input)))
+                if step_type == "acquire_openai_oauth_artifact":
+                    from artifact_pool_flow import dispatch_orchestration_step
+
+                    return dispatch_orchestration_step(step_type=step_type, step_input=step_input)
+                if step_type == "validate_free_personal_oauth":
+                    return {"ok": True, "status": "personal_oauth_confirmed"}
+                if step_type == "finalize_openai_oauth_artifact":
+                    return {"ok": True, "status": "promoted_success"}
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "orchestration": _orchestration_dispatcher,
+                    "easyemail": _easyemail_dispatcher,
+                    "easyproxy": _easyproxy_dispatcher,
+                    "easyprotocol": _easyprotocol_dispatcher,
+                },
+                clear=True,
+            ), mock.patch.dict(os.environ, {"REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0"}, clear=False):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(run_output_dir),
+                    flow_path=flow_path,
+                    openai_oauth_pool_dir=str(source_pool_dir),
+                )
+
+        self.assertTrue(result.ok)
+        call_order = [step_type for step_type, _ in calls]
+        self.assertLess(call_order.index("acquire_openai_oauth_artifact"), call_order.index("acquire_mailbox"))
+        self.assertLess(call_order.index("acquire_mailbox"), call_order.index("initialize_chatgpt_login_session"))
+        self.assertEqual("seed@example.com", result.outputs["acquire-mailbox"]["email"])
 
     def test_canonical_openai_flows_probe_full_openai_registration_surfaces(self) -> None:
         flows_dir = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"

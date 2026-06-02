@@ -16,7 +16,7 @@ from others.paths import resolve_shared_root as _shared_root_from_output_root
 
 ensure_local_bundle_imports()
 
-from shared_mailbox.easy_email_client import Mailbox, create_mailbox, plan_mailbox, release_mailbox
+from shared_mailbox.easy_email_client import Mailbox, create_mailbox, plan_mailbox, recover_mailbox_by_email, release_mailbox
 
 
 DEFAULT_ORCHESTRATION_HOST_ID = "python-register-orchestration"
@@ -668,6 +668,7 @@ def resolve_mailbox(
     preallocated_session_id: str | None,
     preallocated_mailbox_ref: str | None,
     recreate_preallocated_email: bool = False,
+    recover_preallocated_email: bool = False,
     business_key: str | None = None,
     avoid_emails: Any = None,
     avoid_domains: Any = None,
@@ -707,6 +708,48 @@ def resolve_mailbox(
                 detail="recreate_mailbox",
                 category="flow_error",
             ) from exc
+    if normalized_preallocated_email and recover_preallocated_email:
+        preferred_provider = _provider_from_mailbox_ref(preallocated_mailbox_ref or "")
+        try:
+            recovered = recover_mailbox_by_email(
+                email_address=normalized_preallocated_email,
+                provider_type_key=preferred_provider,
+                host_id=DEFAULT_ORCHESTRATION_HOST_ID,
+            )
+        except Exception as exc:
+            if not preallocated_mailbox_ref and not preallocated_session_id:
+                raise ensure_protocol_runtime_error(
+                    exc,
+                    stage="stage_other",
+                    detail="recover_mailbox_by_email",
+                    category="flow_error",
+                ) from exc
+            recovered = {}
+        session = recovered.get("session") if isinstance(recovered, dict) else None
+        if isinstance(session, dict):
+            session_email = _normalize_requested_email_address(str(session.get("emailAddress") or ""))
+            session_id = str(session.get("id") or "").strip()
+            mailbox_ref = str(session.get("mailboxRef") or "").strip()
+            provider = _normalize_mailbox_provider(
+                str(session.get("providerTypeKey") or preferred_provider or "").strip()
+            )
+            if session_email == normalized_preallocated_email and session_id:
+                return Mailbox(
+                    provider=provider or _provider_from_mailbox_ref(mailbox_ref),
+                    email=session_email,
+                    ref=mailbox_ref or f"{provider or 'moemail'}:{session_id}",
+                    session_id=session_id,
+                )
+        if not preallocated_mailbox_ref and not preallocated_session_id:
+            raise ensure_protocol_runtime_error(
+                RuntimeError(
+                    f"mailbox_recover_by_email_failed: email={normalized_preallocated_email} "
+                    f"detail={str((recovered or {}).get('detail') or (recovered or {}).get('strategy') or 'not_supported')}"
+                ),
+                stage="stage_other",
+                detail="recover_mailbox_by_email",
+                category="flow_error",
+            )
     if preallocated_email and preallocated_mailbox_ref:
         ref = str(preallocated_mailbox_ref).strip()
         session_id = str(preallocated_session_id or "").strip()

@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -20,6 +21,10 @@ if str(PYTHON_SHARED_ROOT) not in sys.path:
 from others import easyemail_runtime, easyprotocol_runtime, local_config, runtime_mailbox, runtime_proxy_support, runtime_sms  # noqa: E402
 from shared_mailbox import easy_email_client  # noqa: E402
 from shared_sms import easy_sms_client  # noqa: E402
+
+
+def _fresh_mailbox_failure_at() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class EasyProtocolRuntimeTests(unittest.TestCase):
@@ -2569,6 +2574,71 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual(["m2u"], captured_kwargs["avoid_providers"])
         self.assertEqual("create_account_user_register_400", captured_kwargs["avoid_reason"])
 
+    def test_resolve_mailbox_recovers_preallocated_email_by_email(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+            runtime_mailbox,
+            "recover_mailbox_by_email",
+            return_value={
+                "recovered": True,
+                "strategy": "session_restore",
+                "session": {
+                    "providerTypeKey": "cloudflare_temp_email",
+                    "emailAddress": "seed@example.com",
+                    "mailboxRef": "cloudflare_temp_email:recovered-ref",
+                    "id": "mailbox_recovered",
+                },
+            },
+        ) as recover_mailbox_by_email:
+            mailbox = runtime_mailbox.resolve_mailbox(
+                preallocated_email="seed@example.com",
+                preallocated_session_id="old-session",
+                preallocated_mailbox_ref="cloudflare_temp_email:old-ref",
+                recover_preallocated_email=True,
+                business_key="openai",
+            )
+
+        self.assertEqual("cloudflare_temp_email", mailbox.provider)
+        self.assertEqual("seed@example.com", mailbox.email)
+        self.assertEqual("cloudflare_temp_email:recovered-ref", mailbox.ref)
+        self.assertEqual("mailbox_recovered", mailbox.session_id)
+        recover_mailbox_by_email.assert_called_once_with(
+            email_address="seed@example.com",
+            provider_type_key="cloudflare_temp_email",
+            host_id=runtime_mailbox.DEFAULT_ORCHESTRATION_HOST_ID,
+        )
+
+    def test_easyemail_acquire_mailbox_passes_preallocated_recovery_flag(self) -> None:
+        captured_kwargs: dict[str, object] = {}
+        mailbox = runtime_mailbox.Mailbox(
+            provider="cloudflare_temp_email",
+            email="seed@example.com",
+            ref="cloudflare_temp_email:recovered-ref",
+            session_id="mailbox_recovered",
+        )
+
+        def _resolve_mailbox(**kwargs: object) -> runtime_mailbox.Mailbox:
+            captured_kwargs.update(kwargs)
+            return mailbox
+
+        with mock.patch.object(easyemail_runtime, "ensure_easyemail_runtime_defaults"), mock.patch.object(
+            easyemail_runtime,
+            "resolve_mailbox",
+            side_effect=_resolve_mailbox,
+        ):
+            result = easyemail_runtime.dispatch_easyemail_step(
+                step_type="acquire_mailbox",
+                step_input={
+                    "business_key": "openai",
+                    "preallocated_email": "seed@example.com",
+                    "preallocated_mailbox_ref": "cloudflare_temp_email:old-ref",
+                    "preallocated_session_id": "old-session",
+                    "recover_preallocated_email": True,
+                },
+            )
+
+        self.assertEqual("seed@example.com", result["email"])
+        self.assertTrue(captured_kwargs["recover_preallocated_email"])
+
     def test_mailbox_domain_policy_violation_applies_business_blacklist_to_m2u(self) -> None:
         mailbox = runtime_mailbox.Mailbox(
             provider="m2u",
@@ -3475,7 +3545,7 @@ class RuntimeMailboxTests(unittest.TestCase):
                                         "failures": 6,
                                         "blacklisted": True,
                                         "blacklistReason": "email_otp_failure_threshold",
-                                        "lastFailureAt": "2026-06-02T00:00:00+00:00",
+                                        "lastFailureAt": _fresh_mailbox_failure_at(),
                                     },
                                     "cnmlgb.de": {
                                         "provider": "moemail",
@@ -3484,7 +3554,7 @@ class RuntimeMailboxTests(unittest.TestCase):
                                         "failures": 6,
                                         "blacklisted": True,
                                         "blacklistReason": "email_otp_failure_threshold",
-                                        "lastFailureAt": "2026-06-02T00:00:00+00:00",
+                                        "lastFailureAt": _fresh_mailbox_failure_at(),
                                     },
                                 }
                             }
@@ -3558,7 +3628,7 @@ class RuntimeMailboxTests(unittest.TestCase):
                                         "failures": 6,
                                         "blacklisted": True,
                                         "blacklistReason": "email_otp_failure_threshold",
-                                        "lastFailureAt": "2026-06-02T00:00:00+00:00",
+                                        "lastFailureAt": _fresh_mailbox_failure_at(),
                                     },
                                     "cnmlgb.de": {
                                         "provider": "moemail",
@@ -3567,7 +3637,7 @@ class RuntimeMailboxTests(unittest.TestCase):
                                         "failures": 6,
                                         "blacklisted": True,
                                         "blacklistReason": "email_otp_failure_threshold",
-                                        "lastFailureAt": "2026-06-02T00:00:00+00:00",
+                                        "lastFailureAt": _fresh_mailbox_failure_at(),
                                     },
                                 },
                                 "providers": {
@@ -3657,7 +3727,7 @@ class RuntimeMailboxTests(unittest.TestCase):
                                         "failures": 6,
                                         "blacklisted": True,
                                         "blacklistReason": "email_otp_failure_threshold",
-                                        "lastFailureAt": "2026-06-02T00:00:00+00:00",
+                                        "lastFailureAt": _fresh_mailbox_failure_at(),
                                     }
                                 },
                                 "providers": {

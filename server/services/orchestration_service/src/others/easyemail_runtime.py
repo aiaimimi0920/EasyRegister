@@ -163,6 +163,14 @@ def dispatch_easyemail_step(*, step_type: str, step_input: dict[str, Any]) -> di
             preallocated_session_id=str(step_input.get("preallocated_session_id") or "").strip() or None,
             preallocated_mailbox_ref=str(step_input.get("preallocated_mailbox_ref") or "").strip() or None,
             business_key=requested_business_key,
+            recreate_preallocated_email=is_truthy(
+                step_input.get("recreate_preallocated_email")
+                or step_input.get("recreatePreallocatedEmail")
+            ),
+            recover_preallocated_email=is_truthy(
+                step_input.get("recover_preallocated_email")
+                or step_input.get("recoverPreallocatedEmail")
+            ),
             avoid_emails=step_input.get("avoid_emails") or step_input.get("avoidEmails"),
             avoid_domains=step_input.get("avoid_domains") or step_input.get("avoidDomains"),
             avoid_providers=step_input.get("avoid_providers") or step_input.get("avoidProviders"),

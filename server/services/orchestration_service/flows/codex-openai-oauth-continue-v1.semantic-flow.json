@@ -5,7 +5,7 @@
     "name": "Codex OpenAI OAuth Continue Flow",
     "platform": "codex",
     "kind": "semantic-flow",
-    "description": "Continue the later registration stages from a pooled openai_oauth artifact. A fresh mailbox is acquired because the original mailbox may have expired.",
+    "description": "Continue the later registration stages from a pooled openai_oauth artifact. The original account mailbox is recovered by artifact email so ChatGPT login OTP is read from the right inbox.",
     "resourcePolicies": [],
     "metadata": {
       "mailbox": {
@@ -27,18 +27,16 @@
     },
     "steps": [
       {
-        "id": "acquire-mailbox",
-        "type": "acquire_mailbox",
+        "id": "acquire-openai-oauth-artifact",
+        "type": "acquire_openai_oauth_artifact",
         "input": {
-          "preallocated_email": "{{task.preallocated_email}}",
-          "preallocated_session_id": "{{task.preallocated_session_id}}",
-          "preallocated_mailbox_ref": "{{task.preallocated_mailbox_ref}}",
-          "business_key": "{{task.mailbox_business_key}}"
+          "output_dir": "{{task.output_dir}}",
+          "pool_dir": "{{task.openai_oauth_pool_dir}}"
         },
-        "saveAs": "mailbox",
+        "saveAs": "openai_oauth_artifact",
         "metadata": {
-          "owner": "easyemail",
-          "stage": "mailbox-acquire"
+          "owner": "orchestration",
+          "stage": "artifact-acquire"
         }
       },
       {
@@ -70,16 +68,19 @@
         }
       },
       {
-        "id": "acquire-openai-oauth-artifact",
-        "type": "acquire_openai_oauth_artifact",
+        "id": "acquire-mailbox",
+        "type": "acquire_mailbox",
         "input": {
-          "output_dir": "{{task.output_dir}}",
-          "pool_dir": "{{task.openai_oauth_pool_dir}}"
+          "preallocated_email": "{{openai_oauth_artifact.email}}",
+          "preallocated_session_id": "{{openai_oauth_artifact.mailboxSessionId}}",
+          "preallocated_mailbox_ref": "{{openai_oauth_artifact.mailboxRef}}",
+          "recover_preallocated_email": true,
+          "business_key": "{{task.mailbox_business_key}}"
         },
-        "saveAs": "openai_oauth_artifact",
+        "saveAs": "mailbox",
         "metadata": {
-          "owner": "orchestration",
-          "stage": "artifact-acquire"
+          "owner": "easyemail",
+          "stage": "mailbox-acquire"
         }
       },
       {

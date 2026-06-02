@@ -250,6 +250,18 @@ def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]
             "claims_dir": str(claims_dir),
             "original_name": candidate.name,
             "email": email,
+            "mailboxRef": str(payload.get("mailboxRef") or payload.get("mailbox_ref") or "").strip(),
+            "mailboxSessionId": str(
+                payload.get("mailboxSessionId")
+                or payload.get("mailbox_session_id")
+                or ""
+            ).strip(),
+            "mailboxProvider": str(
+                payload.get("mailboxProvider")
+                or payload.get("mailbox_provider")
+                or payload.get("providerTypeKey")
+                or ""
+            ).strip(),
             "conversion_claim": conversion_claim or {},
         }
 
