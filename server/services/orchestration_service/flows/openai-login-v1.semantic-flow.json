@@ -1,0 +1,35 @@
+{
+  "definition": {
+    "id": "openai-login-v1",
+    "platform": "openai-login",
+    "metadata": {
+      "loginEntryUrl": "https://auth.openai.com/log-in-or-create-account"
+    },
+    "steps": [
+      {
+        "id": "claim-input-file",
+        "type": "acquire_configured_input_file",
+        "metadata": {
+          "owner": "orchestration"
+        },
+        "input": {
+          "input_source_dir": "{{task.input_source_dir}}",
+          "input_claims_dir": "{{task.input_claims_dir}}"
+        },
+        "saveAs": "input_artifact"
+      },
+      {
+        "id": "release-mailbox-sessions-by-email",
+        "type": "release_mailbox_sessions_by_email",
+        "metadata": {
+          "owner": "easyemail"
+        },
+        "input": {
+          "email_address": "{{input_artifact.email}}",
+          "reason": "openai_login_recover"
+        },
+        "saveAs": "mailbox_recovery"
+      }
+    ]
+  }
+}

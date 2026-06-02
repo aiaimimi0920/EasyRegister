@@ -19,7 +19,18 @@ env/
 
 # Local outputs and temporary state
 tmp/
+.tmp/
+.bootstrap/
+.playwright-mcp/
+.release-artifacts/
+.deploy-compose.env
+.deploy-compose.*.generated.yaml
+repo/
 *.log
+*-log*.txt
+*.zip
+tmp-*.json
+tmp-*.txt
 runtime/
 openai/
 codex/
