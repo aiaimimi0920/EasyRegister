@@ -242,6 +242,79 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms24", session.provider_key)
         self.assertEqual("sms_125", session.session_id)
 
+    def test_easy_sms_client_catalog_fallback_when_productive_selection_candidates_fail(self) -> None:
+        post_payloads: list[dict[str, object]] = []
+
+        def _get(path: str) -> dict[str, object]:
+            if path.startswith("/sms/query/providers/selection-plan?"):
+                return {
+                    "candidates": [
+                        {"providerKey": "smstome", "available": True, "healthState": "healthy"},
+                        {"providerKey": "receive_smss", "available": True, "healthState": "healthy"},
+                        {"providerKey": "sms24", "available": True, "healthState": "empty"},
+                        {"providerKey": "receive_sms_free_cc", "available": True, "healthState": "empty"},
+                    ]
+                }
+            if path.startswith("/sms/query/providers?"):
+                return {
+                    "providers": [
+                        {"key": "smstome"},
+                        {"key": "receive_smss"},
+                        {"key": "sms24"},
+                        {"key": "receive_sms_free_cc"},
+                    ]
+                }
+            return {}
+
+        def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            post_payloads.append(dict(payload))
+            provider_key = str(payload.get("providerKey") or "")
+            if provider_key == "smstome":
+                raise TimeoutError("timed out")
+            if provider_key == "receive_smss":
+                raise RuntimeError(
+                    'sms service POST /sms/sessions/open failed: HTTP 503 '
+                    '[code=Provider "receive_smss" is currently unavailable: '
+                    'No eligible public numbers were available for a synthetic activation session.]'
+                )
+            return {
+                "session": {
+                    "id": "sms_126",
+                    "phoneNumber": "+15557654323",
+                    "providerKey": provider_key,
+                }
+            }
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            side_effect=_get,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=_post,
+        ):
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=(),
+                selection_mode="balanced",
+            )
+
+        self.assertEqual(
+            ["smstome", "receive_smss", "sms24"],
+            [payload["providerKey"] for payload in post_payloads],
+        )
+        self.assertEqual("sms24", session.provider_key)
+        self.assertEqual("sms_126", session.session_id)
+
     def test_easy_sms_client_filters_empty_selection_plan_providers(self) -> None:
         with mock.patch.object(
             easy_sms_client,

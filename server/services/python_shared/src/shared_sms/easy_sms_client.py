@@ -515,6 +515,11 @@ def open_sms_session(
                 sorted(set(candidate_provider_keys) | selection_plan_seen_provider_keys)
             ),
         )
+        if not fallback_provider_keys:
+            fallback_provider_keys = _query_provider_catalog_candidates(
+                provider_blacklist=tuple(sorted(set(provider_blacklist) | set(candidate_provider_keys))),
+                allow_paid=allow_paid,
+            )
         if fallback_provider_keys:
             selected_session = _try_provider_candidates(fallback_provider_keys)
             if selected_session is not None:
