@@ -342,6 +342,58 @@ def _state_mailbox_provider_keys(state_payload: dict[str, Any], *, business_key:
     return tuple(providers)
 
 
+def _state_mailbox_domain_keys(state_payload: dict[str, Any], *, business_key: str | None = None) -> tuple[str, ...]:
+    domains: list[str] = []
+
+    def _append_domain_keys(value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+        for key in value:
+            normalized = str(key or "").strip().lower()
+            if normalized and normalized not in domains:
+                domains.append(normalized)
+
+    resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
+    businesses = state_payload.get("businesses")
+    if isinstance(businesses, dict):
+        business_payload = businesses.get(resolved_business_key)
+        if isinstance(business_payload, dict):
+            _append_domain_keys(business_payload.get("domains"))
+    _append_domain_keys(state_payload.get("domains"))
+    return tuple(domains)
+
+
+def _resolve_mailbox_excluded_domains(
+    *,
+    business_key: str | None = None,
+    avoid_domains: Any = None,
+    include_dynamic: bool = True,
+    except_domains: Any = None,
+) -> tuple[str, ...]:
+    state_payload = _load_mailbox_domain_state()
+    excluded: list[str] = []
+    exceptions = set(_normalize_mailbox_avoid_values(except_domains, kind="domain"))
+
+    def _append(domain: str) -> None:
+        normalized = str(domain or "").strip().lower()
+        if normalized and normalized not in exceptions and normalized not in excluded:
+            excluded.append(normalized)
+
+    for domain in _normalize_mailbox_avoid_values(avoid_domains, kind="domain"):
+        _append(domain)
+    for domain in _resolve_mailbox_explicit_blacklist_domains(business_key=business_key):
+        _append(domain)
+    if include_dynamic:
+        for domain in _state_mailbox_domain_keys(state_payload, business_key=business_key):
+            if _mailbox_domain_is_business_blacklisted(domain, state_payload, business_key=business_key):
+                _append(domain)
+    return tuple(excluded)
+
+
+def _resolve_mailbox_excluded_email_addresses(*, avoid_emails: Any = None) -> tuple[str, ...]:
+    return _normalize_mailbox_avoid_values(avoid_emails, kind="email")
+
+
 def _resolve_mailbox_auto_excluded_provider_type_keys(
     *,
     business_key: str | None = None,
@@ -633,12 +685,22 @@ def _resolve_mailbox_strategy_kwargs() -> dict[str, Any]:
     return kwargs
 
 
-def _resolve_planned_mailbox_provider(*, ttl_seconds: int, strategy_kwargs: dict[str, Any]) -> str:
+def _resolve_planned_mailbox_provider(
+    *,
+    ttl_seconds: int,
+    strategy_kwargs: dict[str, Any],
+    excluded_provider_type_keys: tuple[str, ...] = (),
+    excluded_domains: tuple[str, ...] = (),
+    excluded_email_addresses: tuple[str, ...] = (),
+) -> str:
     try:
         plan = plan_mailbox(
             provider="auto",
             default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
             ttl_seconds=ttl_seconds,
+            excluded_provider_type_keys=excluded_provider_type_keys,
+            excluded_domains=excluded_domains,
+            excluded_email_addresses=excluded_email_addresses,
             **strategy_kwargs,
         )
     except Exception as exc:
@@ -693,6 +755,9 @@ def resolve_mailbox(
                     requested_email_address=normalized_preallocated_email,
                     requested_local_part=requested_local_part,
                     mailcreate_domain=requested_domain,
+                    excluded_email_addresses=_resolve_mailbox_excluded_email_addresses(
+                        avoid_emails=avoid_emails,
+                    ),
                     **_resolve_mailbox_strategy_kwargs(),
                 ),
                 business_key=resolved_business_key,
@@ -774,9 +839,24 @@ def resolve_mailbox(
         )
     ttl_seconds = mailbox_config.ttl_seconds
     strategy_kwargs = _resolve_mailbox_strategy_kwargs()
+    plan_excluded_provider_type_keys = _resolve_mailbox_auto_excluded_provider_type_keys(
+        business_key=resolved_business_key,
+        avoid_providers=avoid_providers,
+        exclude_moemail=False,
+    )
+    plan_excluded_domains = _resolve_mailbox_excluded_domains(
+        business_key=resolved_business_key,
+        avoid_domains=avoid_domains,
+    )
+    plan_excluded_email_addresses = _resolve_mailbox_excluded_email_addresses(
+        avoid_emails=avoid_emails,
+    )
     planned_provider = _resolve_planned_mailbox_provider(
         ttl_seconds=ttl_seconds,
         strategy_kwargs=strategy_kwargs,
+        excluded_provider_type_keys=plan_excluded_provider_type_keys,
+        excluded_domains=plan_excluded_domains,
+        excluded_email_addresses=plan_excluded_email_addresses,
     )
     try:
         if planned_provider:
@@ -820,6 +900,14 @@ def resolve_mailbox(
                     prefer_raw_self_hosted_ref=True,
                     ttl_seconds=ttl_seconds,
                     mailcreate_domain=selected_domain,
+                    excluded_domains=_resolve_mailbox_excluded_domains(
+                        business_key=resolved_business_key,
+                        avoid_domains=avoid_domains,
+                        except_domains=[selected_domain],
+                    ),
+                    excluded_email_addresses=_resolve_mailbox_excluded_email_addresses(
+                        avoid_emails=avoid_emails,
+                    ),
                     **strategy_kwargs,
                 ),
                 business_key=resolved_business_key,
@@ -847,6 +935,13 @@ def resolve_mailbox(
                     business_key=resolved_business_key,
                     avoid_providers=avoid_providers,
                     exclude_moemail=domain_selection_reason.endswith("dynamic_blacklist_exhausted"),
+                ),
+                excluded_domains=_resolve_mailbox_excluded_domains(
+                    business_key=resolved_business_key,
+                    avoid_domains=avoid_domains,
+                ),
+                excluded_email_addresses=_resolve_mailbox_excluded_email_addresses(
+                    avoid_emails=avoid_emails,
                 ),
                 **strategy_kwargs,
             ),

@@ -445,6 +445,35 @@ def _normalize_provider_type_key_list(value: list[str] | tuple[str, ...] | set[s
     return normalized
 
 
+def _normalize_domain_list(value: list[str] | tuple[str, ...] | set[str] | None) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        domain = str(item or "").strip().lower()
+        if not domain or "@" in domain:
+            continue
+        if domain not in seen:
+            normalized.append(domain)
+            seen.add(domain)
+    return normalized
+
+
+def _normalize_email_address_list(value: list[str] | tuple[str, ...] | set[str] | None) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        email = _normalize_requested_email_address(str(item or ""))
+        if not email or email in seen:
+            continue
+        normalized.append(email)
+        seen.add(email)
+    return normalized
+
+
 def _resolve_mailbox_strategy_payload(
     *,
     provider_strategy_mode_id: str | None = None,
@@ -562,6 +591,8 @@ def _build_mailbox_request_payload(
     provider_strategy_mode_id: Optional[str] = None,
     provider_group_selections: list[str] | tuple[str, ...] | None = None,
     excluded_provider_type_keys: list[str] | tuple[str, ...] | set[str] | None = None,
+    excluded_domains: list[str] | tuple[str, ...] | set[str] | None = None,
+    excluded_email_addresses: list[str] | tuple[str, ...] | set[str] | None = None,
     mailcreate_base_url: str = "",
     mailcreate_custom_auth: str = "",
     mailcreate_domain: str = "",
@@ -658,6 +689,12 @@ def _build_mailbox_request_payload(
     excluded_provider_keys = _normalize_provider_type_key_list(excluded_provider_type_keys)
     if excluded_provider_keys:
         payload["excludedProviderTypeKeys"] = excluded_provider_keys
+    normalized_excluded_domains = _normalize_domain_list(excluded_domains)
+    if normalized_excluded_domains:
+        payload["excludedDomains"] = normalized_excluded_domains
+    normalized_excluded_emails = _normalize_email_address_list(excluded_email_addresses)
+    if normalized_excluded_emails:
+        payload["excludedEmailAddresses"] = normalized_excluded_emails
     if normalized_requested_email:
         payload["metadata"]["requestedEmailAddress"] = normalized_requested_email
     if normalized_requested_local_part:
@@ -677,6 +714,8 @@ def plan_mailbox(
     provider_strategy_mode_id: Optional[str] = None,
     provider_group_selections: list[str] | tuple[str, ...] | None = None,
     excluded_provider_type_keys: list[str] | tuple[str, ...] | set[str] | None = None,
+    excluded_domains: list[str] | tuple[str, ...] | set[str] | None = None,
+    excluded_email_addresses: list[str] | tuple[str, ...] | set[str] | None = None,
     mailcreate_base_url: str = "",
     mailcreate_custom_auth: str = "",
     mailcreate_domain: str = "",
@@ -699,6 +738,8 @@ def plan_mailbox(
         provider_strategy_mode_id=provider_strategy_mode_id,
         provider_group_selections=provider_group_selections,
         excluded_provider_type_keys=excluded_provider_type_keys,
+        excluded_domains=excluded_domains,
+        excluded_email_addresses=excluded_email_addresses,
         mailcreate_base_url=mailcreate_base_url,
         mailcreate_custom_auth=mailcreate_custom_auth,
         mailcreate_domain=mailcreate_domain,
@@ -727,6 +768,8 @@ def create_mailbox(
     provider_strategy_mode_id: Optional[str] = None,
     provider_group_selections: list[str] | tuple[str, ...] | None = None,
     excluded_provider_type_keys: list[str] | tuple[str, ...] | set[str] | None = None,
+    excluded_domains: list[str] | tuple[str, ...] | set[str] | None = None,
+    excluded_email_addresses: list[str] | tuple[str, ...] | set[str] | None = None,
     mailcreate_base_url: str = "",
     mailcreate_custom_auth: str = "",
     mailcreate_domain: str = "",
@@ -750,6 +793,8 @@ def create_mailbox(
         provider_strategy_mode_id=provider_strategy_mode_id,
         provider_group_selections=provider_group_selections,
         excluded_provider_type_keys=excluded_provider_type_keys,
+        excluded_domains=excluded_domains,
+        excluded_email_addresses=excluded_email_addresses,
         mailcreate_base_url=mailcreate_base_url,
         mailcreate_custom_auth=mailcreate_custom_auth,
         mailcreate_domain=mailcreate_domain,
@@ -849,32 +894,42 @@ def wait_openai_code(
     )
     snapshot_probe_every = max(1, int(max(1, poll_interval) * 3))
     last_snapshot_probe_at = 0.0
+    last_poll_error: Exception | None = None
     while time.time() < deadline:
-        response = _get_json(f"/mail/mailboxes/{effective_session_id}/code")
-        code_obj = response.get("code")
-        if isinstance(code_obj, dict):
-            code = _select_openai_verification_code(code_obj)
-            code_marker = _mail_dispatch_code_marker(code_obj)
-            if code and (code_floor <= 0 or code_marker > code_floor):
-                print(
-                    "[mailbox] wait_openai_code received "
-                    f"session_id={effective_session_id} code_len={len(code)} code_marker={code_marker}"
-                )
-                return code
-        if time.time() - last_snapshot_probe_at >= snapshot_probe_every:
+        code_endpoint_failed = False
+        try:
+            response = _get_json(f"/mail/mailboxes/{effective_session_id}/code")
+            code_obj = response.get("code")
+            if isinstance(code_obj, dict):
+                code = _select_openai_verification_code(code_obj)
+                code_marker = _mail_dispatch_code_marker(code_obj)
+                if code and (code_floor <= 0 or code_marker > code_floor):
+                    print(
+                        "[mailbox] wait_openai_code received "
+                        f"session_id={effective_session_id} code_len={len(code)} code_marker={code_marker}"
+                    )
+                    return code
+        except Exception as exc:
+            last_poll_error = exc
+            code_endpoint_failed = True
+        if code_endpoint_failed or time.time() - last_snapshot_probe_at >= snapshot_probe_every:
             last_snapshot_probe_at = time.time()
-            snapshot_code, snapshot_marker = _snapshot_session_openai_code(
-                session_id=effective_session_id,
-                min_mail_id=code_floor,
-            )
-            if snapshot_code:
-                print(
-                    "[mailbox] wait_openai_code snapshot_fallback "
-                    f"session_id={effective_session_id} code_len={len(snapshot_code)} code_marker={snapshot_marker}"
+            try:
+                snapshot_code, snapshot_marker = _snapshot_session_openai_code(
+                    session_id=effective_session_id,
+                    min_mail_id=code_floor,
                 )
-                return snapshot_code
+                if snapshot_code:
+                    print(
+                        "[mailbox] wait_openai_code snapshot_fallback "
+                        f"session_id={effective_session_id} code_len={len(snapshot_code)} code_marker={snapshot_marker}"
+                    )
+                    return snapshot_code
+            except Exception as exc:
+                last_poll_error = exc
         time.sleep(poll_interval)
-    raise RuntimeError("timeout waiting for 6-digit code")
+    detail = f"; last_error={type(last_poll_error).__name__}: {last_poll_error}" if last_poll_error else ""
+    raise RuntimeError(f"timeout waiting for 6-digit code{detail}")
 
 
 def release_mailbox(

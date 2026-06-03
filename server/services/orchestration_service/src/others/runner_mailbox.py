@@ -8,8 +8,10 @@ from typing import Any
 from easyemail_flow import dispatch_easyemail_step
 from errors import ErrorCodes, result_error_matches, result_error_message
 from others.common import ensure_directory
+from others.common_runtime import validate_openai_oauth_seed_payload
 from others.config import CleanupRuntimeConfig, MailboxRuntimeConfig, env_int
 from others.file_lock import release_lock, try_acquire_lock
+from others.result_artifacts import FREE_OPENAI_OAUTH_SOURCE_CANDIDATES, all_output_texts, output_dict
 
 
 MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
@@ -494,6 +496,141 @@ def extract_mailbox_business_outcome_context(*, result_payload_value: dict[str, 
     }
 
 
+def _mailbox_artifact_matches_context(*, artifact_payload: dict[str, Any], context: dict[str, str]) -> bool:
+    if not isinstance(artifact_payload, dict):
+        return False
+    context_email = str(context.get("email") or "").strip().lower()
+    context_domain = str(context.get("domain") or "").strip().lower()
+    context_ref = str(context.get("mailbox_ref") or "").strip()
+    artifact_email = str(artifact_payload.get("email") or "").strip().lower()
+    artifact_ref = str(artifact_payload.get("mailboxRef") or artifact_payload.get("mailbox_ref") or "").strip()
+    artifact_session_id = str(
+        artifact_payload.get("mailboxSessionId")
+        or artifact_payload.get("mailbox_session_id")
+        or ""
+    ).strip()
+    if context_email:
+        if artifact_email != context_email:
+            return False
+    elif context_domain:
+        if "@" not in artifact_email or artifact_email.rsplit("@", 1)[-1].strip().lower() != context_domain:
+            return False
+    else:
+        return False
+    if context_ref and artifact_ref and context_ref != artifact_ref:
+        return False
+    if context_ref and artifact_session_id and ":" in context_ref:
+        context_session_id = context_ref.split(":", 1)[1].strip()
+        if context_session_id and context_session_id != artifact_session_id:
+            return False
+    return True
+
+
+def _mailbox_quality_success_from_existing_artifacts(
+    *,
+    result_payload_value: dict[str, Any],
+    context: dict[str, str],
+) -> str:
+    for path_text in all_output_texts(result_payload_value, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES):
+        try:
+            path = Path(path_text).resolve()
+        except Exception:
+            continue
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        valid, _ = validate_openai_oauth_seed_payload(payload, enforce_max_age=False)
+        if valid and _mailbox_artifact_matches_context(artifact_payload=payload, context=context):
+            return "openai_oauth_artifact"
+    return ""
+
+
+def _output_status_is_completed(output: dict[str, Any]) -> bool:
+    if not isinstance(output, dict):
+        return False
+    status = str(output.get("status") or "").strip().lower()
+    if status:
+        return status == "completed"
+    return bool(output.get("ok"))
+
+
+def _mailbox_quality_success_from_completed_outputs(
+    *,
+    result_payload_value: dict[str, Any],
+    context: dict[str, str],
+) -> str:
+    create_output = output_dict(result_payload_value, "create-openai-account")
+    if not create_output:
+        create_output = output_dict(result_payload_value, "create_openai_account")
+    platform_output = output_dict(result_payload_value, "initialize-platform-organization")
+    login_output = output_dict(result_payload_value, "initialize-chatgpt-login-session")
+    if not create_output or not platform_output or not login_output:
+        return ""
+    create_email = str(create_output.get("email") or context.get("email") or "").strip().lower()
+    if create_email and context.get("email") and create_email != str(context.get("email") or "").strip().lower():
+        return ""
+    mailbox_ref = str(
+        create_output.get("mailbox_ref")
+        or create_output.get("mailboxRef")
+        or login_output.get("mailboxRef")
+        or context.get("mailbox_ref")
+        or ""
+    ).strip()
+    mailbox_session_id = str(
+        create_output.get("mailbox_session_id")
+        or create_output.get("mailboxSessionId")
+        or login_output.get("mailboxSessionId")
+        or ""
+    ).strip()
+    if not mailbox_ref:
+        return ""
+    if not mailbox_session_id and ":" in mailbox_ref:
+        mailbox_session_id = mailbox_ref.split(":", 1)[1].strip()
+    if not mailbox_session_id:
+        return ""
+    if not _output_status_is_completed(platform_output) or not _output_status_is_completed(login_output):
+        return ""
+    steps = result_payload_value.get("steps")
+    if isinstance(steps, dict):
+        create_step_status = str(steps.get("create-openai-account") or steps.get("create_openai_account") or "").strip().lower()
+        if create_step_status and create_step_status != "ok":
+            return ""
+    return "openai_oauth_output"
+
+
+def mailbox_quality_success_reason(
+    *,
+    result_payload_value: dict[str, Any],
+    context: dict[str, str],
+) -> str:
+    """Return a reason when a failed run still proves mailbox quality.
+
+    A valid OpenAI OAuth seed / legacy small-success artifact means the mailbox
+    already passed registration and email OTP. Later phone/SMS/OAuth failures
+    must not poison mailbox-domain statistics.
+    """
+
+    if bool(result_payload_value.get("ok")):
+        return ""
+    if not context.get("domain"):
+        return ""
+    artifact_reason = _mailbox_quality_success_from_existing_artifacts(
+        result_payload_value=result_payload_value,
+        context=context,
+    )
+    if artifact_reason:
+        return artifact_reason
+    return _mailbox_quality_success_from_completed_outputs(
+        result_payload_value=result_payload_value,
+        context=context,
+    )
+
+
 def _mailbox_attempt_outcome_payload(attempt: dict[str, Any]) -> dict[str, Any]:
     email = str(attempt.get("email") or "").strip().lower()
     provider = str(attempt.get("provider") or "").strip().lower()
@@ -590,7 +727,11 @@ def record_business_mailbox_domain_outcome(
     email = str(context.get("email") or "").strip().lower()
     if not domain:
         return None
-    ok = bool(result_payload_value.get("ok"))
+    quality_success_reason = mailbox_quality_success_reason(
+        result_payload_value=result_payload_value,
+        context=context,
+    )
+    ok = bool(result_payload_value.get("ok")) or bool(quality_success_reason)
     ignore_reason = "" if ok else mailbox_failure_ignore_reason(result_payload_value=result_payload_value)
     if ignore_reason:
         config = _mailbox_runtime_config(shared_root=shared_root)
@@ -773,6 +914,8 @@ def record_business_mailbox_domain_outcome(
         "consecutiveFailures": consecutive_failures,
         "failureRate": round(failure_rate, 3),
         "failureReason": failure_reason,
+        "lastOutcome": "success" if ok else "failure",
+        "qualitySuccessReason": quality_success_reason,
         "blacklisted": blacklisted,
         "blacklistReason": stored_blacklist_reason,
         "providerAttempts": provider_attempts,

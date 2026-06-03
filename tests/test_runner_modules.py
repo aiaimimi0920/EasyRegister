@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from datetime import datetime, timezone
 import os
 import sys
 import tempfile
@@ -1632,6 +1633,119 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("", provider_stats["blacklistReason"])
             self.assertEqual({}, provider_stats["failureReasons"])
             self.assertEqual(0, provider_stats["consecutiveFailures"])
+
+    def test_record_business_mailbox_domain_outcome_counts_small_success_artifact_as_mailbox_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            state_path = shared_root / "others" / "register-mailbox-domain-state.json"
+            artifact_path = Path(tmp_dir) / "small-success.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "domains": {
+                                    "zhooo.ggff.net": {
+                                        "provider": "moemail",
+                                        "attempts": 58,
+                                        "successes": 0,
+                                        "failures": 58,
+                                        "consecutiveFailures": 58,
+                                        "failureReasons": {"email_otp_timeout": 58},
+                                        "blacklisted": True,
+                                        "blacklistReason": "failure_rate_threshold",
+                                    }
+                                },
+                                "providers": {
+                                    "moemail": {
+                                        "attempts": 58,
+                                        "successes": 0,
+                                        "failures": 58,
+                                        "consecutiveFailures": 58,
+                                        "failureReasons": {"email_otp_timeout": 58},
+                                        "blacklisted": True,
+                                        "blacklistReason": "provider_failure_rate_threshold",
+                                    }
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            artifact_path.write_text(
+                json.dumps(
+                    {
+                        "outcome": "small_success",
+                        "email": "user@zhooo.ggff.net",
+                        "mailboxRef": "moemail:session-small",
+                        "mailboxSessionId": "session-small",
+                        "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"}
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload = {
+                "ok": False,
+                "errorStep": "obtain-codex-oauth",
+                "error": "phone_verification_submitted_small_success phoneVerificationFailureStage=wait_sms_code",
+                "steps": {"acquire-mailbox": "ok", "create-openai-account": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@zhooo.ggff.net",
+                        "provider": "moemail",
+                        "mailbox_ref": "moemail:session-small",
+                        "business_key": "openai",
+                    },
+                    "create-openai-account": {
+                        "email": "user@zhooo.ggff.net",
+                        "storage_path": str(artifact_path),
+                    },
+                    "obtain-codex-oauth": {
+                        "status": "phone_verification_submitted_small_success",
+                        "phoneVerificationFailureStage": "wait_sms_code",
+                    },
+                },
+                "stepErrors": {
+                    "obtain-codex-oauth": {
+                        "message": "phone_verification_submitted_small_success wait_sms_code",
+                    }
+                },
+            }
+
+            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                shared_root=shared_root,
+                result_payload_value=payload,
+                instance_role="main",
+            )
+
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertNotIn("ignored", outcome)
+            self.assertEqual("success", outcome["lastOutcome"])
+            self.assertEqual("openai_oauth_artifact", outcome["qualitySuccessReason"])
+            self.assertFalse(outcome["blacklisted"])
+            self.assertEqual("", outcome["blacklistReason"])
+            self.assertFalse(outcome["providerBlacklisted"])
+            self.assertEqual("", outcome["providerBlacklistReason"])
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            domain_stats = state_payload["businesses"]["openai"]["domains"]["zhooo.ggff.net"]
+            provider_stats = state_payload["businesses"]["openai"]["providers"]["moemail"]
+            self.assertEqual(59, domain_stats["attempts"])
+            self.assertEqual(1, domain_stats["successes"])
+            self.assertEqual(58, domain_stats["failures"])
+            self.assertEqual("success", domain_stats["lastOutcome"])
+            self.assertEqual({}, domain_stats["failureReasons"])
+            self.assertFalse(domain_stats["blacklisted"])
+            self.assertEqual(0, provider_stats["consecutiveFailures"])
+            self.assertFalse(provider_stats["blacklisted"])
 
     def test_record_business_mailbox_domain_outcome_records_retry_attempt_failure_before_final_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
