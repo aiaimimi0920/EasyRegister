@@ -10,7 +10,11 @@ RUNTIME_ENV_B64 = "EASYREGISTER_RUNTIME_ENV_B64"
 
 
 def _parse_env_file(path: Path) -> tuple[list[str], dict[str, str]]:
-    lines = path.read_text(encoding="utf-8").splitlines()
+    return _parse_env_text(path.read_text(encoding="utf-8"))
+
+
+def _parse_env_text(text: str) -> tuple[list[str], dict[str, str]]:
+    lines = text.splitlines()
     values: dict[str, str] = {}
     for line in lines:
         stripped = line.strip()
@@ -29,7 +33,10 @@ def _load_secret_env(os_env: dict[str, str]) -> dict[str, str]:
         runtime_key = key[len(PREFIX) :].strip()
         if not runtime_key:
             continue
-        overrides[runtime_key] = str(value or "")
+        value_text = str(value or "")
+        if value_text == "":
+            continue
+        overrides[runtime_key] = value_text
     return overrides
 
 
@@ -68,8 +75,12 @@ def main() -> int:
     runtime_env_b64 = __import__("os").environ.get(RUNTIME_ENV_B64, "").strip()
     if runtime_env_b64:
         decoded = base64.b64decode(runtime_env_b64).decode("utf-8")
-        output_path.write_text(decoded, encoding="utf-8")
+        base_lines, base_values = _parse_env_text(decoded)
+        overrides = _load_secret_env(__import__("os").environ)
+        merged = {**base_values, **overrides}
+        output_path.write_text(_render_lines(base_lines, merged), encoding="utf-8")
         print(f"materialized_from={RUNTIME_ENV_B64}")
+        print(f"override_count={len(overrides)}")
         print(f"output_path={output_path}")
         return 0
 
