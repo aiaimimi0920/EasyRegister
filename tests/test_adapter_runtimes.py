@@ -194,6 +194,54 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms24", session.provider_key)
         self.assertEqual("sms_124", session.session_id)
 
+    def test_easy_sms_client_retries_next_provider_when_selected_candidate_times_out(self) -> None:
+        post_payloads: list[dict[str, object]] = []
+
+        def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            post_payloads.append(dict(payload))
+            provider_key = str(payload.get("providerKey") or "")
+            if provider_key == "smstome":
+                raise TimeoutError("timed out")
+            return {
+                "session": {
+                    "id": "sms_125",
+                    "phoneNumber": "+15557654322",
+                    "providerKey": provider_key,
+                }
+            }
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            return_value={
+                "candidates": [
+                    {"providerKey": "smstome", "available": True, "healthState": "healthy"},
+                    {"providerKey": "sms24", "available": True, "healthState": "healthy"},
+                ]
+            },
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=_post,
+        ):
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=(),
+                selection_mode="balanced",
+            )
+
+        self.assertEqual(["smstome", "sms24"], [payload["providerKey"] for payload in post_payloads])
+        self.assertEqual("sms24", session.provider_key)
+        self.assertEqual("sms_125", session.session_id)
+
     def test_easy_sms_client_filters_empty_selection_plan_providers(self) -> None:
         with mock.patch.object(
             easy_sms_client,

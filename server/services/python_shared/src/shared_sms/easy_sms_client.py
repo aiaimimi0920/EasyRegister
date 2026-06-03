@@ -258,6 +258,8 @@ def _normalize_provider_country_blacklist(items: tuple[str, ...]) -> set[tuple[s
 
 
 def _is_retryable_provider_open_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout, urllib.error.URLError)):
+        return True
     normalized = str(exc or "").strip().lower()
     return any(
         token in normalized
@@ -267,6 +269,8 @@ def _is_retryable_provider_open_error(exc: Exception) -> bool:
             "no available public numbers",
             "empty directory response",
             "provider temporarily unavailable",
+            "timed out",
+            "timeout",
         )
     )
 
