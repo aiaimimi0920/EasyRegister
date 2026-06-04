@@ -1871,6 +1871,85 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms_2", session["sessionId"])
         self.assertEqual(("generic_provider", "static_blocked"), captured_blacklists[0])
 
+    def test_open_phone_session_for_business_relaxes_repeated_phone_scoped_provider_block_after_candidate_exhaustion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "phones": {
+                            "+15550000001": {
+                                "blockedUntilTs": 9999999999,
+                                "blockedAt": "2026-01-01T00:00:00Z",
+                                "providerKey": "smstome",
+                                "reason": "sms_code_timeout",
+                            },
+                            "+15550000002": {
+                                "blockedUntilTs": 9999999999,
+                                "blockedAt": "2026-01-01T00:00:10Z",
+                                "providerKey": "smstome",
+                                "reason": "phone_number_in_use",
+                            },
+                            "+15550000003": {
+                                "blockedUntilTs": 9999999999,
+                                "blockedAt": "2026-01-01T00:00:20Z",
+                                "providerKey": "smstome",
+                                "reason": "rate_limit_exceeded",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            captured_blacklists: list[tuple[str, ...]] = []
+            captured_phone_blacklists: list[tuple[str, ...]] = []
+
+            def _open_sms_session(**kwargs):
+                captured_blacklists.append(tuple(kwargs["provider_blacklist"]))
+                captured_phone_blacklists.append(tuple(kwargs["phone_blacklist"]))
+                if len(captured_blacklists) == 1:
+                    raise RuntimeError("sms_no_productive_selection_plan_candidates")
+                return easy_sms_client.SmsSession(
+                    session_id="sms_2",
+                    phone_number="+15557654321",
+                    provider_key="smstome",
+                )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_SESSION_LOCAL_RETRY_ATTEMPTS": "2",
+                    "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD": "3",
+                    "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS": "9999999999",
+                    "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"enabled":true,"providerBlacklist":["hero_sms"],'
+                        '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
+                        '"countryCodes":[],"selectionMode":"balanced"}}'
+                    ),
+                },
+                clear=False,
+            ), mock.patch.object(
+                runtime_sms,
+                "open_sms_session",
+                side_effect=_open_sms_session,
+            ), mock.patch.object(runtime_sms, "json_log") as json_log:
+                session = runtime_sms.open_phone_session_for_business(business_key="openai")
+
+        self.assertEqual("sms_2", session["sessionId"])
+        self.assertEqual(("hero_sms", "smstome"), captured_blacklists[0])
+        self.assertEqual(("hero_sms",), captured_blacklists[1])
+        self.assertEqual(captured_phone_blacklists[0], captured_phone_blacklists[1])
+        json_log.assert_any_call(
+            {
+                "event": "register_sms_dynamic_provider_blacklist_relaxed",
+                "blockedProviderCount": 1,
+                "hardProviderBlockCount": 0,
+                "staticProviderBlockCount": 1,
+                "reason": "sms_no_productive_selection_plan_candidates",
+            }
+        )
+
     def test_open_phone_session_for_business_retries_transient_open_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"

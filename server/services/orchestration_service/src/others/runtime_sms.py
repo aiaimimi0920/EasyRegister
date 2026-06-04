@@ -383,15 +383,15 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
         raise RuntimeError("sms_not_enabled_for_business")
     state_payload = _prune_sms_state(payload=_load_sms_state(config=config))
     blocked_phones = {str(key or "").strip() for key in state_payload.get("phones", {}).keys() if str(key or "").strip()}
-    blocked_providers = {
+    hard_blocked_providers = {
         str(key or "").strip().lower() for key in state_payload.get("providers", {}).keys() if str(key or "").strip()
     }
-    blocked_providers.update(
-        _provider_blacklist_from_repeated_phone_scoped_state(
-            payload=state_payload,
-        )
+    dynamic_blocked_providers = set(
+        _provider_blacklist_from_repeated_phone_scoped_state(payload=state_payload)
     )
-    attempt_provider_blacklist = set(policy.explicit_blacklist_providers) | blocked_providers
+    static_blocked_providers = set(policy.explicit_blacklist_providers)
+    attempt_provider_blacklist = static_blocked_providers | hard_blocked_providers | dynamic_blocked_providers
+    relaxed_dynamic_provider_blacklist = False
     provider_country_blacklist = _provider_country_blacklist_from_state(
         payload=state_payload,
         country_codes=tuple(policy.country_codes),
@@ -413,6 +413,22 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
             )
         except Exception as exc:
             last_open_error = exc
+            if (
+                not relaxed_dynamic_provider_blacklist
+                and dynamic_blocked_providers
+                and "sms_no_productive_selection_plan_candidates" in str(exc)
+            ):
+                relaxed_dynamic_provider_blacklist = True
+                attempt_provider_blacklist = static_blocked_providers | hard_blocked_providers
+                json_log(
+                    {
+                        "event": "register_sms_dynamic_provider_blacklist_relaxed",
+                        "blockedProviderCount": len(dynamic_blocked_providers),
+                        "hardProviderBlockCount": len(hard_blocked_providers),
+                        "staticProviderBlockCount": len(static_blocked_providers),
+                        "reason": "sms_no_productive_selection_plan_candidates",
+                    }
+                )
             continue
         normalized_phone = str(session.phone_number or "").strip()
         normalized_provider = str(session.provider_key or "").strip().lower()
