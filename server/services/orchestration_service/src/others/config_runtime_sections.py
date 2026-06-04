@@ -132,6 +132,56 @@ def _default_flow_concurrency_limit_for_role(instance_role: str) -> int:
     return max(0, env_int("REGISTER_DEFAULT_FLOW_CONCURRENCY_LIMIT", 0))
 
 
+def _default_mixed_flow_specs(
+    *,
+    output_root: Path,
+    shared_root: Path,
+    default_team_auth_path: str,
+    default_task_max_attempts: int,
+) -> tuple[RunnerFlowSpec, ...]:
+    specs: list[RunnerFlowSpec] = []
+    for name, flow_path, instance_role, weight in (
+        (
+            "openai-main",
+            "server/services/orchestration_service/flows/codex-openai-account-v1.semantic-flow.json",
+            "main",
+            5.0,
+        ),
+        (
+            "openai-continue",
+            "server/services/orchestration_service/flows/codex-openai-oauth-continue-v1.semantic-flow.json",
+            "continue",
+            2.0,
+        ),
+        (
+            "codex-team-expand",
+            "server/services/orchestration_service/flows/codex-team-expand-v1.semantic-flow.json",
+            "team",
+            1.0,
+        ),
+    ):
+        specs.append(
+            RunnerFlowSpec(
+                name=name,
+                flow_path=flow_path,
+                instance_role=instance_role,
+                weight=weight,
+                team_auth_path=str(default_team_auth_path or "").strip(),
+                task_max_attempts=max(0, int(default_task_max_attempts or 0)),
+                openai_oauth_pool_dir=_default_openai_oauth_pool_dir_for_role(
+                    output_root=output_root,
+                    shared_root=shared_root,
+                    instance_role=instance_role,
+                ),
+                mailbox_business_key="",
+                input_source_dir="",
+                input_claims_dir="",
+                concurrency_limit=_default_flow_concurrency_limit_for_role(instance_role),
+            )
+        )
+    return tuple(specs)
+
+
 def _split_top_level_parts(text: str, delimiter: str) -> list[str]:
     parts: list[str] = []
     current: list[str] = []
@@ -403,8 +453,9 @@ class RunnerMainConfig:
         input_claims_dir = env_text("REGISTER_INPUT_CLAIMS_DIR")
         flow_path = env_text("REGISTER_FLOW_PATH")
         task_max_attempts = env_int("REGISTER_TASK_MAX_ATTEMPTS", 0)
+        raw_flow_specs = env_text("REGISTER_FLOW_SPECS_JSON")
         flow_specs = _parse_runner_flow_specs(
-            env_text("REGISTER_FLOW_SPECS_JSON"),
+            raw_flow_specs,
             output_root=output_root,
             shared_root=shared_root,
             default_instance_role=instance_role,
@@ -413,6 +464,13 @@ class RunnerMainConfig:
             default_input_claims_dir=input_claims_dir,
             default_task_max_attempts=task_max_attempts,
         )
+        if not flow_specs and _normalize_instance_role(instance_role, default=instance_id) == "mixed":
+            flow_specs = _default_mixed_flow_specs(
+                output_root=output_root,
+                shared_root=shared_root,
+                default_team_auth_path=team_auth_path,
+                default_task_max_attempts=task_max_attempts,
+            )
         if not flow_specs:
             flow_specs = (
                 RunnerFlowSpec(

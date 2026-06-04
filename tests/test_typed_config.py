@@ -282,6 +282,45 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual(flow_main.resolve(), Path(config.flow_specs[0].flow_path).resolve())
         self.assertEqual(flow_main.resolve(), Path(config.flow_path).resolve())
 
+    def test_runner_main_config_uses_standard_mixed_flows_when_flow_specs_are_truncated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_INSTANCE_ID": "easy-register",
+                    "REGISTER_INSTANCE_ROLE": "mixed",
+                    "REGISTER_MAIN_CONCURRENCY_LIMIT": "5",
+                    "REGISTER_CONTINUE_CONCURRENCY_LIMIT": "2",
+                    "REGISTER_TEAM_CONCURRENCY_LIMIT": "1",
+                    "REGISTER_FLOW_PATH": "",
+                    "REGISTER_FLOW_SPECS_JSON": "[",
+                },
+                clear=True,
+            ):
+                config = RunnerMainConfig.from_env()
+
+        self.assertEqual(
+            ["openai-main", "openai-continue", "codex-team-expand"],
+            [spec.name for spec in config.flow_specs],
+        )
+        self.assertEqual(
+            ["main", "continue", "team"],
+            [spec.instance_role for spec in config.flow_specs],
+        )
+        self.assertEqual(
+            output_root / "openai" / "failed-once",
+            config.flow_specs[1].openai_oauth_pool_dir,
+        )
+        self.assertEqual(5, config.flow_specs[0].concurrency_limit)
+        self.assertEqual(2, config.flow_specs[1].concurrency_limit)
+        self.assertEqual(1, config.flow_specs[2].concurrency_limit)
+        self.assertEqual(
+            "codex-openai-account-v1.semantic-flow.json",
+            Path(config.flow_specs[0].flow_path).name,
+        )
+
     def test_proxy_runtime_config_normalizes_mode_and_fallbacks(self) -> None:
         with mock.patch.dict(
             os.environ,
