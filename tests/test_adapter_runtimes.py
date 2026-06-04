@@ -2714,6 +2714,117 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual(["zhooo.org", "cnmlgb.de"], payload["excludedDomains"])
         self.assertEqual(["user@zhooo.org"], payload["excludedEmailAddresses"])
 
+    def test_mailbox_request_payload_sends_avoid_hints_to_easyemail(self) -> None:
+        self.assertIn(
+            "avoid",
+            easy_email_client._build_mailbox_request_payload.__code__.co_varnames,
+        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(easy_email_client, "_wait_mail_service_ready"):
+                payload, provider_key, requested_email = easy_email_client._build_mailbox_request_payload(
+                    provider="auto",
+                    default_host_id="python-register-orchestration",
+                    ttl_seconds=90,
+                    excluded_provider_type_keys=["mailtm"],
+                    excluded_domains=["mail.tm"],
+                    excluded_email_addresses=["bad@mail.tm"],
+                    avoid={
+                        "providerTypeKeys": ["M2U", "mail-to-you", ""],
+                        "domains": ["KKB.QZZ.IO", "mail.tm", ""],
+                        "emailAddresses": ["User@KKB.QZZ.IO", "bad@mail.tm", "invalid"],
+                        "reason": "create_account_user_register_400",
+                        "scope": "attempt",
+                    },
+                )
+
+        self.assertEqual("", provider_key)
+        self.assertEqual("", requested_email)
+        self.assertEqual(
+            {
+                "providerTypeKeys": ["m2u"],
+                "domains": ["kkb.qzz.io"],
+                "emailAddresses": ["user@kkb.qzz.io"],
+                "reason": "create_account_user_register_400",
+                "scope": "attempt",
+            },
+            payload["avoid"],
+        )
+        self.assertEqual(["mailtm", "m2u"], payload["excludedProviderTypeKeys"])
+        self.assertEqual(["mail.tm", "kkb.qzz.io"], payload["excludedDomains"])
+        self.assertEqual(["bad@mail.tm", "user@kkb.qzz.io"], payload["excludedEmailAddresses"])
+
+    def test_easy_email_client_report_mailbox_outcome_sends_structured_attribution(self) -> None:
+        with mock.patch.object(
+            easy_email_client,
+            "_post_json",
+            return_value={"result": {"recorded": True}},
+        ) as post_json:
+            result = easy_email_client.report_mailbox_outcome(
+                session_id="mailbox_123",
+                success=False,
+                failure_reason="create_account_user_register_400",
+                business_flow="codex-openai-account-v1",
+                retry_layer="step",
+                attribution_strength="weak",
+                attribution_kind="mailbox_domain_risk",
+                provider_type_key="M2U",
+                domain="KKB.QZZ.IO",
+                email_address="User@KKB.QZZ.IO",
+                avoid_in_current_attempt=True,
+                global_blacklist=False,
+                cooldown_seconds=0,
+                source="easyregister",
+            )
+
+        path, payload = post_json.call_args.args
+        self.assertEqual("/mail/mailboxes/report-outcome", path)
+        self.assertEqual("mailbox_123", payload["sessionId"])
+        self.assertFalse(payload["success"])
+        self.assertEqual("create_account_user_register_400", payload["failureReason"])
+        self.assertEqual("codex-openai-account-v1", payload["businessFlow"])
+        self.assertEqual("step", payload["retryLayer"])
+        self.assertEqual(
+            {
+                "strength": "weak",
+                "kind": "mailbox_domain_risk",
+                "providerTypeKey": "m2u",
+                "domain": "kkb.qzz.io",
+                "emailAddress": "user@kkb.qzz.io",
+            },
+            payload["attribution"],
+        )
+        self.assertEqual(
+            {
+                "avoidInCurrentAttempt": True,
+                "globalBlacklist": False,
+                "cooldownSeconds": 0,
+            },
+            payload["policy"],
+        )
+        self.assertEqual({"recorded": True}, result)
+
+    def test_easy_email_client_report_mailbox_outcome_does_not_default_blank_provider(self) -> None:
+        with mock.patch.dict(os.environ, {"MAILBOX_PROVIDER": "mailtm"}, clear=True), mock.patch.object(
+            easy_email_client,
+            "_post_json",
+            return_value={"result": {"recorded": True}},
+        ) as post_json:
+            easy_email_client.report_mailbox_outcome(
+                session_id="mailbox_123",
+                success=False,
+                failure_reason="email_otp_timeout",
+                attribution_strength="weak",
+                attribution_kind="mailbox_domain_risk",
+                provider_type_key="",
+                domain="Slow-Mailbox.Test",
+                email_address="User@Slow-Mailbox.Test",
+            )
+
+        payload = post_json.call_args.args[1]
+        self.assertNotIn("providerTypeKey", payload["attribution"])
+        self.assertEqual("slow-mailbox.test", payload["attribution"]["domain"])
+        self.assertEqual("user@slow-mailbox.test", payload["attribution"]["emailAddress"])
+
     def test_wait_openai_code_uses_snapshot_after_transient_code_endpoint_error(self) -> None:
         with mock.patch.object(
             easy_email_client,
@@ -4065,6 +4176,16 @@ class RuntimeMailboxTests(unittest.TestCase):
             ("prior@blocked-local.test",),
             tuple(create_kwargs[0].get("excluded_email_addresses") or ()),
         )
+        self.assertEqual(
+            {
+                "providerTypeKeys": ["im215", "m2u", "mail2925", "moemail"],
+                "domains": ["blocked-local.test", "coolkid.icu", "zhooo.org", "cnmlgb.de"],
+                "emailAddresses": ["prior@blocked-local.test"],
+                "reason": "create_account_user_register_400",
+                "scope": "attempt",
+            },
+            create_kwargs[0].get("avoid"),
+        )
 
     def test_resolve_mailbox_passes_excluded_domains_to_planning_before_open(self) -> None:
         mailbox = runtime_mailbox.Mailbox(
@@ -4159,6 +4280,16 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual(
             ("prior@blocked-local.test",),
             tuple(plan_kwargs[0].get("excluded_email_addresses") or ()),
+        )
+        self.assertEqual(
+            {
+                "providerTypeKeys": ["im215", "m2u", "mail2925"],
+                "domains": ["blocked-local.test", "coolkid.icu", "zhooo.org"],
+                "emailAddresses": ["prior@blocked-local.test"],
+                "reason": "create_account_user_register_400",
+                "scope": "attempt",
+            },
+            plan_kwargs[0].get("avoid"),
         )
 
     def test_resolve_mailbox_auto_fallback_excludes_moemail_after_blocked_planned_provider_exhausts_domain_pool(self) -> None:

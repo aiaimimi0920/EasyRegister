@@ -11,7 +11,7 @@ import ipaddress
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 DEFAULT_OTP_POLL_INTERVAL_SECONDS = 4
 DEFAULT_MAIL_SERVICE_READY_TIMEOUT_SECONDS = 90
@@ -474,6 +474,54 @@ def _normalize_email_address_list(value: list[str] | tuple[str, ...] | set[str] 
     return normalized
 
 
+def _append_unique_strings(target: list[str], values: list[str]) -> None:
+    for value in values:
+        if value and value not in target:
+            target.append(value)
+
+
+def _normalize_mailbox_avoid_payload(
+    value: dict[str, Any] | None,
+    *,
+    existing_provider_type_keys: list[str],
+    existing_domains: list[str],
+    existing_email_addresses: list[str],
+) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+
+    provider_type_keys = [
+        item
+        for item in _normalize_provider_type_key_list(value.get("providerTypeKeys"))  # type: ignore[arg-type]
+        if item not in existing_provider_type_keys
+    ]
+    domains = [
+        item
+        for item in _normalize_domain_list(value.get("domains"))  # type: ignore[arg-type]
+        if item not in existing_domains
+    ]
+    email_addresses = [
+        item
+        for item in _normalize_email_address_list(value.get("emailAddresses"))  # type: ignore[arg-type]
+        if item not in existing_email_addresses
+    ]
+    reason = str(value.get("reason") or "").strip()
+    scope = str(value.get("scope") or "").strip().lower()
+
+    normalized: dict[str, object] = {}
+    if provider_type_keys:
+        normalized["providerTypeKeys"] = provider_type_keys
+    if domains:
+        normalized["domains"] = domains
+    if email_addresses:
+        normalized["emailAddresses"] = email_addresses
+    if reason:
+        normalized["reason"] = reason
+    if scope == "attempt":
+        normalized["scope"] = "attempt"
+    return normalized
+
+
 def _resolve_mailbox_strategy_payload(
     *,
     provider_strategy_mode_id: str | None = None,
@@ -593,6 +641,7 @@ def _build_mailbox_request_payload(
     excluded_provider_type_keys: list[str] | tuple[str, ...] | set[str] | None = None,
     excluded_domains: list[str] | tuple[str, ...] | set[str] | None = None,
     excluded_email_addresses: list[str] | tuple[str, ...] | set[str] | None = None,
+    avoid: dict[str, Any] | None = None,
     mailcreate_base_url: str = "",
     mailcreate_custom_auth: str = "",
     mailcreate_domain: str = "",
@@ -687,12 +736,32 @@ def _build_mailbox_request_payload(
             )
         )
     excluded_provider_keys = _normalize_provider_type_key_list(excluded_provider_type_keys)
+    normalized_excluded_domains = _normalize_domain_list(excluded_domains)
+    normalized_excluded_emails = _normalize_email_address_list(excluded_email_addresses)
+    normalized_avoid = _normalize_mailbox_avoid_payload(
+        avoid,
+        existing_provider_type_keys=excluded_provider_keys,
+        existing_domains=normalized_excluded_domains,
+        existing_email_addresses=normalized_excluded_emails,
+    )
+    _append_unique_strings(
+        excluded_provider_keys,
+        list(normalized_avoid.get("providerTypeKeys") or []),
+    )
+    _append_unique_strings(
+        normalized_excluded_domains,
+        list(normalized_avoid.get("domains") or []),
+    )
+    _append_unique_strings(
+        normalized_excluded_emails,
+        list(normalized_avoid.get("emailAddresses") or []),
+    )
+    if normalized_avoid:
+        payload["avoid"] = normalized_avoid
     if excluded_provider_keys:
         payload["excludedProviderTypeKeys"] = excluded_provider_keys
-    normalized_excluded_domains = _normalize_domain_list(excluded_domains)
     if normalized_excluded_domains:
         payload["excludedDomains"] = normalized_excluded_domains
-    normalized_excluded_emails = _normalize_email_address_list(excluded_email_addresses)
     if normalized_excluded_emails:
         payload["excludedEmailAddresses"] = normalized_excluded_emails
     if normalized_requested_email:
@@ -716,6 +785,7 @@ def plan_mailbox(
     excluded_provider_type_keys: list[str] | tuple[str, ...] | set[str] | None = None,
     excluded_domains: list[str] | tuple[str, ...] | set[str] | None = None,
     excluded_email_addresses: list[str] | tuple[str, ...] | set[str] | None = None,
+    avoid: dict[str, Any] | None = None,
     mailcreate_base_url: str = "",
     mailcreate_custom_auth: str = "",
     mailcreate_domain: str = "",
@@ -740,6 +810,7 @@ def plan_mailbox(
         excluded_provider_type_keys=excluded_provider_type_keys,
         excluded_domains=excluded_domains,
         excluded_email_addresses=excluded_email_addresses,
+        avoid=avoid,
         mailcreate_base_url=mailcreate_base_url,
         mailcreate_custom_auth=mailcreate_custom_auth,
         mailcreate_domain=mailcreate_domain,
@@ -770,6 +841,7 @@ def create_mailbox(
     excluded_provider_type_keys: list[str] | tuple[str, ...] | set[str] | None = None,
     excluded_domains: list[str] | tuple[str, ...] | set[str] | None = None,
     excluded_email_addresses: list[str] | tuple[str, ...] | set[str] | None = None,
+    avoid: dict[str, Any] | None = None,
     mailcreate_base_url: str = "",
     mailcreate_custom_auth: str = "",
     mailcreate_domain: str = "",
@@ -795,6 +867,7 @@ def create_mailbox(
         excluded_provider_type_keys=excluded_provider_type_keys,
         excluded_domains=excluded_domains,
         excluded_email_addresses=excluded_email_addresses,
+        avoid=avoid,
         mailcreate_base_url=mailcreate_base_url,
         mailcreate_custom_auth=mailcreate_custom_auth,
         mailcreate_domain=mailcreate_domain,
@@ -959,6 +1032,81 @@ def release_mailbox(
                 "detail": "not_found",
             }
         raise
+
+
+def report_mailbox_outcome(
+    *,
+    session_id: str,
+    success: bool,
+    failure_reason: str = "",
+    business_flow: str = "",
+    retry_layer: str = "",
+    attribution_strength: str = "",
+    attribution_kind: str = "",
+    provider_type_key: str = "",
+    domain: str = "",
+    email_address: str = "",
+    avoid_in_current_attempt: bool | None = None,
+    global_blacklist: bool | None = None,
+    cooldown_seconds: int | float | None = None,
+    source: str = "easyregister",
+) -> dict:
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        return {"recorded": False, "detail": "missing_session_id"}
+
+    payload: dict[str, object] = {
+        "sessionId": normalized_session_id,
+        "success": bool(success),
+        "observedAt": datetime.now(timezone.utc).isoformat(),
+    }
+    normalized_failure_reason = str(failure_reason or "").strip()
+    if normalized_failure_reason:
+        payload["failureReason"] = normalized_failure_reason
+    normalized_source = str(source or "").strip()
+    if normalized_source:
+        payload["source"] = normalized_source
+    normalized_business_flow = str(business_flow or "").strip()
+    if normalized_business_flow:
+        payload["businessFlow"] = normalized_business_flow
+    normalized_retry_layer = str(retry_layer or "").strip()
+    if normalized_retry_layer in {"step", "chain", "attempt"}:
+        payload["retryLayer"] = normalized_retry_layer
+
+    attribution: dict[str, object] = {}
+    normalized_attribution_strength = str(attribution_strength or "").strip().lower()
+    if normalized_attribution_strength in {"strong", "weak", "none"}:
+        attribution["strength"] = normalized_attribution_strength
+    normalized_attribution_kind = str(attribution_kind or "").strip().lower()
+    if normalized_attribution_kind in {"mailbox_domain_risk", "provider_route", "unknown"}:
+        attribution["kind"] = normalized_attribution_kind
+    raw_provider_type_key = str(provider_type_key or "").strip()
+    normalized_provider_type_key = _normalize_provider(raw_provider_type_key) if raw_provider_type_key else ""
+    if normalized_provider_type_key:
+        attribution["providerTypeKey"] = normalized_provider_type_key
+    normalized_domain = _normalize_domain_list([str(domain or "")])
+    if normalized_domain:
+        attribution["domain"] = normalized_domain[0]
+    normalized_email_address = _normalize_email_address_list([str(email_address or "")])
+    if normalized_email_address:
+        attribution["emailAddress"] = normalized_email_address[0]
+    if attribution:
+        payload["attribution"] = attribution
+
+    policy: dict[str, object] = {}
+    if avoid_in_current_attempt is not None:
+        policy["avoidInCurrentAttempt"] = bool(avoid_in_current_attempt)
+    if global_blacklist is not None:
+        policy["globalBlacklist"] = bool(global_blacklist)
+    if cooldown_seconds is not None:
+        try:
+            policy["cooldownSeconds"] = max(0, int(cooldown_seconds))
+        except Exception:
+            pass
+    if policy:
+        payload["policy"] = policy
+
+    return _post_json("/mail/mailboxes/report-outcome", payload).get("result") or {}
 
 
 def recover_mailbox_capacity(

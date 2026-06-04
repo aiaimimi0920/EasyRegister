@@ -1787,14 +1787,31 @@ class RunnerMailboxTests(unittest.TestCase):
                 },
             }
 
-            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
-                shared_root=shared_root,
-                result_payload_value=payload,
-                instance_role="main",
-            )
+            with mock.patch.object(runner_mailbox, "report_mailbox_outcome") as report_outcome:
+                outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
 
             self.assertIsNotNone(outcome)
             assert outcome is not None
+            report_outcome.assert_called_once_with(
+                session_id="first",
+                success=False,
+                failure_reason="create_account_user_register_400",
+                business_flow="openai",
+                retry_layer="step",
+                attribution_strength="weak",
+                attribution_kind="mailbox_domain_risk",
+                provider_type_key="m2u",
+                domain="kkb.qzz.io",
+                email_address="user1@kkb.qzz.io",
+                avoid_in_current_attempt=True,
+                global_blacklist=False,
+                cooldown_seconds=0,
+                source="easyregister",
+            )
             self.assertEqual("example.com", outcome["domain"])
             self.assertIn("attemptOutcomes", outcome)
             self.assertEqual("kkb.qzz.io", outcome["attemptOutcomes"][0]["domain"])
@@ -1839,14 +1856,31 @@ class RunnerMailboxTests(unittest.TestCase):
                 },
             }
 
-            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
-                shared_root=shared_root,
-                result_payload_value=payload,
-                instance_role="main",
-            )
+            with mock.patch.object(runner_mailbox, "report_mailbox_outcome") as report_outcome:
+                outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
 
             self.assertIsNotNone(outcome)
             assert outcome is not None
+            report_outcome.assert_called_once_with(
+                session_id="first",
+                success=False,
+                failure_reason="unsupported_email",
+                business_flow="openai",
+                retry_layer="step",
+                attribution_strength="strong",
+                attribution_kind="mailbox_domain_risk",
+                provider_type_key="mailtm",
+                domain="blocked.test",
+                email_address="user1@blocked.test",
+                avoid_in_current_attempt=True,
+                global_blacklist=True,
+                cooldown_seconds=0,
+                source="easyregister",
+            )
             self.assertTrue(outcome["attemptOutcomes"][0]["blacklisted"])
             self.assertEqual("unsupported_email", outcome["attemptOutcomes"][0]["blacklistReason"])
             state_payload = json.loads(Path(outcome["statePath"]).read_text(encoding="utf-8"))

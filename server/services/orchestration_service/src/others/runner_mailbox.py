@@ -7,15 +7,25 @@ from typing import Any
 
 from easyemail_flow import dispatch_easyemail_step
 from errors import ErrorCodes, result_error_matches, result_error_message
+from others.bootstrap import ensure_local_bundle_imports
 from others.common import ensure_directory
 from others.common_runtime import validate_openai_oauth_seed_payload
 from others.config import CleanupRuntimeConfig, MailboxRuntimeConfig, env_int
 from others.file_lock import release_lock, try_acquire_lock
 from others.result_artifacts import FREE_OPENAI_OAUTH_SOURCE_CANDIDATES, all_output_texts, output_dict
 
+ensure_local_bundle_imports()
+
+from shared_mailbox.easy_email_client import report_mailbox_outcome
+
 
 MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
 EMAIL_OTP_FAILURE_REASONS = {"email_otp_timeout", "email_otp_wrong_code"}
+MAILBOX_OUTCOME_REPORT_REASONS = {
+    "create_account_user_register_400",
+    "email_otp_timeout",
+    "unsupported_email",
+}
 
 
 def _cleanup_runtime_config() -> CleanupRuntimeConfig:
@@ -448,6 +458,15 @@ def mailbox_provider_from_ref(mailbox_ref: str) -> str:
     return str(value.split(":", 1)[0] or "").strip().lower()
 
 
+def mailbox_session_id_from_ref(mailbox_ref: str) -> str:
+    value = str(mailbox_ref or "").strip()
+    if not value:
+        return ""
+    if ":" not in value:
+        return value
+    return value.split(":", 1)[1].strip()
+
+
 def extract_mailbox_business_outcome_context(*, result_payload_value: dict[str, Any]) -> dict[str, str]:
     steps = result_payload_value.get("steps") if isinstance(result_payload_value, dict) else {}
     if isinstance(steps, dict) and str(steps.get("acquire-mailbox") or "").strip().lower() != "ok":
@@ -497,6 +516,57 @@ def extract_mailbox_business_outcome_context(*, result_payload_value: dict[str, 
         "email": email,
         "domain": email.rsplit("@", 1)[-1].strip().lower(),
     }
+
+
+def _mailbox_outcome_report_policy(*, failure_reason: str) -> dict[str, Any]:
+    normalized_reason = str(failure_reason or "").strip().lower()
+    if normalized_reason == "unsupported_email":
+        return {
+            "attribution_strength": "strong",
+            "global_blacklist": True,
+        }
+    if normalized_reason in {"create_account_user_register_400", "email_otp_timeout"}:
+        return {
+            "attribution_strength": "weak",
+            "global_blacklist": False,
+        }
+    return {}
+
+
+def _report_mailbox_failure_outcome_to_easyemail(
+    *,
+    context: dict[str, str],
+    business_key: str,
+    failure_reason: str,
+) -> None:
+    normalized_reason = str(failure_reason or "").strip().lower()
+    if normalized_reason not in MAILBOX_OUTCOME_REPORT_REASONS:
+        return
+    session_id = mailbox_session_id_from_ref(str(context.get("mailbox_ref") or ""))
+    if not session_id:
+        return
+    policy = _mailbox_outcome_report_policy(failure_reason=normalized_reason)
+    if not policy:
+        return
+    try:
+        report_mailbox_outcome(
+            session_id=session_id,
+            success=False,
+            failure_reason=normalized_reason,
+            business_flow=str(business_key or "").strip(),
+            retry_layer="step",
+            attribution_strength=str(policy.get("attribution_strength") or ""),
+            attribution_kind="mailbox_domain_risk",
+            provider_type_key=str(context.get("provider") or "").strip().lower(),
+            domain=str(context.get("domain") or "").strip().lower(),
+            email_address=str(context.get("email") or "").strip().lower(),
+            avoid_in_current_attempt=True,
+            global_blacklist=bool(policy.get("global_blacklist")),
+            cooldown_seconds=0,
+            source="easyregister",
+        )
+    except Exception:
+        return
 
 
 def _mailbox_artifact_matches_context(*, artifact_payload: dict[str, Any], context: dict[str, str]) -> bool:
@@ -766,6 +836,12 @@ def record_business_mailbox_domain_outcome(
     failures = max(0, int(current.get("failures") or 0))
     consecutive_failures = max(0, int(current.get("consecutiveFailures") or 0))
     failure_reason = "" if ok else mailbox_failure_reason(result_payload_value=result_payload_value)
+    if not ok and failure_reason:
+        _report_mailbox_failure_outcome_to_easyemail(
+            context=context,
+            business_key=business_key,
+            failure_reason=failure_reason,
+        )
     failure_reasons_payload = current.get("failureReasons")
     failure_reasons = dict(failure_reasons_payload) if isinstance(failure_reasons_payload, dict) else {}
     now = datetime.now(timezone.utc).isoformat()
