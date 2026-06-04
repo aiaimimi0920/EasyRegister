@@ -283,7 +283,10 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
     error_step = str(result_payload_value.get("errorStep") or "").strip().lower()
     combined = _mailbox_result_error_text(result_payload_value=result_payload_value)
 
-    if "sms_no_selection_plan_candidates" in combined:
+    if (
+        "sms_no_selection_plan_candidates" in combined
+        or "sms_no_productive_selection_plan_candidates" in combined
+    ):
         return "external_sms_no_selection"
 
     if error_step == "obtain-codex-oauth" and (

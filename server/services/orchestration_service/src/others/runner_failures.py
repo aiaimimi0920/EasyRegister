@@ -155,7 +155,13 @@ def extra_failure_cooldown_seconds(*, result: Any) -> float:
     }
     if error_step in flow_cooldown_steps:
         combined = result_error_message(payload, error_step).lower()
-        if error_step == "obtain-codex-oauth" and "sms_no_selection_plan_candidates" in combined:
+        if error_step == "obtain-codex-oauth" and any(
+            marker in combined
+            for marker in (
+                "sms_no_selection_plan_candidates",
+                "sms_no_productive_selection_plan_candidates",
+            )
+        ):
             return cleanup_config.sms_no_selection_cooldown_seconds
         if result_error_matches(payload, ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED, step_id=error_step):
             return cleanup_config.oauth_rate_limit_cooldown_seconds

@@ -1083,22 +1083,27 @@ class RunnerFailuresTests(unittest.TestCase):
         self.assertEqual(67.0, cooldown)
 
     def test_extra_failure_cooldown_seconds_covers_sms_no_selection_after_phone_wall(self) -> None:
-        payload = {
-            "errorStep": "obtain-codex-oauth",
-            "error": "sms_no_selection_plan_candidates",
-            "stepErrors": {
-                "obtain-codex-oauth": {
-                    "message": "sms_no_selection_plan_candidates",
-                }
-            },
-        }
-        with mock.patch.dict(
-            os.environ,
-            {"REGISTER_SMS_NO_SELECTION_COOLDOWN_SECONDS": "91"},
-            clear=True,
+        for error_code in (
+            "sms_no_selection_plan_candidates",
+            "sms_no_productive_selection_plan_candidates",
         ):
-            cooldown = runner_failures.extra_failure_cooldown_seconds(result=payload)
-        self.assertEqual(91.0, cooldown)
+            with self.subTest(error_code=error_code):
+                payload = {
+                    "errorStep": "obtain-codex-oauth",
+                    "error": error_code,
+                    "stepErrors": {
+                        "obtain-codex-oauth": {
+                            "message": error_code,
+                        }
+                    },
+                }
+                with mock.patch.dict(
+                    os.environ,
+                    {"REGISTER_SMS_NO_SELECTION_COOLDOWN_SECONDS": "91"},
+                    clear=True,
+                ):
+                    cooldown = runner_failures.extra_failure_cooldown_seconds(result=payload)
+                self.assertEqual(91.0, cooldown)
 
     def test_extra_failure_cooldown_seconds_covers_oauth_flow_timeout(self) -> None:
         payload = {
@@ -1202,36 +1207,40 @@ class RunnerMailboxTests(unittest.TestCase):
             )
 
     def test_record_business_mailbox_domain_outcome_ignores_sms_resource_failure(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            shared_root = Path(tmp_dir) / "shared"
-            payload = {
-                "ok": False,
-                "errorStep": "obtain-codex-oauth",
-                "error": "sms_no_selection_plan_candidates",
-                "steps": {"acquire-mailbox": "ok"},
-                "outputs": {
-                    "acquire-mailbox": {
-                        "email": "user@sms-good-mailbox.test",
-                        "provider": "stablemail",
-                        "business_key": "openai",
-                    }
-                },
-                "stepErrors": {
-                    "obtain-codex-oauth": {
-                        "message": "sms_no_selection_plan_candidates",
-                    }
-                },
-            }
-            outcome = runner_mailbox.record_business_mailbox_domain_outcome(
-                shared_root=shared_root,
-                result_payload_value=payload,
-                instance_role="main",
-            )
-            self.assertIsNotNone(outcome)
-            assert outcome is not None
-            self.assertTrue(outcome["ignored"])
-            self.assertEqual("external_sms_no_selection", outcome["ignoreReason"])
-            self.assertFalse(Path(outcome["statePath"]).is_file())
+        for error_code in (
+            "sms_no_selection_plan_candidates",
+            "sms_no_productive_selection_plan_candidates",
+        ):
+            with self.subTest(error_code=error_code), tempfile.TemporaryDirectory() as tmp_dir:
+                shared_root = Path(tmp_dir) / "shared"
+                payload = {
+                    "ok": False,
+                    "errorStep": "obtain-codex-oauth",
+                    "error": error_code,
+                    "steps": {"acquire-mailbox": "ok"},
+                    "outputs": {
+                        "acquire-mailbox": {
+                            "email": "user@sms-good-mailbox.test",
+                            "provider": "stablemail",
+                            "business_key": "openai",
+                        }
+                    },
+                    "stepErrors": {
+                        "obtain-codex-oauth": {
+                            "message": error_code,
+                        }
+                    },
+                }
+                outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
+                self.assertIsNotNone(outcome)
+                assert outcome is not None
+                self.assertTrue(outcome["ignored"])
+                self.assertEqual("external_sms_no_selection", outcome["ignoreReason"])
+                self.assertFalse(Path(outcome["statePath"]).is_file())
 
     def test_record_business_mailbox_domain_outcome_ignores_easy_sms_provider_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

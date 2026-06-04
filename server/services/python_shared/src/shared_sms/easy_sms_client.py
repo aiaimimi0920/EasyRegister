@@ -433,10 +433,7 @@ def open_sms_session(
             exclude_provider_keys=tuple(sorted(selection_plan_seen_provider_keys)),
         )
         if not candidate_provider_keys and selection_plan_seen_provider_keys:
-            candidate_provider_keys = _query_provider_catalog_candidates(
-                provider_blacklist=provider_blacklist,
-                allow_paid=allow_paid,
-            )
+            raise RuntimeError("sms_no_productive_selection_plan_candidates")
     if not candidate_provider_keys:
         raise RuntimeError("sms_no_selection_plan_candidates")
     first_country_code = _first_country_code(country_codes)
@@ -474,6 +471,8 @@ def open_sms_session(
                     request_payload["providerKey"] = normalized_provider_key
                 if normalized_selection_mode and normalized_provider_key == "hero_sms":
                     request_payload["selectionMode"] = normalized_selection_mode
+                if blocked_phones:
+                    request_payload["phoneBlacklist"] = list(phone_blacklist)
                 opened_session_attempts += 1
                 try:
                     response = _post_json("/sms/sessions/open", request_payload)

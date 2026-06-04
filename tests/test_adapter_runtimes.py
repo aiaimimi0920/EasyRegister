@@ -84,6 +84,41 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("+15551234567", session.phone_number)
         self.assertEqual("sms24", session.provider_key)
 
+    def test_easy_sms_client_sends_phone_blacklist_to_open_request(self) -> None:
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            return_value={"candidates": [{"providerKey": "onlinesim"}]},
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            return_value={
+                "session": {
+                    "id": "sms_124",
+                    "phoneNumber": "+15557654321",
+                    "providerKey": "onlinesim",
+                }
+            },
+        ) as post_json:
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=(),
+                selection_mode="balanced",
+                phone_blacklist=("+1 555 123 4567",),
+            )
+
+        payload = post_json.call_args.args[1]
+        self.assertEqual(["+1 555 123 4567"], payload["phoneBlacklist"])
+        self.assertEqual("sms_124", session.session_id)
+
     def test_easy_sms_client_report_outcome_uses_native_payload(self) -> None:
         with mock.patch.object(
             easy_sms_client,
@@ -498,7 +533,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual(["onlinesim"], [payload["providerKey"] for payload in post_payloads])
         self.assertEqual("sms_125", session.session_id)
 
-    def test_easy_sms_client_catalog_fallback_when_selection_plan_seen_covers_catalog(self) -> None:
+    def test_easy_sms_client_fails_fast_when_selection_plan_seen_covers_catalog_with_only_unproductive_providers(self) -> None:
         post_payloads: list[dict[str, object]] = []
 
         def _get(path: str) -> dict[str, object]:
@@ -543,18 +578,18 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             "_post_json",
             side_effect=_post,
         ):
-            session = easy_sms_client.open_sms_session(
-                business_key="openai",
-                provider_blacklist=(),
-                allow_paid=False,
-                allow_reuse=False,
-                max_bindings_per_phone=1,
-                country_codes=(),
-                selection_mode="balanced",
-            )
+            with self.assertRaisesRegex(RuntimeError, "sms_no_productive_selection_plan_candidates"):
+                easy_sms_client.open_sms_session(
+                    business_key="openai",
+                    provider_blacklist=(),
+                    allow_paid=False,
+                    allow_reuse=False,
+                    max_bindings_per_phone=1,
+                    country_codes=(),
+                    selection_mode="balanced",
+                )
 
-        self.assertEqual(["yunduanxin", "receive_sms_free_cc"], [payload["providerKey"] for payload in post_payloads])
-        self.assertEqual("sms_126", session.session_id)
+        self.assertEqual([], [payload["providerKey"] for payload in post_payloads])
 
     def test_easy_sms_client_rotates_country_codes_when_phone_is_blacklisted(self) -> None:
         post_payloads: list[dict[str, object]] = []
