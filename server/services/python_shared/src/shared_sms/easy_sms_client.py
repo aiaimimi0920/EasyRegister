@@ -433,7 +433,10 @@ def open_sms_session(
             exclude_provider_keys=tuple(sorted(selection_plan_seen_provider_keys)),
         )
         if not candidate_provider_keys and selection_plan_seen_provider_keys:
-            raise RuntimeError("sms_no_productive_selection_plan_candidates")
+            candidate_provider_keys = _query_provider_catalog_candidates(
+                provider_blacklist=provider_blacklist,
+                allow_paid=allow_paid,
+            )
     if not candidate_provider_keys:
         raise RuntimeError("sms_no_selection_plan_candidates")
     first_country_code = _first_country_code(country_codes)

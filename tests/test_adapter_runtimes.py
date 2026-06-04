@@ -533,7 +533,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual(["onlinesim"], [payload["providerKey"] for payload in post_payloads])
         self.assertEqual("sms_125", session.session_id)
 
-    def test_easy_sms_client_fails_fast_when_selection_plan_seen_covers_catalog_with_only_unproductive_providers(self) -> None:
+    def test_easy_sms_client_tries_catalog_seen_providers_after_unproductive_selection_plan(self) -> None:
         post_payloads: list[dict[str, object]] = []
 
         def _get(path: str) -> dict[str, object]:
@@ -578,18 +578,18 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             "_post_json",
             side_effect=_post,
         ):
-            with self.assertRaisesRegex(RuntimeError, "sms_no_productive_selection_plan_candidates"):
-                easy_sms_client.open_sms_session(
-                    business_key="openai",
-                    provider_blacklist=(),
-                    allow_paid=False,
-                    allow_reuse=False,
-                    max_bindings_per_phone=1,
-                    country_codes=(),
-                    selection_mode="balanced",
-                )
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=(),
+                selection_mode="balanced",
+            )
 
-        self.assertEqual([], [payload["providerKey"] for payload in post_payloads])
+        self.assertEqual(["yunduanxin", "receive_sms_free_cc"], [payload["providerKey"] for payload in post_payloads])
+        self.assertEqual("sms_126", session.session_id)
 
     def test_easy_sms_client_rotates_country_codes_when_phone_is_blacklisted(self) -> None:
         post_payloads: list[dict[str, object]] = []
