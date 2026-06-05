@@ -157,7 +157,7 @@ def _prepare_create_account_mailbox_retry_context(
         task_state["avoidMailboxEmails"] = _append_unique_text(task_state.get("avoidMailboxEmails"), email)
     if domain:
         task_state["avoidMailboxDomains"] = _append_unique_text(task_state.get("avoidMailboxDomains"), domain)
-    if provider:
+    if provider and failure_reason != "unsupported_email":
         task_state["avoidMailboxProviders"] = _append_unique_text(task_state.get("avoidMailboxProviders"), provider)
     task_state["avoidMailboxReason"] = failure_reason
     outcomes = result.outputs.get("mailbox-attempt-outcomes")

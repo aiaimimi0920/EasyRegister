@@ -1825,7 +1825,7 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("success", domains["example.com"]["lastOutcome"])
             self.assertEqual({"create_account_user_register_400": 1}, providers["m2u"]["failureReasons"])
 
-    def test_record_business_mailbox_domain_outcome_blacklists_strong_retry_attempt_before_final_success(self) -> None:
+    def test_record_business_mailbox_domain_outcome_reports_unsupported_email_without_provider_global_blacklist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"
             payload = {
@@ -1877,7 +1877,7 @@ class RunnerMailboxTests(unittest.TestCase):
                 domain="blocked.test",
                 email_address="user1@blocked.test",
                 avoid_in_current_attempt=True,
-                global_blacklist=True,
+                global_blacklist=False,
                 cooldown_seconds=0,
                 source="easyregister",
             )

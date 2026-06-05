@@ -1408,11 +1408,13 @@ class DstFlowIntegrationTests(unittest.TestCase):
             mailbox_call_count = 0
             proxy_call_count = 0
             create_inputs: list[tuple[str, str]] = []
+            mailbox_inputs: list[dict[str, object]] = []
             released_mailboxes: list[tuple[str, str]] = []
 
             def _easyemail_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
                 nonlocal mailbox_call_count
                 if step_type == "acquire_mailbox":
+                    mailbox_inputs.append(dict(step_input))
                     mailbox_call_count += 1
                     return {
                         "ok": True,
@@ -1488,6 +1490,10 @@ class DstFlowIntegrationTests(unittest.TestCase):
             [("user1@example.com", "http://proxy-1"), ("user2@example.com", "http://proxy-2")],
             create_inputs,
         )
+        self.assertEqual(["user1@example.com"], mailbox_inputs[1]["avoid_emails"])
+        self.assertEqual(["example.com"], mailbox_inputs[1]["avoid_domains"])
+        self.assertEqual("", mailbox_inputs[1]["avoid_providers"])
+        self.assertEqual("unsupported_email", mailbox_inputs[1]["avoid_reason"])
         self.assertEqual([("mailbox-ref-1", "mailbox-session-1")], released_mailboxes)
 
     def test_run_dst_flow_once_refresh_proxy_release_keeps_full_proxy_payload(self) -> None:

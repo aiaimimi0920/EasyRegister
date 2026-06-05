@@ -523,7 +523,7 @@ def _mailbox_outcome_report_policy(*, failure_reason: str) -> dict[str, Any]:
     if normalized_reason == "unsupported_email":
         return {
             "attribution_strength": "strong",
-            "global_blacklist": True,
+            "global_blacklist": False,
         }
     if normalized_reason in {"create_account_user_register_400", "email_otp_timeout"}:
         return {
