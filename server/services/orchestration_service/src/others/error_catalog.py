@@ -18,6 +18,7 @@ class ErrorCodes:
     PROXY_CONNECT_FAILED = "proxy_connect_failed"
     REFRESH_TOKEN_REUSED = "refresh_token_reused"
     OPENAI_OAUTH_POOL_EMPTY = "openai_oauth_pool_empty"
+    SOURCE_ARTIFACT_MISSING = "source_artifact_missing"
     TEAM_AUTH_TOKEN_INVALIDATED = "team_auth_token_invalidated"
     TEAM_INVITE_UPSTREAM_ERROR = "team_invite_upstream_error"
     TEAM_MOTHER_TOKEN_VALIDATION_FAILED = "team_mother_token_validation_failed"
@@ -44,6 +45,7 @@ CODE_CATEGORY_MAP: dict[str, str] = {
     ErrorCodes.PROXY_CONNECT_FAILED: "proxy_error",
     ErrorCodes.REFRESH_TOKEN_REUSED: "auth_error",
     ErrorCodes.OPENAI_OAUTH_POOL_EMPTY: "flow_error",
+    ErrorCodes.SOURCE_ARTIFACT_MISSING: "flow_error",
     ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED: "auth_error",
     ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR: "flow_error",
     ErrorCodes.TEAM_MOTHER_TOKEN_VALIDATION_FAILED: "auth_error",
@@ -67,6 +69,7 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.MAILBOX_UNAVAILABLE,
         ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.TRANSPORT_ERROR,
+        ErrorCodes.SOURCE_ARTIFACT_MISSING,
     ),
     "task-continue-default": (
         ErrorCodes.PROXY_CONNECT_FAILED,
@@ -74,12 +77,14 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.PASSWORD_VERIFY_BLOCKED,
         ErrorCodes.TRANSPORT_ERROR,
         ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
+        ErrorCodes.SOURCE_ARTIFACT_MISSING,
     ),
     "task-team-expand-default": (
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
         ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.TRANSPORT_ERROR,
+        ErrorCodes.SOURCE_ARTIFACT_MISSING,
     ),
     "step-team-auth-refresh": (
         ErrorCodes.TEAM_AUTH_TOKEN_INVALIDATED,
@@ -89,6 +94,7 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
+        ErrorCodes.SOURCE_ARTIFACT_MISSING,
         ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR,
     ),
     "step-create-account-recover": (
@@ -101,6 +107,7 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
+        ErrorCodes.SOURCE_ARTIFACT_MISSING,
     ),
     "step-login-init-recover": (
         ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
@@ -111,6 +118,7 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
+        ErrorCodes.SOURCE_ARTIFACT_MISSING,
     ),
     "step-oauth-recover": (
         ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
@@ -119,11 +127,13 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
+        ErrorCodes.SOURCE_ARTIFACT_MISSING,
     ),
     "step-proxy-refresh": (
         ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
         ErrorCodes.PROXY_CONNECT_FAILED,
         ErrorCodes.TRANSPORT_ERROR,
+        ErrorCodes.SOURCE_ARTIFACT_MISSING,
     ),
     "step-upload-artifact": (
         ErrorCodes.TRANSPORT_ERROR,
@@ -232,6 +242,20 @@ def classify_error_code(
             or "<html" in lowered
         ):
             return ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED
+
+    if (
+        "source_path_missing:" in combined
+        or "source_path_not_found:" in combined
+        or (
+            "no such file or directory" in combined
+            and (
+                "/shared/register-output" in combined
+                or "\\shared\\register-output" in combined
+                or "openai-oauth-claims" in combined
+            )
+        )
+    ):
+        return ErrorCodes.SOURCE_ARTIFACT_MISSING
 
     if normalized_code:
         return normalized_code

@@ -112,6 +112,7 @@ class ErrorProfilesTests(unittest.TestCase):
                 ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
                 ErrorCodes.PROXY_CONNECT_FAILED,
                 ErrorCodes.TRANSPORT_ERROR,
+                ErrorCodes.SOURCE_ARTIFACT_MISSING,
                 ErrorCodes.TEAM_INVITE_UPSTREAM_ERROR,
             },
             resolve_retry_codes({"retryProfile": "step-invite-recover"}),
@@ -129,6 +130,7 @@ class ErrorProfilesTests(unittest.TestCase):
                 ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
                 ErrorCodes.PROXY_CONNECT_FAILED,
                 ErrorCodes.TRANSPORT_ERROR,
+                ErrorCodes.SOURCE_ARTIFACT_MISSING,
             },
             resolve_retry_codes({"retryProfile": "step-create-account-recover"}),
         )
@@ -144,6 +146,7 @@ class ErrorProfilesTests(unittest.TestCase):
                 ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
                 ErrorCodes.PROXY_CONNECT_FAILED,
                 ErrorCodes.TRANSPORT_ERROR,
+                ErrorCodes.SOURCE_ARTIFACT_MISSING,
             },
             resolve_retry_codes({"retryProfile": "step-login-init-recover"}),
         )
@@ -157,6 +160,7 @@ class ErrorProfilesTests(unittest.TestCase):
                 ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
                 ErrorCodes.PROXY_CONNECT_FAILED,
                 ErrorCodes.TRANSPORT_ERROR,
+                ErrorCodes.SOURCE_ARTIFACT_MISSING,
             },
             resolve_retry_codes({"retryProfile": "step-oauth-recover"}),
         )
@@ -179,9 +183,21 @@ class ErrorProfilesTests(unittest.TestCase):
                 ErrorCodes.FLOW_TIMEOUT_EXCEEDED,
                 ErrorCodes.PROXY_CONNECT_FAILED,
                 ErrorCodes.TRANSPORT_ERROR,
+                ErrorCodes.SOURCE_ARTIFACT_MISSING,
             },
             resolve_retry_codes({"retryProfile": "step-proxy-refresh"}),
         )
+
+    def test_build_error_details_classifies_shared_output_source_artifact_missing(self) -> None:
+        details = build_error_details(
+            step_type="initialize_platform_organization",
+            message=(
+                "[Errno 2] No such file or directory: "
+                "'/shared/register-output/others/openai-oauth-claims/claimed.json'"
+            ),
+        )
+        self.assertEqual(ErrorCodes.SOURCE_ARTIFACT_MISSING, details["code"])
+        self.assertEqual("flow_error", details["category"])
 
     def test_build_error_details_classifies_chat_requirements_unauthorized(self) -> None:
         details = build_error_details(

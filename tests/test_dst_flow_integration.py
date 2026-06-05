@@ -1030,6 +1030,88 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual(["http://proxy-1", "http://proxy-2"], login_proxy_urls)
         self.assertEqual(2, proxy_call_count)
 
+    def test_run_dst_flow_once_retries_protocol_source_artifact_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "acquire-proxy-chain",
+                                    "type": "acquire_proxy_chain",
+                                    "metadata": {"owner": "easyproxy"},
+                                    "saveAs": "proxy_chain",
+                                },
+                                {
+                                    "id": "initialize-platform-organization",
+                                    "type": "initialize_platform_organization",
+                                    "metadata": {
+                                        "owner": "easyprotocol",
+                                        "retry": {
+                                            "maxAttempts": 2,
+                                            "retryProfile": "step-proxy-refresh",
+                                            "refreshSavedStates": [
+                                                "proxy_chain",
+                                            ],
+                                        },
+                                    },
+                                    "input": {
+                                        "source_path": "/shared/register-output/others/openai-oauth-claims/claimed.json",
+                                        "proxy_url": "{{proxy_chain.proxy_url}}",
+                                    },
+                                    "saveAs": "initialize_platform_organization",
+                                },
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            proxy_call_count = 0
+            init_proxy_urls: list[str] = []
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                nonlocal proxy_call_count
+                if step_type == "acquire_proxy_chain":
+                    proxy_call_count += 1
+                    return {"ok": True, "proxy_url": f"http://proxy-{proxy_call_count}"}
+                if step_type == "release_proxy_chain":
+                    return {"released": True, "detail": "released"}
+                if step_type == "initialize_platform_organization":
+                    init_proxy_urls.append(str(step_input.get("proxy_url") or ""))
+                    if len(init_proxy_urls) == 1:
+                        raise RuntimeError(
+                            "[Errno 2] No such file or directory: "
+                            "'/shared/register-output/others/openai-oauth-claims/claimed.json'"
+                        )
+                    return {
+                        "ok": True,
+                        "status": "completed",
+                        "sourcePath": str(step_input.get("source_path") or ""),
+                    }
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "easyproxy": _dispatcher,
+                    "easyprotocol": _dispatcher,
+                },
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(2, result.step_attempts["initialize-platform-organization"])
+        self.assertEqual(["http://proxy-1", "http://proxy-2"], init_proxy_urls)
+
     def test_run_dst_flow_once_retries_create_account_after_proxy_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             flow_path = Path(tmp_dir) / "temp-flow.json"

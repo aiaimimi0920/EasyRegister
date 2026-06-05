@@ -21,6 +21,7 @@ DEFAULT_EASY_PROTOCOL_TIMEOUT_SECONDS = 900
 DEFAULT_EASY_PROTOCOL_OAUTH_TIMEOUT_SECONDS = 240
 DEFAULT_EASY_PROTOCOL_PHONE_TIMEOUT_SECONDS = 120
 DEFAULT_PROTOCOL_OUTPUT_TARGET_DIR = "/shared/register-output"
+DEFAULT_PROTOCOL_BRIDGE_SUBDIR = "easyregister-bridge"
 DEFAULT_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS = 5
 PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
     "invalid_phone_number",
@@ -245,6 +246,28 @@ def _protocol_bridge_target_dir_text(*, bridge_root: Path) -> str:
     return str(bridge_root.resolve())
 
 
+def _protocol_bridge_root_text_for_source(*, source_path_text: str) -> str:
+    bridge_root_text = str(os.environ.get("REGISTER_PROTOCOL_BRIDGE_DIR") or "").strip()
+    if bridge_root_text:
+        return bridge_root_text
+
+    protocol_target_dir = str(
+        os.environ.get("REGISTER_PROTOCOL_OUTPUT_TARGET_DIR") or DEFAULT_PROTOCOL_OUTPUT_TARGET_DIR
+    ).strip()
+    if not protocol_target_dir:
+        return ""
+    relative_path = _split_relative_path_from_root(
+        path_text=source_path_text,
+        root_text=protocol_target_dir,
+    )
+    if relative_path is None:
+        return ""
+    return _join_path_text(
+        root_text=protocol_target_dir,
+        relative_text=DEFAULT_PROTOCOL_BRIDGE_SUBDIR,
+    )
+
+
 def _join_bridge_target_path(*, target_dir_text: str, file_name: str) -> str:
     if "\\" in target_dir_text and "/" not in target_dir_text:
         return str(Path(target_dir_text) / file_name)
@@ -252,9 +275,11 @@ def _join_bridge_target_path(*, target_dir_text: str, file_name: str) -> str:
 
 
 def maybe_bridge_source_path_for_protocol(*, step_input: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
-    bridge_root_text = str(os.environ.get("REGISTER_PROTOCOL_BRIDGE_DIR") or "").strip()
     source_path_text = str(step_input.get("source_path") or "").strip()
-    if not bridge_root_text or not source_path_text:
+    if not source_path_text:
+        return step_input, {}
+    bridge_root_text = _protocol_bridge_root_text_for_source(source_path_text=source_path_text)
+    if not bridge_root_text:
         return step_input, {}
 
     source_path = Path(source_path_text).expanduser()

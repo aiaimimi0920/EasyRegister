@@ -919,6 +919,51 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             self.assertEqual(str(local_source.resolve()), result["successPath"])
             self.assertIn("org_target", local_source.read_text(encoding="utf-8"))
 
+    def test_easyprotocol_source_path_defaults_to_bridge_inside_protocol_output_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            local_source = output_root / "others" / "openai-oauth-claims" / "local-claim.json"
+            local_source.parent.mkdir(parents=True, exist_ok=True)
+            local_source.write_text('{"email": "user@example.com"}', encoding="utf-8")
+            expected_bridge_dir = output_root / "easyregister-bridge"
+            captured_inputs: list[dict[str, object]] = []
+
+            def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                captured_inputs.append(dict(step_input))
+                protocol_source = Path(str(step_input["source_path"]))
+                self.assertEqual((expected_bridge_dir / local_source.name).resolve(), protocol_source.resolve())
+                self.assertTrue(protocol_source.is_file())
+                protocol_source.write_text(
+                    '{"email": "user@example.com", "organizationId": "org_default_bridge"}',
+                    encoding="utf-8",
+                )
+                return {
+                    "ok": True,
+                    "sourcePath": str(protocol_source),
+                    "successPath": str(protocol_source),
+                }
+
+            with mock.patch.object(easyprotocol_runtime, "invoke_easyprotocol", side_effect=_invoke):
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "REGISTER_PROTOCOL_BRIDGE_DIR": "",
+                        "REGISTER_PROTOCOL_BRIDGE_TARGET_DIR": "",
+                        "REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR": "",
+                        "REGISTER_PROTOCOL_OUTPUT_TARGET_DIR": str(output_root),
+                    },
+                    clear=False,
+                ):
+                    result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                        step_type="initialize_platform_organization",
+                        step_input={"source_path": str(local_source), "proxy_url": "http://proxy.local:8080"},
+                    )
+
+            self.assertEqual(1, len(captured_inputs))
+            self.assertEqual(str(local_source.resolve()), result["sourcePath"])
+            self.assertEqual(str(local_source.resolve()), result["successPath"])
+            self.assertIn("org_default_bridge", local_source.read_text(encoding="utf-8"))
+
     def test_dispatch_obtain_codex_oauth_completes_phone_verification_when_phone_wall_returned(self) -> None:
         captured_inputs: list[dict[str, object]] = []
 
