@@ -277,6 +277,25 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms24", session.provider_key)
         self.assertEqual("sms_125", session.session_id)
 
+    def test_easy_sms_client_uses_extended_timeout_for_open_session_post(self) -> None:
+        with mock.patch.object(
+            easy_sms_client,
+            "_sms_service_request",
+            return_value={"session": {}},
+        ) as request:
+            easy_sms_client._post_json("/sms/sessions/open", {"providerKey": "smstome"})
+
+        self.assertEqual(120, request.call_args.kwargs.get("timeout_seconds"))
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_sms_service_request",
+            return_value={"result": {}},
+        ) as request:
+            easy_sms_client._post_json("/sms/sessions/report-outcome", {"sessionId": "sms_1"})
+
+        self.assertEqual(30, request.call_args.kwargs.get("timeout_seconds"))
+
     def test_easy_sms_client_catalog_fallback_when_productive_selection_candidates_fail(self) -> None:
         post_payloads: list[dict[str, object]] = []
 

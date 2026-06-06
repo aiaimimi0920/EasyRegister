@@ -17,6 +17,7 @@ from typing import Any
 DEFAULT_SMS_SERVICE_READY_TIMEOUT_SECONDS = 90
 DEFAULT_SMS_SERVICE_READY_PROBE_INTERVAL_SECONDS = 2
 DEFAULT_SMS_SERVICE_REQUEST_ATTEMPTS = 3
+DEFAULT_SMS_SERVICE_OPEN_TIMEOUT_SECONDS = 120
 SUPPORTED_SMS_SELECTION_MODES = {
     "price-first",
     "success-first",
@@ -86,6 +87,17 @@ def _sms_service_request_attempts() -> int:
         return max(1, int(raw))
     except Exception:
         return DEFAULT_SMS_SERVICE_REQUEST_ATTEMPTS
+
+
+def _sms_service_open_timeout_seconds() -> int:
+    raw = str(
+        os.environ.get("SMS_SERVICE_OPEN_TIMEOUT_SECONDS")
+        or DEFAULT_SMS_SERVICE_OPEN_TIMEOUT_SECONDS
+    ).strip()
+    try:
+        return max(30, int(float(raw)))
+    except Exception:
+        return DEFAULT_SMS_SERVICE_OPEN_TIMEOUT_SECONDS
 
 
 def _build_opener() -> urllib.request.OpenerDirector:
@@ -209,7 +221,17 @@ def _sms_service_request(
 
 
 def _post_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return _sms_service_request(method="POST", path=path, payload=payload)
+    timeout_seconds = (
+        _sms_service_open_timeout_seconds()
+        if path == "/sms/sessions/open"
+        else 30
+    )
+    return _sms_service_request(
+        method="POST",
+        path=path,
+        payload=payload,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def _get_json(path: str) -> dict[str, Any]:
