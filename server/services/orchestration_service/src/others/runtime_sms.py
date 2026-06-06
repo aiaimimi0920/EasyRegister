@@ -33,6 +33,10 @@ PHONE_SCOPED_TERMINAL_CODES = {
     "wrong_otp_code",
 }
 PROVIDER_TERMINAL_OUTCOMES_KEY = "providerTerminalOutcomes"
+SMS_DYNAMIC_PROVIDER_BLACKLIST_RELAXATION_ERRORS = (
+    "sms_no_productive_selection_plan_candidates",
+    "sms_no_selection_plan_candidates",
+)
 
 
 def _sms_runtime_config() -> SmsRuntimeConfig:
@@ -229,6 +233,14 @@ def _resolve_sms_session_local_retry_attempts() -> int:
         return DEFAULT_SMS_SESSION_LOCAL_RETRY_ATTEMPTS
 
 
+def _dynamic_provider_blacklist_relaxation_reason(exc: BaseException) -> str:
+    message = str(exc or "")
+    for marker in SMS_DYNAMIC_PROVIDER_BLACKLIST_RELAXATION_ERRORS:
+        if marker in message:
+            return marker
+    return ""
+
+
 def _match_phone_country_code(*, phone_number: str, country_codes: tuple[str, ...]) -> str:
     normalized_phone = str(phone_number or "").strip()
     if not normalized_phone:
@@ -413,10 +425,11 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
             )
         except Exception as exc:
             last_open_error = exc
+            dynamic_relaxation_reason = _dynamic_provider_blacklist_relaxation_reason(exc)
             if (
                 not relaxed_dynamic_provider_blacklist
                 and dynamic_blocked_providers
-                and "sms_no_productive_selection_plan_candidates" in str(exc)
+                and dynamic_relaxation_reason
             ):
                 relaxed_dynamic_provider_blacklist = True
                 attempt_provider_blacklist = static_blocked_providers | hard_blocked_providers
@@ -426,7 +439,7 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
                         "blockedProviderCount": len(dynamic_blocked_providers),
                         "hardProviderBlockCount": len(hard_blocked_providers),
                         "staticProviderBlockCount": len(static_blocked_providers),
-                        "reason": "sms_no_productive_selection_plan_candidates",
+                        "reason": dynamic_relaxation_reason,
                     }
                 )
             continue
