@@ -280,7 +280,7 @@ def _query_provider_selection_candidates_with_seen(
     provider_blacklist: tuple[str, ...],
     allow_paid: bool,
     country_codes: tuple[str, ...],
-) -> tuple[list[str], set[str]]:
+) -> tuple[list[str], set[str], set[str]]:
     query = {
         "costTier": "paid" if allow_paid else "free",
         "limit": "20",
@@ -298,10 +298,12 @@ def _query_provider_selection_candidates_with_seen(
                 allow_paid=allow_paid,
             ),
             set(),
+            set(),
         )
     raw_candidates = plan_response.get("candidates") or []
     candidates: list[str] = []
     seen_provider_keys: set[str] = set()
+    unavailable_provider_keys: set[str] = set()
     blacklist = {str(item or "").strip().lower() for item in provider_blacklist if str(item or "").strip()}
     for raw_candidate in raw_candidates:
         if not isinstance(raw_candidate, dict):
@@ -310,6 +312,8 @@ def _query_provider_selection_candidates_with_seen(
         if not provider_key:
             continue
         seen_provider_keys.add(provider_key)
+        if raw_candidate.get("available") is False:
+            unavailable_provider_keys.add(provider_key)
         if provider_key in blacklist:
             continue
         if raw_candidate.get("available") is False:
@@ -318,7 +322,7 @@ def _query_provider_selection_candidates_with_seen(
         if health_state in UNPRODUCTIVE_SELECTION_HEALTH_STATES:
             continue
         candidates.append(provider_key)
-    return candidates, seen_provider_keys
+    return candidates, seen_provider_keys, unavailable_provider_keys
 
 
 def _query_provider_selection_candidates(
@@ -327,7 +331,7 @@ def _query_provider_selection_candidates(
     allow_paid: bool,
     country_codes: tuple[str, ...],
 ) -> list[str]:
-    candidates, _seen_provider_keys = _query_provider_selection_candidates_with_seen(
+    candidates, _seen_provider_keys, _unavailable_provider_keys = _query_provider_selection_candidates_with_seen(
         provider_blacklist=provider_blacklist,
         allow_paid=allow_paid,
         country_codes=country_codes,
@@ -414,7 +418,11 @@ def open_sms_session(
     provider_country_blacklist: tuple[str, ...] = (),
 ) -> SmsSession:
     _wait_sms_service_ready()
-    selection_plan_candidates, selection_plan_seen_provider_keys = _query_provider_selection_candidates_with_seen(
+    (
+        selection_plan_candidates,
+        selection_plan_seen_provider_keys,
+        selection_plan_unavailable_provider_keys,
+    ) = _query_provider_selection_candidates_with_seen(
         provider_blacklist=provider_blacklist,
         allow_paid=allow_paid,
         country_codes=country_codes,
@@ -436,6 +444,7 @@ def open_sms_session(
             candidate_provider_keys = _query_provider_catalog_candidates(
                 provider_blacklist=provider_blacklist,
                 allow_paid=allow_paid,
+                exclude_provider_keys=tuple(sorted(selection_plan_unavailable_provider_keys)),
             )
     if not candidate_provider_keys:
         raise RuntimeError("sms_no_selection_plan_candidates")
@@ -521,6 +530,7 @@ def open_sms_session(
             fallback_provider_keys = _query_provider_catalog_candidates(
                 provider_blacklist=tuple(sorted(set(provider_blacklist) | set(candidate_provider_keys))),
                 allow_paid=allow_paid,
+                exclude_provider_keys=tuple(sorted(selection_plan_unavailable_provider_keys)),
             )
         if fallback_provider_keys:
             selected_session = _try_provider_candidates(fallback_provider_keys)

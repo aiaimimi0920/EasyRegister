@@ -591,6 +591,68 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual(["yunduanxin", "receive_sms_free_cc"], [payload["providerKey"] for payload in post_payloads])
         self.assertEqual("sms_126", session.session_id)
 
+    def test_easy_sms_client_does_not_reopen_unproductive_selection_plan_providers_from_catalog(self) -> None:
+        post_payloads: list[dict[str, object]] = []
+
+        def _get(path: str) -> dict[str, object]:
+            if path.startswith("/sms/query/providers/selection-plan?"):
+                return {
+                    "candidates": [
+                        {"providerKey": "onlinesim", "available": True, "healthState": "healthy"},
+                        {"providerKey": "receive_smss", "available": True, "healthState": "healthy"},
+                        {"providerKey": "yunduanxin", "available": False, "healthState": "empty"},
+                    ]
+                }
+            if path.startswith("/sms/query/providers?"):
+                return {
+                    "providers": [
+                        {"key": "onlinesim"},
+                        {"key": "receive_smss"},
+                        {"key": "yunduanxin"},
+                    ]
+                }
+            return {}
+
+        def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            post_payloads.append(dict(payload))
+            provider_key = str(payload.get("providerKey") or "")
+            if provider_key == "yunduanxin":
+                raise AssertionError("empty selection-plan provider should not be reopened from catalog")
+            raise RuntimeError(
+                f'sms service POST /sms/sessions/open failed: HTTP 503 '
+                f'[code=Provider "{provider_key}" is currently unavailable: '
+                f'No eligible public numbers were available for a synthetic activation session.]'
+            )
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            side_effect=_get,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=_post,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "No eligible public numbers"):
+                easy_sms_client.open_sms_session(
+                    business_key="openai",
+                    provider_blacklist=(),
+                    allow_paid=False,
+                    allow_reuse=False,
+                    max_bindings_per_phone=1,
+                    country_codes=("+1",),
+                    selection_mode="balanced",
+                )
+
+        self.assertEqual(
+            ["onlinesim", "receive_smss"],
+            [payload["providerKey"] for payload in post_payloads],
+        )
+
     def test_easy_sms_client_rotates_country_codes_when_phone_is_blacklisted(self) -> None:
         post_payloads: list[dict[str, object]] = []
         reported_outcomes: list[dict[str, object]] = []
