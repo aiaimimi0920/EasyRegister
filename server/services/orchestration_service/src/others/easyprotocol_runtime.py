@@ -30,6 +30,12 @@ PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
     "rate_limit_exceeded",
     "wrong_otp_code",
 }
+PHONE_VERIFICATION_SUBMIT_EXCEPTION_TERMINAL_MARKERS = (
+    ("invalid_phone_number", ("invalid_phone_number", "invalid phone number")),
+    ("phone_number_in_use", ("phone_number_in_use", "already used", "already in use", "number in use")),
+    ("phone_max_usage_exceeded", ("phone_max_usage_exceeded", "max usage", "maximum usage")),
+    ("rate_limit_exceeded", ("rate_limit_exceeded", "rate limit", "too many phone verification")),
+)
 PHONE_WALL_RECOVERY_ERROR_MARKERS = (
     "flow_timeout_exceeded",
     "timed out",
@@ -89,6 +95,16 @@ def phone_verification_terminal_retry_attempts() -> int:
 
 def _is_retryable_phone_terminal_code(terminal_code: str) -> bool:
     return str(terminal_code or "").strip().lower() in PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES
+
+
+def _phone_submit_terminal_code_from_exception(exc: BaseException) -> str:
+    message = str(exc or "").strip().lower()
+    if not message:
+        return ""
+    for terminal_code, markers in PHONE_VERIFICATION_SUBMIT_EXCEPTION_TERMINAL_MARKERS:
+        if any(marker in message for marker in markers):
+            return terminal_code
+    return ""
 
 
 def _is_retryable_phone_code_submission_error(exc: BaseException) -> bool:
@@ -679,6 +695,47 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
                 outcome="failure",
                 detail=str(exc),
             )
+            if not phone_number_submitted and phone_failure_stage == "submit_phone_verification_number":
+                terminal_code = _phone_submit_terminal_code_from_exception(exc)
+                if terminal_code:
+                    runtime_sms.record_terminal_phone_outcome(
+                        phone_number=phone_session["phoneNumber"],
+                        provider_key=phone_session["providerKey"],
+                        terminal_code=terminal_code,
+                        terminal_message=str(exc),
+                    )
+                    if (
+                        _is_retryable_phone_terminal_code(terminal_code)
+                        and phone_attempt_index + 1 < max_phone_attempts
+                    ):
+                        continue
+                    return {
+                        "ok": True,
+                        "status": "phone_verification_terminal",
+                        "successPath": str(
+                            initial_result.get("successPath")
+                            or initial_result.get("sourcePath")
+                            or step_input.get("source_path")
+                            or ""
+                        ).strip(),
+                        "sourcePath": str(
+                            step_input.get("source_path")
+                            or initial_result.get("sourcePath")
+                            or initial_result.get("successPath")
+                            or ""
+                        ).strip(),
+                        "pageType": str((resume_context or {}).get("pageType") or "").strip() or "add_phone",
+                        "resumeContext": dict(resume_context),
+                        "phoneVerificationAttempted": True,
+                        "phoneVerificationSubmitted": False,
+                        "phoneVerificationAccepted": False,
+                        "phoneVerificationTerminal": True,
+                        "phoneVerificationTerminalCode": terminal_code,
+                        "phoneVerificationTerminalMessage": str(exc),
+                        "phoneProvider": phone_session["providerKey"],
+                        "phoneSessionId": phone_session["sessionId"],
+                        "phoneNumber": phone_session["phoneNumber"],
+                    }
             if (
                 phone_number_submitted
                 and phone_failure_stage == "wait_sms_code"
