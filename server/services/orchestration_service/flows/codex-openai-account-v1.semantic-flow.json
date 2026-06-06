@@ -105,8 +105,8 @@
         "input": {
           "source_path": "{{create_openai_account.storage_path}}",
           "proxy_url": "{{proxy_chain.proxy_url}}",
-          "organization_name": "personal",
-          "organization_title": "personal",
+          "organization_name": "Personal",
+          "organization_title": "Personal",
           "developer_persona": "student"
         },
         "saveAs": "initialize_platform_organization",
