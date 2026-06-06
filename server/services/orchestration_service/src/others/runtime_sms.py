@@ -27,10 +27,12 @@ PHONE_SCOPED_TERMINAL_CODES = {
     "phone_number_in_use",
     "phone_max_usage_exceeded",
     "rate_limit_exceeded",
+    "wrong_otp_code",
+}
+SOFT_SMS_TERMINAL_CODES = {
     "sms_code_timeout",
     "wait_code_timeout",
     "wait_sms_code_timeout",
-    "wrong_otp_code",
 }
 PROVIDER_TERMINAL_OUTCOMES_KEY = "providerTerminalOutcomes"
 SMS_DYNAMIC_PROVIDER_BLACKLIST_RELAXATION_ERRORS = (
@@ -82,6 +84,10 @@ def _is_phone_scoped_terminal_code(terminal_code: str) -> bool:
     return str(terminal_code or "").strip().lower() in PHONE_SCOPED_TERMINAL_CODES
 
 
+def _is_soft_sms_terminal_code(terminal_code: str) -> bool:
+    return str(terminal_code or "").strip().lower() in SOFT_SMS_TERMINAL_CODES
+
+
 def _parse_iso_timestamp(value: Any) -> float | None:
     text = str(value or "").strip()
     if not text:
@@ -105,6 +111,9 @@ def _prune_sms_state(*, payload: dict[str, Any], now_ts: float | None = None) ->
         for raw_key, raw_value in bucket.items():
             key = str(raw_key or "").strip()
             if not key or not isinstance(raw_value, dict):
+                continue
+            reason = str(raw_value.get("reason") or "").strip()
+            if bucket_key == "phones" and not _is_phone_scoped_terminal_code(reason):
                 continue
             if bucket_key == "providers" and _is_phone_scoped_terminal_code(str(raw_value.get("reason") or "")):
                 continue
@@ -296,7 +305,8 @@ def record_terminal_phone_outcome(
     config = _sms_runtime_config()
     payload = _prune_sms_state(payload=_load_sms_state(config=config))
     now = datetime.now(timezone.utc)
-    if normalized_phone:
+    phone_block_recorded = False
+    if normalized_phone and _is_phone_scoped_terminal_code(normalized_code):
         phone_until = now + timedelta(seconds=_resolve_sms_terminal_phone_blacklist_seconds())
         payload.setdefault("phones", {})[normalized_phone] = {
             "reason": normalized_code,
@@ -306,6 +316,7 @@ def record_terminal_phone_outcome(
             "blockedUntil": phone_until.isoformat().replace("+00:00", "Z"),
             "blockedUntilTs": phone_until.timestamp(),
         }
+        phone_block_recorded = True
     if normalized_provider and _is_phone_scoped_terminal_code(normalized_code):
         provider_outcomes = payload.setdefault(PROVIDER_TERMINAL_OUTCOMES_KEY, {})
         entries = provider_outcomes.setdefault(normalized_provider, [])
@@ -339,7 +350,11 @@ def record_terminal_phone_outcome(
                 "blockedUntilTs": provider_until.timestamp(),
                 "terminalFailureCount": len(entries),
             }
-    elif normalized_provider and not _is_phone_scoped_terminal_code(normalized_code):
+    elif (
+        normalized_provider
+        and not _is_phone_scoped_terminal_code(normalized_code)
+        and not _is_soft_sms_terminal_code(normalized_code)
+    ):
         provider_until = now + timedelta(seconds=_resolve_sms_terminal_provider_blacklist_seconds())
         payload.setdefault("providers", {})[normalized_provider] = {
             "reason": normalized_code,
@@ -360,8 +375,9 @@ def record_terminal_phone_outcome(
             "event": "register_sms_terminal_phone_outcome_recorded",
             "providerKey": normalized_provider,
             "terminalCode": normalized_code,
-            "phoneRecorded": bool(normalized_phone),
+            "phoneRecorded": phone_block_recorded,
             "phoneScoped": _is_phone_scoped_terminal_code(normalized_code),
+            "softTerminal": _is_soft_sms_terminal_code(normalized_code),
             "providerBlocked": bool(provider_block),
             "providerBlockReason": (
                 str(provider_block.get("reason") or "").strip()

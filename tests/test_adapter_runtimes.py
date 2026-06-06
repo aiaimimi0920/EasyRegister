@@ -1989,7 +1989,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                                 "blockedUntilTs": 9999999999,
                                 "blockedAt": "2026-01-01T00:00:00Z",
                                 "providerKey": "smstome",
-                                "reason": "sms_code_timeout",
+                                "reason": "phone_max_usage_exceeded",
                             },
                             "+15550000002": {
                                 "blockedUntilTs": 9999999999,
@@ -2068,7 +2068,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                                 "blockedUntilTs": 9999999999,
                                 "blockedAt": "2026-01-01T00:00:00Z",
                                 "providerKey": "receive_smss",
-                                "reason": "sms_code_timeout",
+                                "reason": "phone_max_usage_exceeded",
                             },
                             "+15550000002": {
                                 "blockedUntilTs": 9999999999,
@@ -2257,7 +2257,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("wrong_otp_code", payload["phones"]["+15550000004"]["reason"])
         self.assertNotIn("freepool", payload["providers"])
 
-    def test_record_terminal_phone_outcome_keeps_sms_code_timeout_phone_scoped(self) -> None:
+    def test_record_terminal_phone_outcome_keeps_sms_code_timeout_soft(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
 
@@ -2279,8 +2279,30 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
             payload = json.loads(state_path.read_text(encoding="utf-8"))
 
-        self.assertEqual("sms_code_timeout", payload["phones"]["+15550000005"]["reason"])
+        self.assertNotIn("+15550000005", payload["phones"])
         self.assertNotIn("freepool", payload["providers"])
+
+    def test_prune_sms_state_removes_legacy_sms_code_timeout_phone_blocks(self) -> None:
+        payload = runtime_sms._prune_sms_state(
+            payload={
+                "phones": {
+                    "+15550000005": {
+                        "blockedUntilTs": 9999999999,
+                        "providerKey": "freepool",
+                        "reason": "sms_code_timeout",
+                    },
+                    "+15550000006": {
+                        "blockedUntilTs": 9999999999,
+                        "providerKey": "freepool",
+                        "reason": "phone_number_in_use",
+                    },
+                }
+            },
+            now_ts=1,
+        )
+
+        self.assertNotIn("+15550000005", payload["phones"])
+        self.assertIn("+15550000006", payload["phones"])
 
     def test_record_terminal_phone_outcome_emits_sanitized_summary_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
