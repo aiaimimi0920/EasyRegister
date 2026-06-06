@@ -34,7 +34,7 @@ PHONE_VERIFICATION_SUBMIT_EXCEPTION_TERMINAL_MARKERS = (
     ("invalid_phone_number", ("invalid_phone_number", "invalid phone number")),
     ("phone_number_in_use", ("phone_number_in_use", "already used", "already in use", "number in use")),
     ("phone_max_usage_exceeded", ("phone_max_usage_exceeded", "max usage", "maximum usage")),
-    ("rate_limit_exceeded", ("rate_limit_exceeded", "rate limit", "too many phone verification")),
+    ("rate_limit_exceeded", ("rate_limit_exceeded", "rate limit", "too many phone verification", "429")),
 )
 PHONE_WALL_RECOVERY_ERROR_MARKERS = (
     "flow_timeout_exceeded",
