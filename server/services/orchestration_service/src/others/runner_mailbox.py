@@ -239,6 +239,16 @@ def mailbox_email_otp_provider_failure_blacklist_threshold() -> int:
     return max(0, env_int("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD", 3))
 
 
+def mailbox_provider_consecutive_failure_blacklist_threshold() -> int:
+    return max(
+        0,
+        env_int(
+            "REGISTER_MAILBOX_PROVIDER_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD",
+            mailbox_email_otp_provider_failure_blacklist_threshold(),
+        ),
+    )
+
+
 def mailbox_provider_blacklist_recovery_min_successes() -> int:
     return max(
         0,
@@ -271,6 +281,18 @@ def mailbox_failure_reason_total(failure_reasons: Any, reasons: set[str]) -> int
     return total
 
 
+def mailbox_failure_reason_total_any(failure_reasons: Any) -> int:
+    if not isinstance(failure_reasons, dict):
+        return 0
+    total = 0
+    for value in failure_reasons.values():
+        try:
+            total += max(0, int(value or 0))
+        except Exception:
+            continue
+    return total
+
+
 def mailbox_provider_dynamic_blacklist_recovery_qualified(
     *,
     attempts: int,
@@ -286,6 +308,13 @@ def mailbox_provider_dynamic_blacklist_recovery_qualified(
         return False
     if mailbox_failure_reason_total(failure_reasons, STRONG_MAILBOX_FAILURE_REASONS) > 0:
         return False
+    provider_consecutive_threshold = mailbox_provider_consecutive_failure_blacklist_threshold()
+    if provider_consecutive_threshold > 0:
+        if (
+            max(0, int(consecutive_failures or 0)) >= provider_consecutive_threshold
+            and mailbox_failure_reason_total_any(failure_reasons) >= provider_consecutive_threshold
+        ):
+            return False
     provider_otp_threshold = mailbox_email_otp_provider_failure_blacklist_threshold()
     if provider_otp_threshold > 0:
         if (
@@ -504,6 +533,20 @@ def mailbox_failure_rate_reaches_blacklist_threshold(
         return False
     failure_rate = (float(normalized_failures) / float(normalized_attempts)) * 100.0 if normalized_attempts else 0.0
     return failure_rate >= float(failure_rate_threshold or 0.0)
+
+
+def mailbox_provider_consecutive_failures_reaches_blacklist_threshold(
+    *,
+    consecutive_failures: int,
+    failure_reasons: Any,
+) -> bool:
+    threshold = mailbox_provider_consecutive_failure_blacklist_threshold()
+    if threshold <= 0:
+        return False
+    return (
+        max(0, int(consecutive_failures or 0)) >= threshold
+        and mailbox_failure_reason_total_any(failure_reasons) >= threshold
+    )
 
 
 def mailbox_provider_from_ref(mailbox_ref: str) -> str:
@@ -1019,6 +1062,14 @@ def record_business_mailbox_domain_outcome(
                 failure_rate_threshold=failure_rate_threshold,
             ):
                 provider_blacklist_reason = "provider_failure_rate_threshold"
+            elif (
+                not provider_recovery_qualified
+                and mailbox_provider_consecutive_failures_reaches_blacklist_threshold(
+                    consecutive_failures=provider_consecutive_failures,
+                    failure_reasons=provider_failure_reasons,
+                )
+            ):
+                provider_blacklist_reason = "provider_consecutive_failures_threshold"
         provider_blacklisted = False if ok or provider_recovery_qualified else prior_provider_blacklisted or bool(provider_blacklist_reason)
         provider_blacklist_reason = "" if ok or provider_recovery_qualified else provider_blacklist_reason or prior_provider_blacklist_reason
         providers[provider] = {

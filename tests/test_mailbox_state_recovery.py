@@ -215,6 +215,41 @@ class MailboxStateRecoveryTests(unittest.TestCase):
         self.assertEqual(0, summary["recoveredEntries"])
         self.assertEqual(1, summary["preservedProviderRiskEntries"])
 
+    def test_recover_payload_preserves_high_success_provider_with_recent_generic_streak(self) -> None:
+        recovery = _load_recovery_module()
+        payload = {
+            "schemaVersion": 3,
+            "businesses": {
+                "openai": {
+                    "domains": {},
+                    "providers": {
+                        "cloudflare_temp_email": {
+                            "attempts": 100,
+                            "successes": 50,
+                            "failures": 50,
+                            "consecutiveFailures": 12,
+                            "failureRate": 50.0,
+                            "blacklisted": True,
+                            "blacklistReason": "provider_failure_rate_threshold",
+                            "failureReasons": {
+                                "create_account_user_register_400": 12,
+                            },
+                        }
+                    },
+                }
+            },
+        }
+
+        summary = recovery.recover_payload(payload, business_keys=("openai",))
+
+        provider = payload["businesses"]["openai"]["providers"]["cloudflare_temp_email"]
+        self.assertTrue(provider["blacklisted"])
+        self.assertEqual("provider_failure_rate_threshold", provider["blacklistReason"])
+        self.assertEqual({"create_account_user_register_400": 12}, provider["failureReasons"])
+        self.assertNotIn("suppressedFailureReasons", provider)
+        self.assertEqual(0, summary["recoveredEntries"])
+        self.assertEqual(1, summary["preservedProviderRiskEntries"])
+
     def test_apply_recovery_writes_backup_and_updates_state(self) -> None:
         recovery = _load_recovery_module()
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -15,6 +15,7 @@ TRANSIENT_BLACKLIST_REASONS = {
     "provider_email_otp_failure_threshold",
     "failure_rate_threshold",
     "provider_failure_rate_threshold",
+    "provider_consecutive_failures_threshold",
     "consecutive_failures_threshold",
 }
 STRONG_BLACKLIST_REASONS = {
@@ -70,6 +71,16 @@ def _entry_int(entry: dict[str, Any], key: str) -> int:
         return 0
 
 
+def _count_total(values: dict[str, Any]) -> int:
+    total = 0
+    for value in values.values():
+        try:
+            total += max(0, int(value or 0))
+        except Exception:
+            continue
+    return total
+
+
 def _provider_blacklist_recovery_max_consecutive_otp_failures() -> int:
     raw = str(
         os.environ.get("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD")
@@ -91,11 +102,7 @@ def _preserve_provider_risk(entry: dict[str, Any]) -> bool:
     if (
         max_consecutive_otp_failures > 0
         and consecutive_failures >= max_consecutive_otp_failures
-        and sum(
-            _entry_int(failure_reasons, reason)
-            for reason in THRESHOLD_REEVALUATED_FAILURE_REASONS
-        )
-        >= max_consecutive_otp_failures
+        and _count_total(failure_reasons) >= max_consecutive_otp_failures
     ):
         return True
     if attempts < PROVIDER_RISK_MIN_ATTEMPTS or successes > 0:

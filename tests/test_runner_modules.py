@@ -2093,6 +2093,82 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("provider_email_otp_failure_threshold", provider_stats["blacklistReason"])
             self.assertEqual(12, provider_stats["consecutiveFailures"])
 
+    def test_record_business_mailbox_domain_outcome_blacklists_high_success_provider_after_recent_generic_streak(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            state_path = shared_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "providers": {
+                                    "cloudflare_temp_email": {
+                                        "attempts": 229,
+                                        "successes": 27,
+                                        "failures": 202,
+                                        "consecutiveFailures": 11,
+                                        "failureReasons": {"create_account_user_register_400": 11},
+                                        "failureRate": 88.2,
+                                        "blacklisted": False,
+                                        "blacklistReason": "",
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload = {
+                "ok": False,
+                "errorStep": "create-openai-account",
+                "steps": {"acquire-mailbox": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "user@ok.test",
+                        "provider": "cloudflare_temp_email",
+                        "business_key": "openai",
+                    }
+                },
+                "stepErrors": {
+                    "create-openai-account": {
+                        "code": "user_register_400",
+                        "message": "create_account user_register_400 [mailbox_provider=cloudflare_temp_email]",
+                    }
+                },
+            }
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD": "6",
+                    "REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD": "12",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS": "50",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE": "95",
+                    "REGISTER_MAILBOX_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES": "10",
+                    "REGISTER_MAILBOX_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE": "20",
+                },
+                clear=True,
+            ):
+                outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
+
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            self.assertEqual("provider_consecutive_failures_threshold", outcome["providerBlacklistReason"])
+            self.assertTrue(outcome["providerBlacklisted"])
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            provider_stats = state_payload["businesses"]["openai"]["providers"]["cloudflare_temp_email"]
+            self.assertTrue(provider_stats["blacklisted"])
+            self.assertEqual("provider_consecutive_failures_threshold", provider_stats["blacklistReason"])
+            self.assertEqual(12, provider_stats["consecutiveFailures"])
+
     def test_record_business_mailbox_domain_outcome_aggregates_email_otp_failure_reasons_for_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"
