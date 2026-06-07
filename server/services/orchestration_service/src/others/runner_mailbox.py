@@ -22,6 +22,11 @@ from shared_mailbox.easy_email_client import report_mailbox_outcome
 MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
 EMAIL_OTP_FAILURE_REASONS = {"email_otp_timeout", "email_otp_wrong_code"}
 STRONG_MAILBOX_FAILURE_REASONS = {"unsupported_email", "registration_disallowed"}
+PROVIDER_CONSECUTIVE_BLACKLIST_FAILURE_REASONS = (
+    EMAIL_OTP_FAILURE_REASONS
+    | STRONG_MAILBOX_FAILURE_REASONS
+    | {"create_account_user_register_400"}
+)
 DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES = 10
 DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE = 20.0
 MAILBOX_OUTCOME_REPORT_REASONS = {
@@ -293,6 +298,10 @@ def mailbox_failure_reason_total_any(failure_reasons: Any) -> int:
     return total
 
 
+def mailbox_provider_consecutive_blacklist_failure_total(failure_reasons: Any) -> int:
+    return mailbox_failure_reason_total(failure_reasons, PROVIDER_CONSECUTIVE_BLACKLIST_FAILURE_REASONS)
+
+
 def mailbox_provider_dynamic_blacklist_recovery_qualified(
     *,
     attempts: int,
@@ -312,7 +321,7 @@ def mailbox_provider_dynamic_blacklist_recovery_qualified(
     if provider_consecutive_threshold > 0:
         if (
             max(0, int(consecutive_failures or 0)) >= provider_consecutive_threshold
-            and mailbox_failure_reason_total_any(failure_reasons) >= provider_consecutive_threshold
+            and mailbox_provider_consecutive_blacklist_failure_total(failure_reasons) >= provider_consecutive_threshold
         ):
             return False
     provider_otp_threshold = mailbox_email_otp_provider_failure_blacklist_threshold()
@@ -545,7 +554,7 @@ def mailbox_provider_consecutive_failures_reaches_blacklist_threshold(
         return False
     return (
         max(0, int(consecutive_failures or 0)) >= threshold
-        and mailbox_failure_reason_total_any(failure_reasons) >= threshold
+        and mailbox_provider_consecutive_blacklist_failure_total(failure_reasons) >= threshold
     )
 
 

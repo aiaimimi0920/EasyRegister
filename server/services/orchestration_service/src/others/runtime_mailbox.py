@@ -43,6 +43,11 @@ DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE = 20.0
 MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
 EMAIL_OTP_FAILURE_REASONS = {"email_otp_timeout", "email_otp_wrong_code"}
 STRONG_MAILBOX_FAILURE_REASONS = {"unsupported_email", "registration_disallowed"}
+PROVIDER_CONSECUTIVE_BLACKLIST_FAILURE_REASONS = (
+    EMAIL_OTP_FAILURE_REASONS
+    | STRONG_MAILBOX_FAILURE_REASONS
+    | {"create_account_user_register_400"}
+)
 _MAILBOX_DEFAULT_POLICY_KEYS = {"default", "*", "__default__"}
 
 
@@ -305,6 +310,13 @@ def _mailbox_failure_reason_total_any(failure_reasons: Any) -> int:
     return total
 
 
+def _mailbox_provider_consecutive_blacklist_failure_total(failure_reasons: Any) -> int:
+    return _mailbox_failure_reason_total(
+        failure_reasons,
+        PROVIDER_CONSECUTIVE_BLACKLIST_FAILURE_REASONS,
+    )
+
+
 def _mailbox_provider_dynamic_blacklist_recovery_qualified(stats: dict[str, Any]) -> bool:
     blacklist_reason = str(stats.get("blacklistReason") or "").strip().lower()
     if blacklist_reason in STRONG_MAILBOX_FAILURE_REASONS:
@@ -320,7 +332,7 @@ def _mailbox_provider_dynamic_blacklist_recovery_qualified(stats: dict[str, Any]
             consecutive_failures = 0
         if (
             consecutive_failures >= provider_consecutive_threshold
-            and _mailbox_failure_reason_total_any(failure_reasons) >= provider_consecutive_threshold
+            and _mailbox_provider_consecutive_blacklist_failure_total(failure_reasons) >= provider_consecutive_threshold
         ):
             return False
     provider_otp_threshold = _resolve_mailbox_email_otp_provider_failure_blacklist_threshold()
@@ -443,7 +455,10 @@ def _mailbox_provider_consecutive_failures_reaches_blacklist_threshold(stats: di
         consecutive_failures = max(0, int(stats.get("consecutiveFailures") or 0))
     except Exception:
         return False
-    return consecutive_failures >= threshold and _mailbox_failure_reason_total_any(stats.get("failureReasons")) >= threshold
+    return (
+        consecutive_failures >= threshold
+        and _mailbox_provider_consecutive_blacklist_failure_total(stats.get("failureReasons")) >= threshold
+    )
 
 
 def _mailbox_provider_is_business_blacklisted(provider: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> bool:
