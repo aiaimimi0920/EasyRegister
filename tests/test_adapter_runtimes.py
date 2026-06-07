@@ -3387,6 +3387,52 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("654321", code)
         snapshot_code.assert_called_once_with(session_id="mailbox_123", min_mail_id=0)
 
+    def test_wait_openai_code_accepts_code_equal_to_auto_floor(self) -> None:
+        code_payload = {
+            "code": "654321",
+            "receivedAt": "1970-01-01T00:02:03+00:00",
+        }
+        with mock.patch.object(
+            easy_email_client,
+            "_resolve_openai_code_floor",
+            return_value=123,
+        ), mock.patch.object(
+            easy_email_client,
+            "_get_json",
+            return_value={"code": code_payload},
+        ), mock.patch.object(
+            easy_email_client,
+            "_snapshot_session_openai_code",
+            return_value=("", 0),
+        ), mock.patch.object(
+            easy_email_client,
+            "_mail_service_base_url",
+            return_value="http://easy-email:8080",
+        ), mock.patch.object(
+            easy_email_client,
+            "_probe_mail_service",
+            return_value="ok:200",
+        ), mock.patch.object(
+            easy_email_client.time,
+            "time",
+            side_effect=[0, 0, 0, 11],
+        ), mock.patch.object(
+            easy_email_client.time,
+            "sleep",
+            return_value=None,
+        ), mock.patch.dict(
+            os.environ,
+            {"MAILBOX_POLL_INTERVAL_SECONDS": "1"},
+            clear=False,
+        ):
+            code = easy_email_client.wait_openai_code(
+                mailbox_ref="moemail:mailbox_123",
+                session_id="mailbox_123",
+                timeout_seconds=10,
+            )
+
+        self.assertEqual("654321", code)
+
     def test_release_mailbox_client_treats_missing_session_as_not_found(self) -> None:
         with mock.patch.object(
             easy_email_client,

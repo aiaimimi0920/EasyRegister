@@ -363,7 +363,12 @@ def _extract_openai_code_from_message(message: dict | None) -> str:
     return ""
 
 
-def _snapshot_session_openai_code(*, session_id: str, min_mail_id: int) -> tuple[str, int]:
+def _snapshot_session_openai_code(
+    *,
+    session_id: str,
+    min_mail_id: int,
+    allow_min_mail_id_equal: bool = False,
+) -> tuple[str, int]:
     response = _get_json("/mail/snapshot")
     snapshot = response.get("snapshot") if isinstance(response.get("snapshot"), dict) else response.get("result")
     root = snapshot if isinstance(snapshot, dict) else response
@@ -381,8 +386,12 @@ def _snapshot_session_openai_code(*, session_id: str, min_mail_id: int) -> tuple
             _parse_mail_timestamp(str(item.get("observedAt") or "")),
             _parse_mail_timestamp(str(item.get("receivedAt") or "")),
         )
-        if int(min_mail_id or 0) > 0 and marker <= int(min_mail_id or 0):
-            continue
+        floor = int(min_mail_id or 0)
+        if floor > 0:
+            if marker < floor:
+                continue
+            if marker == floor and not allow_min_mail_id_equal:
+                continue
         code = _extract_openai_code_from_message(item)
         if not code:
             continue
@@ -938,11 +947,13 @@ def wait_openai_code(
 
     # Default to the newest message already present in this mailbox session so
     # we do not accidentally reuse a stale OTP from a prior request.
+    requested_min_mail_id = max(0, int(min_mail_id or 0))
     code_floor = _resolve_openai_code_floor(
         mailbox_ref=ref,
         session_id=effective_session_id,
-        min_mail_id=int(min_mail_id or 0),
+        min_mail_id=requested_min_mail_id,
     )
+    allow_auto_floor_equal = requested_min_mail_id <= 0 and code_floor > 0
 
     try:
         base_url = _mail_service_base_url()
@@ -976,7 +987,11 @@ def wait_openai_code(
             if isinstance(code_obj, dict):
                 code = _select_openai_verification_code(code_obj)
                 code_marker = _mail_dispatch_code_marker(code_obj)
-                if code and (code_floor <= 0 or code_marker > code_floor):
+                if code and (
+                    code_floor <= 0
+                    or code_marker > code_floor
+                    or (allow_auto_floor_equal and code_marker == code_floor)
+                ):
                     print(
                         "[mailbox] wait_openai_code received "
                         f"session_id={effective_session_id} code_len={len(code)} code_marker={code_marker}"
@@ -988,10 +1003,13 @@ def wait_openai_code(
         if code_endpoint_failed or time.time() - last_snapshot_probe_at >= snapshot_probe_every:
             last_snapshot_probe_at = time.time()
             try:
-                snapshot_code, snapshot_marker = _snapshot_session_openai_code(
-                    session_id=effective_session_id,
-                    min_mail_id=code_floor,
-                )
+                snapshot_kwargs = {
+                    "session_id": effective_session_id,
+                    "min_mail_id": code_floor,
+                }
+                if allow_auto_floor_equal:
+                    snapshot_kwargs["allow_min_mail_id_equal"] = True
+                snapshot_code, snapshot_marker = _snapshot_session_openai_code(**snapshot_kwargs)
                 if snapshot_code:
                     print(
                         "[mailbox] wait_openai_code snapshot_fallback "
