@@ -4667,6 +4667,67 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("auto", create_kwargs[0].get("provider"))
         self.assertNotIn("mailcreate_domain", create_kwargs[0])
 
+    def test_resolve_mailbox_auto_fallback_excludes_moemail_when_business_domain_pool_exists(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="mailtm",
+            email="candidate@safe-mail.test",
+            ref="mailtm:session",
+            session_id="session",
+        )
+        create_kwargs: list[dict[str, object]] = []
+
+        def _create_mailbox(**kwargs):
+            create_kwargs.append(dict(kwargs))
+            return mailbox
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"domainPool":["zhooo.org"],'
+                        '"explicitBlacklistDomains":["coolkid.icu"]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                with mock.patch.object(
+                    runtime_mailbox,
+                    "_resolve_planned_mailbox_provider",
+                    return_value="mailtm",
+                ):
+                    with mock.patch.object(
+                        runtime_mailbox,
+                        "create_mailbox",
+                        side_effect=_create_mailbox,
+                    ):
+                        resolved = runtime_mailbox.resolve_mailbox(
+                            preallocated_email=None,
+                            preallocated_session_id=None,
+                            preallocated_mailbox_ref=None,
+                            business_key="openai",
+                        )
+
+        self.assertEqual("candidate@safe-mail.test", resolved.email)
+        self.assertEqual(1, len(create_kwargs))
+        self.assertEqual("auto", create_kwargs[0].get("provider"))
+        self.assertEqual(
+            ("moemail",),
+            tuple(create_kwargs[0].get("excluded_provider_type_keys") or ()),
+        )
+        self.assertEqual(
+            {
+                "providerTypeKeys": ["moemail"],
+                "domains": ["coolkid.icu"],
+                "scope": "attempt",
+            },
+            create_kwargs[0].get("avoid"),
+        )
+        self.assertNotIn("mailcreate_domain", create_kwargs[0])
+
     def test_resolve_mailbox_prefers_business_domain_pool_when_planned_provider_is_dynamic_blacklisted(self) -> None:
         mailbox = runtime_mailbox.Mailbox(
             provider="moemail",

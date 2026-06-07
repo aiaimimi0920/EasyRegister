@@ -1133,7 +1133,7 @@ def resolve_mailbox(
         auto_excluded_provider_type_keys = _resolve_mailbox_auto_excluded_provider_type_keys(
             business_key=resolved_business_key,
             avoid_providers=avoid_providers,
-            exclude_moemail=domain_selection_reason.endswith("dynamic_blacklist_exhausted"),
+            exclude_moemail=bool(_resolve_business_mailbox_domain_pool(business_key=resolved_business_key)),
         )
         auto_excluded_domains = _resolve_mailbox_excluded_domains(
             business_key=resolved_business_key,
