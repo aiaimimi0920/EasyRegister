@@ -10,7 +10,7 @@ from errors import ErrorCodes, result_error_matches, result_error_message
 from others.bootstrap import ensure_local_bundle_imports
 from others.common import ensure_directory
 from others.common_runtime import validate_openai_oauth_seed_payload
-from others.config import CleanupRuntimeConfig, MailboxRuntimeConfig, env_int
+from others.config import CleanupRuntimeConfig, MailboxRuntimeConfig, env_float, env_int
 from others.file_lock import release_lock, try_acquire_lock
 from others.result_artifacts import FREE_OPENAI_OAUTH_SOURCE_CANDIDATES, all_output_texts, output_dict
 
@@ -21,6 +21,9 @@ from shared_mailbox.easy_email_client import report_mailbox_outcome
 
 MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
 EMAIL_OTP_FAILURE_REASONS = {"email_otp_timeout", "email_otp_wrong_code"}
+STRONG_MAILBOX_FAILURE_REASONS = {"unsupported_email", "registration_disallowed"}
+DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES = 10
+DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE = 20.0
 MAILBOX_OUTCOME_REPORT_REASONS = {
     "create_account_user_register_400",
     "email_otp_timeout",
@@ -236,6 +239,26 @@ def mailbox_email_otp_provider_failure_blacklist_threshold() -> int:
     return max(0, env_int("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD", 3))
 
 
+def mailbox_provider_blacklist_recovery_min_successes() -> int:
+    return max(
+        0,
+        env_int(
+            "REGISTER_MAILBOX_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES",
+            DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES,
+        ),
+    )
+
+
+def mailbox_provider_blacklist_recovery_min_success_rate() -> float:
+    return max(
+        0.0,
+        env_float(
+            "REGISTER_MAILBOX_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE",
+            DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE,
+        ),
+    )
+
+
 def mailbox_failure_reason_total(failure_reasons: Any, reasons: set[str]) -> int:
     if not isinstance(failure_reasons, dict):
         return 0
@@ -246,6 +269,32 @@ def mailbox_failure_reason_total(failure_reasons: Any, reasons: set[str]) -> int
         except Exception:
             continue
     return total
+
+
+def mailbox_provider_dynamic_blacklist_recovery_qualified(
+    *,
+    attempts: int,
+    successes: int,
+    failures: int,
+    failure_reasons: Any,
+    blacklist_reason: str = "",
+    failure_rate_threshold: float,
+) -> bool:
+    normalized_blacklist_reason = str(blacklist_reason or "").strip().lower()
+    if normalized_blacklist_reason in STRONG_MAILBOX_FAILURE_REASONS:
+        return False
+    if mailbox_failure_reason_total(failure_reasons, STRONG_MAILBOX_FAILURE_REASONS) > 0:
+        return False
+    attempts = max(0, int(attempts or 0))
+    successes = max(0, int(successes or 0))
+    failures = max(0, int(failures or 0))
+    if attempts <= 0 or successes < mailbox_provider_blacklist_recovery_min_successes():
+        return False
+    success_rate = (float(successes) / float(attempts)) * 100.0
+    if success_rate < mailbox_provider_blacklist_recovery_min_success_rate():
+        return False
+    failure_rate = (float(failures) / float(attempts)) * 100.0
+    return failure_rate < float(failure_rate_threshold or 0.0)
 
 
 def mailbox_domain_blacklist_reason(*, result_payload_value: dict[str, Any]) -> str:
@@ -936,6 +985,14 @@ def record_business_mailbox_domain_outcome(
         )
         prior_provider_blacklisted = bool(provider_current.get("blacklisted"))
         prior_provider_blacklist_reason = str(provider_current.get("blacklistReason") or "").strip()
+        provider_recovery_qualified = mailbox_provider_dynamic_blacklist_recovery_qualified(
+            attempts=provider_attempts,
+            successes=provider_successes,
+            failures=provider_failures,
+            failure_reasons=provider_failure_reasons,
+            blacklist_reason=prior_provider_blacklist_reason,
+            failure_rate_threshold=failure_rate_threshold,
+        )
         if not ok:
             provider_email_otp_threshold = mailbox_email_otp_provider_failure_blacklist_threshold()
             if (
@@ -943,6 +1000,7 @@ def record_business_mailbox_domain_outcome(
                 and provider_email_otp_threshold > 0
                 and mailbox_failure_reason_total(provider_failure_reasons, EMAIL_OTP_FAILURE_REASONS)
                 >= provider_email_otp_threshold
+                and not provider_recovery_qualified
             ):
                 provider_blacklist_reason = "provider_email_otp_failure_threshold"
             elif mailbox_failure_rate_reaches_blacklist_threshold(
@@ -952,8 +1010,8 @@ def record_business_mailbox_domain_outcome(
                 failure_rate_threshold=failure_rate_threshold,
             ):
                 provider_blacklist_reason = "provider_failure_rate_threshold"
-        provider_blacklisted = False if ok else prior_provider_blacklisted or bool(provider_blacklist_reason)
-        provider_blacklist_reason = "" if ok else provider_blacklist_reason or prior_provider_blacklist_reason
+        provider_blacklisted = False if ok or provider_recovery_qualified else prior_provider_blacklisted or bool(provider_blacklist_reason)
+        provider_blacklist_reason = "" if ok or provider_recovery_qualified else provider_blacklist_reason or prior_provider_blacklist_reason
         providers[provider] = {
             "attempts": provider_attempts,
             "successes": provider_successes,

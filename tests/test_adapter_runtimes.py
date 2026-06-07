@@ -3743,6 +3743,60 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("m2u", violation["provider"])
         self.assertEqual("cnmlgb.de", violation["domain"])
 
+    def test_mailbox_domain_policy_violation_ignores_high_success_dynamic_provider_blacklist(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="tempmail-lol",
+            email="allowed@ok.test",
+            ref="tempmail-lol:test",
+            session_id="tempmail-lol-session",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "providers": {
+                                    "tempmail-lol": {
+                                        "attempts": 407,
+                                        "successes": 315,
+                                        "failures": 92,
+                                        "failureRate": 22.6,
+                                        "blacklisted": True,
+                                        "blacklistReason": "provider_email_otp_failure_threshold",
+                                        "failureReasons": {
+                                            "email_otp_timeout": 12,
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE": "95",
+                    "REGISTER_MAILBOX_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES": "10",
+                    "REGISTER_MAILBOX_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE": "20",
+                },
+                clear=True,
+            ):
+                violation = runtime_mailbox._mailbox_domain_policy_violation(
+                    mailbox,
+                    business_key="openai",
+                )
+
+        self.assertIsNone(violation)
+
     def test_mailbox_domain_policy_violation_ignores_expired_dynamic_business_provider_blacklist(self) -> None:
         mailbox = runtime_mailbox.Mailbox(
             provider="m2u",

@@ -24,6 +24,10 @@ THRESHOLD_REEVALUATED_FAILURE_REASONS = {
     "email_otp_timeout",
     "email_otp_wrong_code",
 }
+PROVIDER_RISK_MIN_ATTEMPTS = 20
+PROVIDER_RISK_FAILURE_RATE = 90.0
+PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES = 10
+PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE = 20.0
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -57,17 +61,51 @@ def _merge_counts(target: dict[str, Any], source: dict[str, Any]) -> None:
         target[key] = existing + count
 
 
-def _recover_entry(entry: dict[str, Any]) -> tuple[bool, bool, int]:
+def _entry_int(entry: dict[str, Any], key: str) -> int:
+    try:
+        return max(0, int(entry.get(key) or 0))
+    except Exception:
+        return 0
+
+
+def _preserve_provider_risk(entry: dict[str, Any]) -> bool:
+    attempts = _entry_int(entry, "attempts")
+    successes = _entry_int(entry, "successes")
+    failures = _entry_int(entry, "failures")
+    if attempts < PROVIDER_RISK_MIN_ATTEMPTS or successes > 0:
+        return False
+    failure_rate = (float(failures) / float(attempts)) * 100.0 if attempts else 0.0
+    return failure_rate >= PROVIDER_RISK_FAILURE_RATE
+
+
+def _provider_recovery_qualified(entry: dict[str, Any]) -> bool:
+    attempts = _entry_int(entry, "attempts")
+    successes = _entry_int(entry, "successes")
+    failures = _entry_int(entry, "failures")
+    if attempts <= 0 or successes < PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES:
+        return False
+    success_rate = (float(successes) / float(attempts)) * 100.0
+    if success_rate < PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE:
+        return False
+    failure_rate = (float(failures) / float(attempts)) * 100.0
+    return failure_rate < PROVIDER_RISK_FAILURE_RATE
+
+
+def _recover_entry(entry: dict[str, Any], *, section_name: str) -> tuple[bool, bool, bool, int]:
     blacklist_reason = str(entry.get("blacklistReason") or "").strip().lower()
     failure_reasons = _as_dict(entry.get("failureReasons"))
     if blacklist_reason in STRONG_BLACKLIST_REASONS:
-        return False, True, 0
+        return False, True, False, 0
     if any(reason in failure_reasons for reason in STRONG_BLACKLIST_REASONS):
-        return False, True, 0
+        return False, True, False, 0
+    if section_name == "providers" and (
+        _preserve_provider_risk(entry) or not _provider_recovery_qualified(entry)
+    ):
+        return False, False, True, 0
     if not bool(entry.get("blacklisted")) and blacklist_reason not in TRANSIENT_BLACKLIST_REASONS:
-        return False, False, 0
+        return False, False, False, 0
     if blacklist_reason and blacklist_reason not in TRANSIENT_BLACKLIST_REASONS:
-        return False, False, 0
+        return False, False, False, 0
 
     suppressed = _as_dict(entry.get("suppressedFailureReasons"))
     remaining_reasons: dict[str, Any] = {}
@@ -85,7 +123,7 @@ def _recover_entry(entry: dict[str, Any]) -> tuple[bool, bool, int]:
     entry["failureReasons"] = remaining_reasons
     if suppressed:
         entry["suppressedFailureReasons"] = suppressed
-    return True, False, len(moved_reasons)
+    return True, False, False, len(moved_reasons)
 
 
 def recover_payload(payload: dict[str, Any], *, business_keys: tuple[str, ...] = ("openai",)) -> dict[str, Any]:
@@ -93,6 +131,7 @@ def recover_payload(payload: dict[str, Any], *, business_keys: tuple[str, ...] =
         "businessKeys": list(business_keys),
         "recoveredEntries": 0,
         "preservedStrongEntries": 0,
+        "preservedProviderRiskEntries": 0,
         "suppressedFailureReasonEntries": 0,
         "sections": {
             "domains": 0,
@@ -105,13 +144,18 @@ def recover_payload(payload: dict[str, Any], *, business_keys: tuple[str, ...] =
             for entry in section.values():
                 if not isinstance(entry, dict):
                     continue
-                recovered, preserved_strong, suppressed_count = _recover_entry(entry)
+                recovered, preserved_strong, preserved_provider_risk, suppressed_count = _recover_entry(
+                    entry,
+                    section_name=section_name,
+                )
                 if recovered:
                     summary["recoveredEntries"] += 1
                     summary["suppressedFailureReasonEntries"] += suppressed_count
                     summary["sections"][section_name] += 1
                 elif preserved_strong:
                     summary["preservedStrongEntries"] += 1
+                elif preserved_provider_risk:
+                    summary["preservedProviderRiskEntries"] += 1
     payload["updatedAt"] = datetime.now(timezone.utc).isoformat()
     return summary
 

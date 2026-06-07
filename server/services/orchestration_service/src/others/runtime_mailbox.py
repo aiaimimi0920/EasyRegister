@@ -10,7 +10,7 @@ from typing import Any
 from errors import ensure_protocol_runtime_error
 from others.bootstrap import ensure_local_bundle_imports
 from others.common import json_log
-from others.config import MailboxRuntimeConfig, env_bool, env_int, env_text
+from others.config import MailboxRuntimeConfig, env_bool, env_float, env_int, env_text
 from others.local_config import read_easyemail_server_api_key
 from others.paths import resolve_shared_root as _shared_root_from_output_root
 
@@ -38,8 +38,11 @@ DEFAULT_REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD = 500
 DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS = 12
 DEFAULT_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS = 6 * 60 * 60
 DEFAULT_PROVIDER_ZERO_SUCCESS_BLACKLIST_MIN_ATTEMPTS = 20
+DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES = 10
+DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE = 20.0
 MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
 EMAIL_OTP_FAILURE_REASONS = {"email_otp_timeout", "email_otp_wrong_code"}
+STRONG_MAILBOX_FAILURE_REASONS = {"unsupported_email", "registration_disallowed"}
 _MAILBOX_DEFAULT_POLICY_KEYS = {"default", "*", "__default__"}
 
 
@@ -220,6 +223,26 @@ def _resolve_mailbox_provider_zero_success_blacklist_min_attempts() -> int:
     )
 
 
+def _resolve_mailbox_provider_blacklist_recovery_min_successes() -> int:
+    return max(
+        0,
+        env_int(
+            "REGISTER_MAILBOX_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES",
+            DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES,
+        ),
+    )
+
+
+def _resolve_mailbox_provider_blacklist_recovery_min_success_rate() -> float:
+    return max(
+        0.0,
+        env_float(
+            "REGISTER_MAILBOX_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE",
+            DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE,
+        ),
+    )
+
+
 def _parse_mailbox_state_timestamp(value: Any) -> datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -258,6 +281,29 @@ def _mailbox_failure_reason_total(failure_reasons: Any, reasons: set[str]) -> in
         except Exception:
             continue
     return total
+
+
+def _mailbox_provider_dynamic_blacklist_recovery_qualified(stats: dict[str, Any]) -> bool:
+    blacklist_reason = str(stats.get("blacklistReason") or "").strip().lower()
+    if blacklist_reason in STRONG_MAILBOX_FAILURE_REASONS:
+        return False
+    failure_reasons = stats.get("failureReasons")
+    if _mailbox_failure_reason_total(failure_reasons, STRONG_MAILBOX_FAILURE_REASONS) > 0:
+        return False
+    try:
+        attempts = max(0, int(stats.get("attempts") or 0))
+        successes = max(0, int(stats.get("successes") or 0))
+        failures = max(0, int(stats.get("failures") or 0))
+    except Exception:
+        return False
+    min_successes = _resolve_mailbox_provider_blacklist_recovery_min_successes()
+    if attempts <= 0 or successes < min_successes:
+        return False
+    success_rate = (float(successes) / float(attempts)) * 100.0
+    if success_rate < _resolve_mailbox_provider_blacklist_recovery_min_success_rate():
+        return False
+    failure_rate = (float(failures) / float(attempts)) * 100.0
+    return failure_rate < _resolve_mailbox_domain_blacklist_failure_rate()
 
 
 def _mailbox_failure_rate_reaches_blacklist_threshold(stats: dict[str, Any]) -> bool:
@@ -353,6 +399,8 @@ def _mailbox_provider_is_business_blacklisted(provider: str, state_payload: dict
         return True
     stats = _mailbox_provider_stats(normalized_provider, state_payload, business_key=business_key)
     if stats and _mailbox_dynamic_blacklist_expired(stats):
+        return False
+    if stats and _mailbox_provider_dynamic_blacklist_recovery_qualified(stats):
         return False
     if bool(stats.get("blacklisted")):
         return True

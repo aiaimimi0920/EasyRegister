@@ -38,6 +38,10 @@ class MailboxStateRecoveryTests(unittest.TestCase):
                     },
                     "providers": {
                         "moemail": {
+                            "attempts": 133,
+                            "successes": 50,
+                            "failures": 83,
+                            "failureRate": 62.41,
                             "blacklisted": True,
                             "blacklistReason": "provider_email_otp_failure_threshold",
                             "failureReasons": {
@@ -103,6 +107,78 @@ class MailboxStateRecoveryTests(unittest.TestCase):
         self.assertEqual("registration_disallowed", blocked["blacklistReason"])
         self.assertEqual(0, summary["recoveredEntries"])
         self.assertEqual(2, summary["preservedStrongEntries"])
+
+    def test_recover_payload_preserves_zero_success_provider_blacklists(self) -> None:
+        recovery = _load_recovery_module()
+        payload = {
+            "schemaVersion": 3,
+            "businesses": {
+                "openai": {
+                    "domains": {},
+                    "providers": {
+                        "mail2925": {
+                            "attempts": 23,
+                            "successes": 0,
+                            "failures": 23,
+                            "failureRate": 100.0,
+                            "blacklisted": True,
+                            "blacklistReason": "provider_email_otp_failure_threshold",
+                            "failureReasons": {
+                                "email_otp_timeout": 19,
+                                "create_account_failure": 2,
+                            },
+                        }
+                    },
+                }
+            },
+        }
+
+        summary = recovery.recover_payload(payload, business_keys=("openai",))
+
+        provider = payload["businesses"]["openai"]["providers"]["mail2925"]
+        self.assertTrue(provider["blacklisted"])
+        self.assertEqual("provider_email_otp_failure_threshold", provider["blacklistReason"])
+        self.assertEqual(
+            {"email_otp_timeout": 19, "create_account_failure": 2},
+            provider["failureReasons"],
+        )
+        self.assertNotIn("suppressedFailureReasons", provider)
+        self.assertEqual(0, summary["recoveredEntries"])
+        self.assertEqual(1, summary["preservedProviderRiskEntries"])
+
+    def test_recover_payload_preserves_low_success_provider_blacklists(self) -> None:
+        recovery = _load_recovery_module()
+        payload = {
+            "schemaVersion": 3,
+            "businesses": {
+                "openai": {
+                    "domains": {},
+                    "providers": {
+                        "im215": {
+                            "attempts": 51,
+                            "successes": 9,
+                            "failures": 42,
+                            "failureRate": 82.35,
+                            "blacklisted": True,
+                            "blacklistReason": "provider_email_otp_failure_threshold",
+                            "failureReasons": {
+                                "email_otp_timeout": 13,
+                            },
+                        }
+                    },
+                }
+            },
+        }
+
+        summary = recovery.recover_payload(payload, business_keys=("openai",))
+
+        provider = payload["businesses"]["openai"]["providers"]["im215"]
+        self.assertTrue(provider["blacklisted"])
+        self.assertEqual("provider_email_otp_failure_threshold", provider["blacklistReason"])
+        self.assertEqual({"email_otp_timeout": 13}, provider["failureReasons"])
+        self.assertNotIn("suppressedFailureReasons", provider)
+        self.assertEqual(0, summary["recoveredEntries"])
+        self.assertEqual(1, summary["preservedProviderRiskEntries"])
 
     def test_apply_recovery_writes_backup_and_updates_state(self) -> None:
         recovery = _load_recovery_module()
