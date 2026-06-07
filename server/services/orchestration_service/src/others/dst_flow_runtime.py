@@ -74,6 +74,13 @@ def _mailbox_retry_failure_class(*, error_code: str, error_message: str) -> tupl
     lowered = str(error_message or "").strip().lower()
     if normalized_code == ErrorCodes.UNSUPPORTED_EMAIL or "unsupported_email" in lowered or "the email you provided is not supported" in lowered:
         return "unsupported_email", "strong_mailbox_unsupported"
+    if (
+        normalized_code == ErrorCodes.OTP_TIMEOUT
+        or "otp_timeout" in lowered
+        or "timeout waiting for 6-digit code" in lowered
+        or "chatgpt_login_email_otp_wait_failed" in lowered
+    ):
+        return "email_otp_timeout", "weak_attributed_email_otp_timeout"
     if "registration_disallowed" in lowered and "mailbox_provider=" in lowered:
         return "registration_disallowed", "strong_mailbox_registration_disallowed"
     if normalized_code == ErrorCodes.USER_REGISTER_400:

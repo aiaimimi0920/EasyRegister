@@ -1452,6 +1452,181 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual([("mailbox-ref-1", "mailbox-session-1")], released_mailboxes)
         self.assertEqual([("http://proxy-1", "lease-1")], released_proxies)
 
+    def test_run_dst_flow_once_retries_create_account_after_email_otp_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "acquire-mailbox",
+                                    "type": "acquire_mailbox",
+                                    "metadata": {"owner": "easyemail"},
+                                    "input": {
+                                        "business_key": "{{task.mailbox_business_key}}",
+                                        "avoid_emails": "{{task.avoidMailboxEmails}}",
+                                        "avoid_domains": "{{task.avoidMailboxDomains}}",
+                                        "avoid_providers": "{{task.avoidMailboxProviders}}",
+                                        "avoid_reason": "{{task.avoidMailboxReason}}",
+                                    },
+                                    "saveAs": "mailbox",
+                                },
+                                {
+                                    "id": "acquire-proxy-chain",
+                                    "type": "acquire_proxy_chain",
+                                    "metadata": {"owner": "easyproxy"},
+                                    "saveAs": "proxy_chain",
+                                },
+                                {
+                                    "id": "create-openai-account",
+                                    "type": "create_openai_account",
+                                    "metadata": {
+                                        "owner": "easyprotocol",
+                                        "retry": {
+                                            "maxAttempts": 2,
+                                            "retryProfile": "step-create-account-recover",
+                                            "refreshSavedStates": ["mailbox", "proxy_chain"],
+                                        },
+                                    },
+                                    "input": {
+                                        "preallocated_email": "{{mailbox.email}}",
+                                        "preallocated_session_id": "{{mailbox.session_id}}",
+                                        "preallocated_mailbox_ref": "{{mailbox.mailbox_ref}}",
+                                        "proxy_url": "{{proxy_chain.proxy_url}}",
+                                    },
+                                    "saveAs": "create_openai_account",
+                                },
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            mailbox_call_count = 0
+            proxy_call_count = 0
+            create_inputs: list[tuple[str, str]] = []
+            mailbox_inputs: list[dict[str, object]] = []
+            released_mailboxes: list[tuple[str, str]] = []
+            released_proxies: list[tuple[str, str]] = []
+
+            def _easyemail_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                nonlocal mailbox_call_count
+                if step_type == "acquire_mailbox":
+                    mailbox_inputs.append(dict(step_input))
+                    mailbox_call_count += 1
+                    return {
+                        "ok": True,
+                        "provider": "slowmail" if mailbox_call_count == 1 else "cloudflare_temp_email",
+                        "email": "first@example.invalid" if mailbox_call_count == 1 else "second@example.net",
+                        "mailbox_ref": f"mailbox-ref-{mailbox_call_count}",
+                        "session_id": f"mailbox-session-{mailbox_call_count}",
+                        "business_key": "openai",
+                    }
+                if step_type == "release_mailbox":
+                    released_mailboxes.append(
+                        (
+                            str(step_input.get("mailbox_ref") or ""),
+                            str(step_input.get("mailbox_session_id") or ""),
+                        )
+                    )
+                    return {"released": True, "detail": "deleted"}
+                raise AssertionError(step_type)
+
+            def _easyproxy_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                nonlocal proxy_call_count
+                if step_type == "acquire_proxy_chain":
+                    proxy_call_count += 1
+                    return {
+                        "ok": True,
+                        "proxy_url": f"http://proxy-{proxy_call_count}",
+                        "lease_id": f"lease-{proxy_call_count}",
+                    }
+                if step_type == "release_proxy_chain":
+                    released_proxies.append(
+                        (
+                            str(step_input.get("proxy_url") or ""),
+                            str(step_input.get("lease_id") or ""),
+                        )
+                    )
+                    return {"released": True, "detail": "released"}
+                raise AssertionError(step_type)
+
+            def _easyprotocol_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type != "create_openai_account":
+                    raise AssertionError(step_type)
+                create_inputs.append(
+                    (
+                        str(step_input.get("preallocated_email") or ""),
+                        str(step_input.get("proxy_url") or ""),
+                    )
+                )
+                if len(create_inputs) == 1:
+                    raise ProtocolRuntimeError(
+                        "chatgpt_login_email_otp_wait_failed: timeout waiting for 6-digit code",
+                        code=ErrorCodes.OTP_TIMEOUT,
+                    )
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "storage_path": "/tmp/create-success.json",
+                }
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "easyemail": _easyemail_dispatcher,
+                    "easyproxy": _easyproxy_dispatcher,
+                    "easyprotocol": _easyprotocol_dispatcher,
+                },
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(2, result.step_attempts["create-openai-account"])
+        self.assertEqual(2, result.step_attempts["acquire-mailbox"])
+        self.assertEqual(2, result.step_attempts["acquire-proxy-chain"])
+        self.assertEqual(
+            [
+                ("first@example.invalid", "http://proxy-1"),
+                ("second@example.net", "http://proxy-2"),
+            ],
+            create_inputs,
+        )
+        self.assertEqual("", mailbox_inputs[0]["avoid_emails"])
+        self.assertEqual(["first@example.invalid"], mailbox_inputs[1]["avoid_emails"])
+        self.assertEqual(["example.invalid"], mailbox_inputs[1]["avoid_domains"])
+        self.assertEqual(["slowmail"], mailbox_inputs[1]["avoid_providers"])
+        self.assertEqual("email_otp_timeout", mailbox_inputs[1]["avoid_reason"])
+        self.assertEqual(
+            [
+                {
+                    "outcome": "failure",
+                    "failureReason": "email_otp_timeout",
+                    "failureClass": "weak_attributed_email_otp_timeout",
+                    "errorCode": "otp_timeout",
+                    "provider": "slowmail",
+                    "domain": "example.invalid",
+                    "email": "first@example.invalid",
+                    "mailbox_ref": "mailbox-ref-1",
+                    "mailbox_session_id": "mailbox-session-1",
+                    "business_key": "openai",
+                    "stepId": "create-openai-account",
+                    "attempt": 1,
+                }
+            ],
+            result.outputs["mailbox-attempt-outcomes"],
+        )
+        self.assertEqual([("mailbox-ref-1", "mailbox-session-1")], released_mailboxes)
+        self.assertEqual([("http://proxy-1", "lease-1")], released_proxies)
+
     def test_run_dst_flow_once_retries_create_account_after_attributed_unsupported_email(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             flow_path = Path(tmp_dir) / "temp-flow.json"

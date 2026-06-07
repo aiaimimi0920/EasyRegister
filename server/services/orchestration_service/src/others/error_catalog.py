@@ -101,6 +101,7 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.USER_REGISTER_400,
         ErrorCodes.UNSUPPORTED_EMAIL,
         ErrorCodes.INVALID_REQUEST_ERROR,
+        ErrorCodes.OTP_TIMEOUT,
         ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
         ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
         ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
