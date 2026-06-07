@@ -192,6 +192,22 @@ def _provider_blacklist_from_repeated_phone_scoped_state(
     return tuple(sorted(provider_key for provider_key, count in counts.items() if count >= threshold))
 
 
+def _provider_blacklist_from_capacity_unavailable_state(
+    *,
+    payload: dict[str, Any],
+) -> tuple[str, ...]:
+    providers = payload.get("providers") if isinstance(payload.get("providers"), dict) else {}
+    capacity_blocked: set[str] = set()
+    for raw_provider, raw_value in providers.items():
+        provider_key = str(raw_provider or "").strip().lower()
+        if not provider_key or not isinstance(raw_value, dict):
+            continue
+        reason = str(raw_value.get("reason") or "").strip()
+        if reason == "provider_capacity_unavailable":
+            capacity_blocked.add(provider_key)
+    return tuple(sorted(capacity_blocked))
+
+
 def _resolve_sms_terminal_phone_blacklist_seconds() -> int:
     raw = str(
         os.environ.get("REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS")
@@ -440,9 +456,14 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
     dynamic_blocked_providers = set(
         _provider_blacklist_from_repeated_phone_scoped_state(payload=state_payload)
     )
+    capacity_blocked_providers = set(
+        _provider_blacklist_from_capacity_unavailable_state(payload=state_payload)
+    )
     static_blocked_providers = set(policy.explicit_blacklist_providers)
     attempt_provider_blacklist = static_blocked_providers | hard_blocked_providers | dynamic_blocked_providers
     relaxed_dynamic_provider_blacklist = False
+    relaxed_capacity_provider_blacklist = False
+    current_capacity_unavailable_providers: set[str] = set()
     provider_country_blacklist = _provider_country_blacklist_from_state(
         payload=state_payload,
         country_codes=tuple(policy.country_codes),
@@ -472,6 +493,7 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
                     terminal_code="provider_capacity_unavailable",
                     terminal_message=str(exc),
                 )
+                current_capacity_unavailable_providers.add(capacity_unavailable_provider)
                 attempt_provider_blacklist.add(capacity_unavailable_provider)
                 continue
             dynamic_relaxation_reason = _dynamic_provider_blacklist_relaxation_reason(exc)
@@ -481,11 +503,41 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
                 and dynamic_relaxation_reason
             ):
                 relaxed_dynamic_provider_blacklist = True
-                attempt_provider_blacklist = static_blocked_providers | hard_blocked_providers
+                attempt_provider_blacklist = (
+                    static_blocked_providers
+                    | hard_blocked_providers
+                    | current_capacity_unavailable_providers
+                )
                 json_log(
                     {
                         "event": "register_sms_dynamic_provider_blacklist_relaxed",
                         "blockedProviderCount": len(dynamic_blocked_providers),
+                        "hardProviderBlockCount": len(hard_blocked_providers),
+                        "staticProviderBlockCount": len(static_blocked_providers),
+                        "reason": dynamic_relaxation_reason,
+                    }
+                )
+                continue
+            if (
+                not relaxed_capacity_provider_blacklist
+                and capacity_blocked_providers
+                and dynamic_relaxation_reason
+            ):
+                relaxed_capacity_provider_blacklist = True
+                active_dynamic_blocked_providers = (
+                    set() if relaxed_dynamic_provider_blacklist else dynamic_blocked_providers
+                )
+                attempt_provider_blacklist = (
+                    static_blocked_providers
+                    | (hard_blocked_providers - capacity_blocked_providers)
+                    | active_dynamic_blocked_providers
+                    | current_capacity_unavailable_providers
+                )
+                json_log(
+                    {
+                        "event": "register_sms_capacity_provider_blacklist_relaxed",
+                        "capacityProviderBlockCount": len(capacity_blocked_providers),
+                        "dynamicProviderBlockCount": len(dynamic_blocked_providers),
                         "hardProviderBlockCount": len(hard_blocked_providers),
                         "staticProviderBlockCount": len(static_blocked_providers),
                         "reason": dynamic_relaxation_reason,
