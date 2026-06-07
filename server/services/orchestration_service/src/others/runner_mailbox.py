@@ -276,6 +276,7 @@ def mailbox_provider_dynamic_blacklist_recovery_qualified(
     attempts: int,
     successes: int,
     failures: int,
+    consecutive_failures: int = 0,
     failure_reasons: Any,
     blacklist_reason: str = "",
     failure_rate_threshold: float,
@@ -285,6 +286,13 @@ def mailbox_provider_dynamic_blacklist_recovery_qualified(
         return False
     if mailbox_failure_reason_total(failure_reasons, STRONG_MAILBOX_FAILURE_REASONS) > 0:
         return False
+    provider_otp_threshold = mailbox_email_otp_provider_failure_blacklist_threshold()
+    if provider_otp_threshold > 0:
+        if (
+            max(0, int(consecutive_failures or 0)) >= provider_otp_threshold
+            and mailbox_failure_reason_total(failure_reasons, EMAIL_OTP_FAILURE_REASONS) >= provider_otp_threshold
+        ):
+            return False
     attempts = max(0, int(attempts or 0))
     successes = max(0, int(successes or 0))
     failures = max(0, int(failures or 0))
@@ -989,6 +997,7 @@ def record_business_mailbox_domain_outcome(
             attempts=provider_attempts,
             successes=provider_successes,
             failures=provider_failures,
+            consecutive_failures=provider_consecutive_failures,
             failure_reasons=provider_failure_reasons,
             blacklist_reason=prior_provider_blacklist_reason,
             failure_rate_threshold=failure_rate_threshold,

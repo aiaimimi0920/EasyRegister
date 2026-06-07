@@ -180,6 +180,41 @@ class MailboxStateRecoveryTests(unittest.TestCase):
         self.assertEqual(0, summary["recoveredEntries"])
         self.assertEqual(1, summary["preservedProviderRiskEntries"])
 
+    def test_recover_payload_preserves_high_success_provider_with_recent_otp_streak(self) -> None:
+        recovery = _load_recovery_module()
+        payload = {
+            "schemaVersion": 3,
+            "businesses": {
+                "openai": {
+                    "domains": {},
+                    "providers": {
+                        "tempmail-lol": {
+                            "attempts": 441,
+                            "successes": 315,
+                            "failures": 126,
+                            "consecutiveFailures": 12,
+                            "failureRate": 28.57,
+                            "blacklisted": True,
+                            "blacklistReason": "provider_email_otp_failure_threshold",
+                            "failureReasons": {
+                                "email_otp_timeout": 12,
+                            },
+                        }
+                    },
+                }
+            },
+        }
+
+        summary = recovery.recover_payload(payload, business_keys=("openai",))
+
+        provider = payload["businesses"]["openai"]["providers"]["tempmail-lol"]
+        self.assertTrue(provider["blacklisted"])
+        self.assertEqual("provider_email_otp_failure_threshold", provider["blacklistReason"])
+        self.assertEqual({"email_otp_timeout": 12}, provider["failureReasons"])
+        self.assertNotIn("suppressedFailureReasons", provider)
+        self.assertEqual(0, summary["recoveredEntries"])
+        self.assertEqual(1, summary["preservedProviderRiskEntries"])
+
     def test_apply_recovery_writes_backup_and_updates_state(self) -> None:
         recovery = _load_recovery_module()
         with tempfile.TemporaryDirectory() as tmp_dir:

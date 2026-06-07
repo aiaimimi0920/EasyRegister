@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,7 @@ PROVIDER_RISK_MIN_ATTEMPTS = 20
 PROVIDER_RISK_FAILURE_RATE = 90.0
 PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES = 10
 PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE = 20.0
+DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MAX_CONSECUTIVE_OTP_FAILURES = 6
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -68,10 +70,34 @@ def _entry_int(entry: dict[str, Any], key: str) -> int:
         return 0
 
 
+def _provider_blacklist_recovery_max_consecutive_otp_failures() -> int:
+    raw = str(
+        os.environ.get("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD")
+        or DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MAX_CONSECUTIVE_OTP_FAILURES
+    ).strip()
+    try:
+        return max(0, int(raw))
+    except Exception:
+        return DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MAX_CONSECUTIVE_OTP_FAILURES
+
+
 def _preserve_provider_risk(entry: dict[str, Any]) -> bool:
     attempts = _entry_int(entry, "attempts")
     successes = _entry_int(entry, "successes")
     failures = _entry_int(entry, "failures")
+    consecutive_failures = _entry_int(entry, "consecutiveFailures")
+    failure_reasons = _as_dict(entry.get("failureReasons"))
+    max_consecutive_otp_failures = _provider_blacklist_recovery_max_consecutive_otp_failures()
+    if (
+        max_consecutive_otp_failures > 0
+        and consecutive_failures >= max_consecutive_otp_failures
+        and sum(
+            _entry_int(failure_reasons, reason)
+            for reason in THRESHOLD_REEVALUATED_FAILURE_REASONS
+        )
+        >= max_consecutive_otp_failures
+    ):
+        return True
     if attempts < PROVIDER_RISK_MIN_ATTEMPTS or successes > 0:
         return False
     failure_rate = (float(failures) / float(attempts)) * 100.0 if attempts else 0.0
@@ -79,6 +105,8 @@ def _preserve_provider_risk(entry: dict[str, Any]) -> bool:
 
 
 def _provider_recovery_qualified(entry: dict[str, Any]) -> bool:
+    if _preserve_provider_risk(entry):
+        return False
     attempts = _entry_int(entry, "attempts")
     successes = _entry_int(entry, "successes")
     failures = _entry_int(entry, "failures")
