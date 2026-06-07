@@ -39,6 +39,11 @@ SMS_DYNAMIC_PROVIDER_BLACKLIST_RELAXATION_ERRORS = (
     "sms_no_productive_selection_plan_candidates",
     "sms_no_selection_plan_candidates",
 )
+SMS_PROVIDER_CAPACITY_UNAVAILABLE_MARKERS = (
+    "currently unavailable",
+    "no eligible public numbers",
+    "no available public numbers",
+)
 
 
 def _sms_runtime_config() -> SmsRuntimeConfig:
@@ -250,6 +255,24 @@ def _dynamic_provider_blacklist_relaxation_reason(exc: BaseException) -> str:
     return ""
 
 
+def _provider_capacity_unavailable_from_open_error(exc: BaseException) -> str:
+    message = str(exc or "").strip()
+    if not message:
+        return ""
+    lowered = message.lower()
+    if not any(marker in lowered for marker in SMS_PROVIDER_CAPACITY_UNAVAILABLE_MARKERS):
+        return ""
+    marker = 'provider "'
+    marker_index = lowered.find(marker)
+    if marker_index < 0:
+        return ""
+    start = marker_index + len(marker)
+    end = message.find('"', start)
+    if end <= start:
+        return ""
+    return message[start:end].strip().lower()
+
+
 def _match_phone_country_code(*, phone_number: str, country_codes: tuple[str, ...]) -> str:
     normalized_phone = str(phone_number or "").strip()
     if not normalized_phone:
@@ -441,6 +464,16 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
             )
         except Exception as exc:
             last_open_error = exc
+            capacity_unavailable_provider = _provider_capacity_unavailable_from_open_error(exc)
+            if capacity_unavailable_provider:
+                record_terminal_phone_outcome(
+                    phone_number="",
+                    provider_key=capacity_unavailable_provider,
+                    terminal_code="provider_capacity_unavailable",
+                    terminal_message=str(exc),
+                )
+                attempt_provider_blacklist.add(capacity_unavailable_provider)
+                continue
             dynamic_relaxation_reason = _dynamic_provider_blacklist_relaxation_reason(exc)
             if (
                 not relaxed_dynamic_provider_blacklist
