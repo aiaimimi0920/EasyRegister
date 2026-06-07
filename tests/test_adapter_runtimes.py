@@ -3899,6 +3899,120 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("mail2925", violation["provider"])
         self.assertEqual("ok.test", violation["domain"])
 
+    def test_mailbox_domain_policy_violation_applies_dynamic_provider_failure_rate_threshold(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="badmail",
+            email="allowed@ok.test",
+            ref="badmail:test",
+            session_id="badmail-session",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "providers": {
+                                    "badmail": {
+                                        "attempts": 3,
+                                        "successes": 0,
+                                        "failures": 3,
+                                        "failureRate": 100.0,
+                                        "blacklisted": False,
+                                        "failureReasons": {
+                                            "create_account_failure": 1,
+                                            "create_account_user_register_400": 2,
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS": "3",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE": "90",
+                },
+                clear=True,
+            ):
+                violation = runtime_mailbox._mailbox_domain_policy_violation(
+                    mailbox,
+                    business_key="openai",
+                )
+
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertEqual("dynamic_business_provider_blacklist", violation["reason"])
+        self.assertEqual("badmail", violation["provider"])
+        self.assertEqual("ok.test", violation["domain"])
+
+    def test_mailbox_domain_policy_violation_applies_zero_success_provider_failure_threshold(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="empty-provider",
+            email="allowed@ok.test",
+            ref="empty-provider:test",
+            session_id="empty-provider-session",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "providers": {
+                                    "empty-provider": {
+                                        "attempts": 20,
+                                        "successes": 0,
+                                        "failures": 20,
+                                        "failureRate": 100.0,
+                                        "blacklisted": False,
+                                        "failureReasons": {
+                                            "create_account_failure": 8,
+                                            "create_account_user_register_400": 12,
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_MIN_ATTEMPTS": "50",
+                    "REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE": "90",
+                },
+                clear=True,
+            ):
+                violation = runtime_mailbox._mailbox_domain_policy_violation(
+                    mailbox,
+                    business_key="openai",
+                )
+
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertEqual("dynamic_business_provider_blacklist", violation["reason"])
+        self.assertEqual("empty-provider", violation["provider"])
+        self.assertEqual("ok.test", violation["domain"])
+
     def test_create_mailbox_with_business_policy_rejects_dynamic_blacklist_exhaustion_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"

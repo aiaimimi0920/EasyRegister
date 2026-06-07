@@ -37,6 +37,7 @@ DEFAULT_REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE = 90.0
 DEFAULT_REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD = 500
 DEFAULT_MAILBOX_BUSINESS_RETRY_ATTEMPTS = 12
 DEFAULT_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS = 6 * 60 * 60
+DEFAULT_PROVIDER_ZERO_SUCCESS_BLACKLIST_MIN_ATTEMPTS = 20
 MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
 EMAIL_OTP_FAILURE_REASONS = {"email_otp_timeout", "email_otp_wrong_code"}
 _MAILBOX_DEFAULT_POLICY_KEYS = {"default", "*", "__default__"}
@@ -209,6 +210,16 @@ def _resolve_mailbox_dynamic_blacklist_ttl_seconds() -> int:
     return max(0, env_int("REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS", DEFAULT_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS))
 
 
+def _resolve_mailbox_provider_zero_success_blacklist_min_attempts() -> int:
+    return max(
+        1,
+        env_int(
+            "REGISTER_MAILBOX_PROVIDER_ZERO_SUCCESS_BLACKLIST_MIN_ATTEMPTS",
+            DEFAULT_PROVIDER_ZERO_SUCCESS_BLACKLIST_MIN_ATTEMPTS,
+        ),
+    )
+
+
 def _parse_mailbox_state_timestamp(value: Any) -> datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -247,6 +258,19 @@ def _mailbox_failure_reason_total(failure_reasons: Any, reasons: set[str]) -> in
         except Exception:
             continue
     return total
+
+
+def _mailbox_failure_rate_reaches_blacklist_threshold(stats: dict[str, Any]) -> bool:
+    try:
+        attempts = max(0, int(stats.get("attempts") or 0))
+        failures = max(0, int(stats.get("failures") or 0))
+    except Exception:
+        return False
+    min_attempts = max(1, _resolve_mailbox_domain_blacklist_min_attempts())
+    if attempts < min_attempts:
+        return False
+    failure_rate = (float(failures) / float(attempts)) * 100.0 if attempts else 0.0
+    return failure_rate >= _resolve_mailbox_domain_blacklist_failure_rate()
 
 
 def _mailbox_domain_stats(domain: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> dict[str, Any]:
@@ -303,6 +327,24 @@ def _mailbox_domain_is_business_blacklisted(domain: str, state_payload: dict[str
     )
 
 
+def _mailbox_provider_failure_rate_reaches_blacklist_threshold(stats: dict[str, Any]) -> bool:
+    if _mailbox_failure_rate_reaches_blacklist_threshold(stats):
+        return True
+    try:
+        attempts = max(0, int(stats.get("attempts") or 0))
+        failures = max(0, int(stats.get("failures") or 0))
+        successes = max(0, int(stats.get("successes") or 0))
+    except Exception:
+        return False
+    if successes > 0:
+        return False
+    min_attempts = _resolve_mailbox_provider_zero_success_blacklist_min_attempts()
+    if attempts < min_attempts:
+        return False
+    failure_rate = (float(failures) / float(attempts)) * 100.0 if attempts else 0.0
+    return failure_rate >= _resolve_mailbox_domain_blacklist_failure_rate()
+
+
 def _mailbox_provider_is_business_blacklisted(provider: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> bool:
     normalized_provider = _normalize_mailbox_provider(provider)
     if not normalized_provider:
@@ -318,7 +360,7 @@ def _mailbox_provider_is_business_blacklisted(provider: str, state_payload: dict
     return (
         threshold > 0
         and _mailbox_failure_reason_total(stats.get("failureReasons"), EMAIL_OTP_FAILURE_REASONS) >= threshold
-    )
+    ) or _mailbox_provider_failure_rate_reaches_blacklist_threshold(stats)
 
 
 def _state_mailbox_provider_keys(state_payload: dict[str, Any], *, business_key: str | None = None) -> tuple[str, ...]:
