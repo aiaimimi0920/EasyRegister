@@ -280,6 +280,18 @@ class ErrorProfilesTests(unittest.TestCase):
         )
         self.assertEqual(ErrorCodes.UNSUPPORTED_EMAIL, details["code"])
 
+    def test_build_error_details_refines_invalid_username_with_mailbox_attribution(self) -> None:
+        details = build_error_details(
+            step_type="create_openai_account",
+            code=ErrorCodes.INVALID_REQUEST_ERROR,
+            message=(
+                "authorize_continue status=400 body={\"error\":{\"code\":\"invalid_username\","
+                "\"message\":\"Invalid username\"}} "
+                "[mailbox_provider=etempmail email=user@example.test]"
+            ),
+        )
+        self.assertEqual(ErrorCodes.UNSUPPORTED_EMAIL, details["code"])
+
     def test_build_error_details_keeps_attributed_registration_disallowed_retryable(self) -> None:
         details = build_error_details(
             step_type="create_openai_account",

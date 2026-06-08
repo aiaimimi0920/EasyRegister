@@ -231,7 +231,14 @@ def classify_error_code(
     lowered = str(message or "").strip().lower()
     combined = " ".join(part for part in (normalized_detail, lowered) if part)
 
-    if "unsupported_email" in combined or "the email you provided is not supported" in combined:
+    if (
+        "unsupported_email" in combined
+        or "the email you provided is not supported" in combined
+        or (
+            ("invalid_username" in combined or "invalid username" in combined)
+            and "mailbox_provider=" in combined
+        )
+    ):
         return ErrorCodes.UNSUPPORTED_EMAIL
     if "registration_disallowed" in combined and "mailbox_provider=" in combined:
         return ErrorCodes.INVALID_REQUEST_ERROR

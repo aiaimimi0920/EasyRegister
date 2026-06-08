@@ -2333,6 +2333,33 @@ class RunnerMailboxTests(unittest.TestCase):
             runner_mailbox.mailbox_domain_blacklist_reason(result_payload_value=generic_payload),
         )
 
+    def test_mailbox_domain_blacklist_reason_treats_invalid_username_as_unsupported_email(self) -> None:
+        payload = {
+            "stepErrors": {
+                "create-openai-account": {
+                    "message": (
+                        "authorize_continue status=400 body={\"error\":{\"code\":\"invalid_username\","
+                        "\"message\":\"Invalid username\"}} "
+                        "[mailbox_provider=etempmail email=user@example.test]"
+                    ),
+                }
+            }
+        }
+        self.assertEqual(
+            "unsupported_email",
+            runner_mailbox.mailbox_domain_blacklist_reason(result_payload_value=payload),
+        )
+        self.assertEqual(
+            "unsupported_email",
+            runner_mailbox.mailbox_failure_reason(
+                result_payload_value={
+                    "ok": False,
+                    "errorStep": "create-openai-account",
+                    **payload,
+                }
+            ),
+        )
+
     def test_record_business_mailbox_domain_outcome_tracks_non_moemail_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"

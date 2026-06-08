@@ -350,7 +350,14 @@ def mailbox_domain_blacklist_reason(*, result_payload_value: dict[str, Any]) -> 
     create_error = step_errors.get("create-openai-account")
     create_error = create_error if isinstance(create_error, dict) else {}
     message = str(create_error.get("message") or result_payload_value.get("error") or "").strip().lower()
-    if "unsupported_email" in message or "the email you provided is not supported" in message:
+    if (
+        "unsupported_email" in message
+        or "the email you provided is not supported" in message
+        or (
+            ("invalid_username" in message or "invalid username" in message)
+            and "mailbox_provider=" in message
+        )
+    ):
         return "unsupported_email"
     if "registration_disallowed" in message and "mailbox_provider=" in message:
         return "registration_disallowed"
@@ -507,7 +514,14 @@ def mailbox_failure_reason(*, result_payload_value: dict[str, Any]) -> str:
     explicit_reason = str(result_payload_value.get("mailboxFailureReason") or "").strip().lower()
     if explicit_reason:
         return explicit_reason
-    if "unsupported_email" in combined or "the email you provided is not supported" in combined:
+    if (
+        "unsupported_email" in combined
+        or "the email you provided is not supported" in combined
+        or (
+            ("invalid_username" in combined or "invalid username" in combined)
+            and "mailbox_provider=" in combined
+        )
+    ):
         return "unsupported_email"
     if "registration_disallowed" in combined and "mailbox_provider=" in combined:
         return "registration_disallowed"

@@ -72,7 +72,15 @@ def _append_unique_text(existing: Any, value: str) -> list[str]:
 def _mailbox_retry_failure_class(*, error_code: str, error_message: str) -> tuple[str, str]:
     normalized_code = str(error_code or "").strip().lower()
     lowered = str(error_message or "").strip().lower()
-    if normalized_code == ErrorCodes.UNSUPPORTED_EMAIL or "unsupported_email" in lowered or "the email you provided is not supported" in lowered:
+    if (
+        normalized_code == ErrorCodes.UNSUPPORTED_EMAIL
+        or "unsupported_email" in lowered
+        or "the email you provided is not supported" in lowered
+        or (
+            ("invalid_username" in lowered or "invalid username" in lowered)
+            and "mailbox_provider=" in lowered
+        )
+    ):
         return "unsupported_email", "strong_mailbox_unsupported"
     if (
         normalized_code == ErrorCodes.OTP_TIMEOUT
