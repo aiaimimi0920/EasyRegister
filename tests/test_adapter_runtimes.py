@@ -2544,7 +2544,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             payload["providers"]["onlinesim"]["reason"],
         )
 
-    def test_open_phone_session_for_business_relaxes_capacity_provider_block_after_no_selection(self) -> None:
+    def test_open_phone_session_for_business_ignores_persistent_capacity_provider_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
             state_path.write_text(
@@ -2570,7 +2570,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             def _open_sms_session(**kwargs):
                 provider_blacklist = tuple(kwargs["provider_blacklist"])
                 captured_blacklists.append(provider_blacklist)
-                if {"onlinesim", "yunduanxin"} <= set(provider_blacklist):
+                if "onlinesim" in provider_blacklist or "yunduanxin" in provider_blacklist:
                     raise RuntimeError("sms_no_selection_plan_candidates")
                 return easy_sms_client.SmsSession(
                     session_id="sms_2",
@@ -2599,17 +2599,14 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
         self.assertEqual("sms_2", session["sessionId"])
         self.assertEqual("onlinesim", session["providerKey"])
-        self.assertEqual(("hero_sms", "onlinesim", "yunduanxin"), captured_blacklists[0])
-        self.assertEqual(("hero_sms",), captured_blacklists[1])
-        json_log.assert_any_call(
-            {
-                "event": "register_sms_capacity_provider_blacklist_relaxed",
-                "capacityProviderBlockCount": 2,
-                "dynamicProviderBlockCount": 0,
-                "hardProviderBlockCount": 2,
-                "staticProviderBlockCount": 1,
-                "reason": "sms_no_selection_plan_candidates",
-            }
+        self.assertEqual([("hero_sms",)], captured_blacklists)
+        self.assertFalse(
+            any(
+                call.args
+                and isinstance(call.args[0], dict)
+                and call.args[0].get("event") == "register_sms_capacity_provider_blacklist_relaxed"
+                for call in json_log.call_args_list
+            )
         )
 
     def test_open_phone_session_for_business_keeps_current_capacity_block_when_relaxing_dynamic_block(self) -> None:
