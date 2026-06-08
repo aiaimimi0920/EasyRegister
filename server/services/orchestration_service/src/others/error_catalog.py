@@ -267,6 +267,17 @@ def classify_error_code(
     ):
         return ErrorCodes.SOURCE_ARTIFACT_MISSING
 
+    if (
+        "/mail/mailboxes/open" in combined
+        and "fetch failed" in combined
+        and (
+            "mail service post" in combined
+            or normalized_step_type == "acquire_mailbox"
+            or normalized_detail == "create_mailbox"
+        )
+    ):
+        return ErrorCodes.MAILBOX_UNAVAILABLE
+
     if normalized_code:
         return normalized_code
 

@@ -96,6 +96,17 @@ class ErrorProfilesTests(unittest.TestCase):
         )
         self.assertEqual(ErrorCodes.MAILBOX_UNAVAILABLE, details["code"])
 
+    def test_build_error_details_classifies_mailbox_open_fetch_failed(self) -> None:
+        details = build_error_details(
+            step_type="acquire_mailbox",
+            message=(
+                "mail service POST /mail/mailboxes/open failed: "
+                'HTTP 500 [code=fetch failed]: {"error":"fetch failed"}'
+            ),
+        )
+        self.assertEqual(ErrorCodes.MAILBOX_UNAVAILABLE, details["code"])
+        self.assertEqual("flow_error", details["category"])
+
     def test_resolve_retry_codes_uses_profile(self) -> None:
         self.assertEqual(
             {
@@ -314,6 +325,19 @@ class ErrorProfilesTests(unittest.TestCase):
         self.assertEqual(ErrorCodes.MAILBOX_UNAVAILABLE, exc.code)
         self.assertEqual("flow_error", exc.category)
         self.assertEqual(ErrorCodes.MAILBOX_UNAVAILABLE, exc.to_response_payload()["code"])
+
+    def test_protocol_runtime_error_classifies_mailbox_open_fetch_failed(self) -> None:
+        exc = ensure_protocol_runtime_error(
+            RuntimeError(
+                "mail service POST /mail/mailboxes/open failed: "
+                'HTTP 500 [code=fetch failed]: {"error":"fetch failed"}'
+            ),
+            stage="stage_other",
+            detail="create_mailbox",
+            category="flow_error",
+        )
+        self.assertEqual(ErrorCodes.MAILBOX_UNAVAILABLE, exc.code)
+        self.assertEqual("flow_error", exc.category)
 
     def test_result_error_helpers_use_structured_payload(self) -> None:
         payload = {
