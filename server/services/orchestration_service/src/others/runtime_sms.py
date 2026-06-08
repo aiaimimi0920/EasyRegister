@@ -235,7 +235,7 @@ def _hard_provider_blacklist_from_state(*, payload: dict[str, Any]) -> tuple[str
         if not provider_key or not isinstance(raw_value, dict):
             continue
         reason = str(raw_value.get("reason") or "").strip()
-        if reason == "provider_capacity_unavailable":
+        if reason in {"provider_capacity_unavailable", "repeated_phone_scoped_terminal"}:
             continue
         hard_blocked.add(provider_key)
     return tuple(sorted(hard_blocked))
