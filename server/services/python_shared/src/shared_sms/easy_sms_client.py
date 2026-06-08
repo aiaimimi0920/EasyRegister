@@ -308,12 +308,16 @@ def _query_provider_selection_candidates_with_seen(
     provider_blacklist: tuple[str, ...],
     allow_paid: bool,
     country_codes: tuple[str, ...],
+    allow_reuse: bool | None = None,
+    phone_blacklist: tuple[str, ...] = (),
 ) -> tuple[list[str], set[str], set[str]]:
     provider_country_candidates, seen_provider_keys, unavailable_provider_keys = (
         _query_provider_country_selection_candidates_with_seen(
             provider_blacklist=provider_blacklist,
             allow_paid=allow_paid,
             country_codes=country_codes,
+            allow_reuse=allow_reuse,
+            phone_blacklist=phone_blacklist,
         )
     )
     return (
@@ -328,11 +332,22 @@ def _query_provider_country_selection_candidates_with_seen(
     provider_blacklist: tuple[str, ...],
     allow_paid: bool,
     country_codes: tuple[str, ...],
+    allow_reuse: bool | None = None,
+    phone_blacklist: tuple[str, ...] = (),
 ) -> tuple[list[_SmsProviderCountryCandidate], set[str], set[str]]:
     query = {
         "costTier": "paid" if allow_paid else "free",
         "limit": "20",
     }
+    if allow_reuse is not None:
+        query["allowReuse"] = "true" if allow_reuse else "false"
+    normalized_phone_blacklist = [
+        str(item or "").strip()
+        for item in phone_blacklist
+        if str(item or "").strip()
+    ]
+    if normalized_phone_blacklist:
+        query["phoneBlacklist"] = ",".join(normalized_phone_blacklist)
     country_candidates = _country_code_candidates(country_codes)
     candidates: list[_SmsProviderCountryCandidate] = []
     seen_provider_keys: set[str] = set()
@@ -404,11 +419,15 @@ def _query_provider_selection_candidates(
     provider_blacklist: tuple[str, ...],
     allow_paid: bool,
     country_codes: tuple[str, ...],
+    allow_reuse: bool | None = None,
+    phone_blacklist: tuple[str, ...] = (),
 ) -> list[str]:
     candidates, _seen_provider_keys, _unavailable_provider_keys = _query_provider_selection_candidates_with_seen(
         provider_blacklist=provider_blacklist,
         allow_paid=allow_paid,
         country_codes=country_codes,
+        allow_reuse=allow_reuse,
+        phone_blacklist=phone_blacklist,
     )
     return candidates
 
@@ -500,6 +519,8 @@ def open_sms_session(
         provider_blacklist=provider_blacklist,
         allow_paid=allow_paid,
         country_codes=country_codes,
+        allow_reuse=allow_reuse,
+        phone_blacklist=phone_blacklist,
     )
     base_payload: dict[str, Any] = {
         "businessKey": str(business_key or "").strip(),

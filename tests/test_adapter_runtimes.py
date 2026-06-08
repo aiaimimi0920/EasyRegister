@@ -390,6 +390,47 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
         self.assertEqual(["onlinesim"], candidates)
 
+    def test_easy_sms_client_sends_request_filters_to_selection_plan(self) -> None:
+        selection_paths: list[str] = []
+
+        def _get(path: str) -> dict[str, object]:
+            if path.startswith("/sms/query/providers/selection-plan?"):
+                selection_paths.append(path)
+                return {
+                    "candidates": [
+                        {"providerKey": "smstome", "available": False, "healthState": "healthy"},
+                    ]
+                }
+            if path.startswith("/sms/query/providers?"):
+                return {"providers": []}
+            return {}
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            side_effect=_get,
+        ):
+            with self.assertRaises(RuntimeError):
+                easy_sms_client.open_sms_session(
+                    business_key="openai",
+                    provider_blacklist=(),
+                    allow_paid=False,
+                    allow_reuse=False,
+                    max_bindings_per_phone=1,
+                    country_codes=("+44",),
+                    selection_mode="balanced",
+                    phone_blacklist=("+15551234567", "+15557654321"),
+                )
+
+        self.assertTrue(selection_paths)
+        query = parse_qs(urlparse(selection_paths[0]).query)
+        self.assertEqual(["false"], query.get("allowReuse"))
+        self.assertEqual(["+15551234567,+15557654321"], query.get("phoneBlacklist"))
+
     def test_easy_sms_client_catalog_fallback_excludes_unproductive_selection_plan_providers(self) -> None:
         post_payloads: list[dict[str, object]] = []
 
