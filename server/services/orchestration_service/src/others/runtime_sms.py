@@ -18,6 +18,7 @@ from shared_sms.easy_sms_client import open_sms_session, report_sms_outcome, wai
 
 DEFAULT_EASY_SMS_BASE_URL = "http://localhost:18083"
 DEFAULT_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS = 24 * 60 * 60
+DEFAULT_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS = 2 * 60 * 60
 DEFAULT_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS = 30 * 60
 DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD = 5
 DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS = 60 * 60
@@ -130,8 +131,22 @@ def _prune_sms_state(*, payload: dict[str, Any], now_ts: float | None = None) ->
                 blocked_until_ts = float(raw_value.get("blockedUntilTs") or 0.0)
             except Exception:
                 blocked_until_ts = 0.0
-            if blocked_until_ts > effective_now_ts:
-                target[key] = dict(raw_value)
+            effective_blocked_until_ts = blocked_until_ts
+            if bucket_key == "phones":
+                blocked_at_ts = _parse_iso_timestamp(raw_value.get("blockedAt"))
+                if blocked_at_ts is not None:
+                    max_phone_ttl = _resolve_sms_terminal_phone_blacklist_seconds_for_reason(reason)
+                    effective_blocked_until_ts = min(
+                        blocked_until_ts,
+                        blocked_at_ts + max_phone_ttl,
+                    )
+            if effective_blocked_until_ts > effective_now_ts:
+                normalized_value = dict(raw_value)
+                if effective_blocked_until_ts != blocked_until_ts:
+                    blocked_until = datetime.fromtimestamp(effective_blocked_until_ts, timezone.utc)
+                    normalized_value["blockedUntilTs"] = effective_blocked_until_ts
+                    normalized_value["blockedUntil"] = blocked_until.isoformat().replace("+00:00", "Z")
+                target[key] = normalized_value
         normalized[bucket_key] = target
     outcome_window_seconds = _resolve_sms_phone_scoped_provider_failure_window_seconds()
     min_outcome_ts = effective_now_ts - outcome_window_seconds
@@ -187,7 +202,7 @@ def _provider_blacklist_from_repeated_phone_scoped_state(
         recorded_at_ts = _parse_iso_timestamp(raw_value.get("blockedAt"))
         if recorded_at_ts is None:
             try:
-                recorded_at_ts = float(raw_value.get("blockedUntilTs") or 0.0) - _resolve_sms_terminal_phone_blacklist_seconds()
+                recorded_at_ts = float(raw_value.get("blockedUntilTs") or 0.0) - _resolve_sms_terminal_phone_blacklist_seconds_for_reason(reason)
             except Exception:
                 recorded_at_ts = 0.0
         if recorded_at_ts < min_recorded_at_ts:
@@ -235,6 +250,23 @@ def _resolve_sms_terminal_phone_blacklist_seconds() -> int:
         return max(0, int(float(raw or DEFAULT_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS)))
     except Exception:
         return DEFAULT_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS
+
+
+def _resolve_sms_terminal_rate_limit_phone_blacklist_seconds() -> int:
+    raw = str(
+        os.environ.get("REGISTER_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS")
+        or DEFAULT_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS
+    ).strip()
+    try:
+        return max(0, int(float(raw or DEFAULT_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS)))
+    except Exception:
+        return DEFAULT_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS
+
+
+def _resolve_sms_terminal_phone_blacklist_seconds_for_reason(terminal_code: str) -> int:
+    if str(terminal_code or "").strip().lower() == "rate_limit_exceeded":
+        return _resolve_sms_terminal_rate_limit_phone_blacklist_seconds()
+    return _resolve_sms_terminal_phone_blacklist_seconds()
 
 
 def _resolve_sms_terminal_provider_blacklist_seconds() -> int:
@@ -367,7 +399,9 @@ def record_terminal_phone_outcome(
     now = datetime.now(timezone.utc)
     phone_block_recorded = False
     if normalized_phone and _is_phone_scoped_terminal_code(normalized_code):
-        phone_until = now + timedelta(seconds=_resolve_sms_terminal_phone_blacklist_seconds())
+        phone_until = now + timedelta(
+            seconds=_resolve_sms_terminal_phone_blacklist_seconds_for_reason(normalized_code)
+        )
         payload.setdefault("phones", {})[normalized_phone] = {
             "reason": normalized_code,
             "detail": normalized_message,

@@ -2279,6 +2279,8 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 os.environ,
                 {
                     "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "9999999999",
+                    "REGISTER_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS": "9999999999",
                     "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD": "3",
                     "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS": "9999999999",
                     "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
@@ -2347,6 +2349,8 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 {
                     "REGISTER_SMS_STATE_PATH": str(state_path),
                     "REGISTER_SMS_SESSION_LOCAL_RETRY_ATTEMPTS": "2",
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "9999999999",
+                    "REGISTER_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS": "9999999999",
                     "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD": "3",
                     "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS": "9999999999",
                     "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
@@ -2425,6 +2429,8 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 {
                     "REGISTER_SMS_STATE_PATH": str(state_path),
                     "REGISTER_SMS_SESSION_LOCAL_RETRY_ATTEMPTS": "2",
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "9999999999",
+                    "REGISTER_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS": "9999999999",
                     "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD": "3",
                     "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS": "9999999999",
                     "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
@@ -2666,6 +2672,8 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 {
                     "REGISTER_SMS_STATE_PATH": str(state_path),
                     "REGISTER_SMS_SESSION_LOCAL_RETRY_ATTEMPTS": "3",
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "9999999999",
+                    "REGISTER_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS": "9999999999",
                     "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD": "3",
                     "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS": "9999999999",
                     "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
@@ -2738,6 +2746,33 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertIn("+36707448042", payload["phones"])
         self.assertEqual("rate_limit_exceeded", payload["phones"]["+36707448042"]["reason"])
         self.assertNotIn("onlinesim", payload["providers"])
+
+    def test_record_terminal_phone_outcome_uses_rate_limit_phone_ttl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "86400",
+                    "REGISTER_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS": "7200",
+                    "REGISTER_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS": "3600",
+                },
+                clear=False,
+            ):
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number="+36707448042",
+                    provider_key="onlinesim",
+                    terminal_code="rate_limit_exceeded",
+                    terminal_message="Too many phone verification requests.",
+                )
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+        record = payload["phones"]["+36707448042"]
+        blocked_at_ts = datetime.fromisoformat(record["blockedAt"].replace("Z", "+00:00")).timestamp()
+        self.assertLessEqual(record["blockedUntilTs"] - blocked_at_ts, 7205)
 
     def test_record_terminal_phone_outcome_keeps_invalid_and_wrong_code_phone_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2817,6 +2852,42 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
         self.assertNotIn("+15550000005", payload["phones"])
         self.assertIn("+15550000006", payload["phones"])
+
+    def test_prune_sms_state_caps_legacy_rate_limit_blocks_to_reason_ttl(self) -> None:
+        now_ts = datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc).timestamp()
+        stale_rate_limit_at = datetime(2025, 12, 31, 23, 59, tzinfo=timezone.utc)
+        recent_in_use_at = datetime(2025, 12, 31, 23, 59, tzinfo=timezone.utc)
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "86400",
+                "REGISTER_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS": "7200",
+            },
+            clear=False,
+        ):
+            payload = runtime_sms._prune_sms_state(
+                payload={
+                    "phones": {
+                        "+15550000007": {
+                            "blockedAt": stale_rate_limit_at.isoformat().replace("+00:00", "Z"),
+                            "blockedUntilTs": now_ts + 86400,
+                            "providerKey": "freepool",
+                            "reason": "rate_limit_exceeded",
+                        },
+                        "+15550000008": {
+                            "blockedAt": recent_in_use_at.isoformat().replace("+00:00", "Z"),
+                            "blockedUntilTs": now_ts + 86400,
+                            "providerKey": "freepool",
+                            "reason": "phone_number_in_use",
+                        },
+                    }
+                },
+                now_ts=now_ts,
+            )
+
+        self.assertNotIn("+15550000007", payload["phones"])
+        self.assertIn("+15550000008", payload["phones"])
 
     def test_record_terminal_phone_outcome_emits_sanitized_summary_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
