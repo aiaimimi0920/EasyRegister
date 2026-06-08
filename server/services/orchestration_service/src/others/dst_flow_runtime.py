@@ -488,6 +488,19 @@ def should_retry_task(
     return False
 
 
+def _retain_output_across_task_retry(statement: DstStatement) -> bool:
+    return str(statement.step_type or "").strip() == "acquire_openai_oauth_artifact" and bool(
+        str(statement.save_as or "").strip()
+    )
+
+
+def _defer_cleanup_for_task_retry(*, statement: DstStatement, state: dict[str, Any]) -> bool:
+    if str(statement.step_type or "").strip() != "finalize_openai_oauth_artifact":
+        return False
+    task = state.get("task") if isinstance(state.get("task"), dict) else {}
+    return bool(task.get("willRetry"))
+
+
 def run_dst_flow_once(
     *,
     output_dir: str | None = None,
@@ -543,6 +556,7 @@ def run_dst_flow_once(
         for statement in plan.steps
         if str(statement.save_as or "").strip()
     }
+    task_retry_retained_outputs: dict[str, Any] = {}
     for task_attempt in range(1, task_retry_max_attempts(plan, task_max_attempts) + 1):
         resolved_team_auth_path = str(team_auth_path or "").strip()
         resolved_team_invite_enabled = bool(team_invite_enabled) if team_invite_enabled is not None else bool(resolved_team_auth_path)
@@ -605,12 +619,31 @@ def run_dst_flow_once(
             if flow_failed and not step_always_run(statement):
                 result.steps.setdefault(statement.step_id, "skipped")
                 continue
+            if flow_failed and _defer_cleanup_for_task_retry(statement=statement, state=state):
+                result.steps.setdefault(statement.step_id, "skipped_task_retry")
+                continue
+            retained_save_as = str(statement.save_as or "").strip()
+            if (
+                not flow_failed
+                and retained_save_as
+                and _retain_output_across_task_retry(statement)
+                and retained_save_as in task_retry_retained_outputs
+            ):
+                retained_output = task_retry_retained_outputs[retained_save_as]
+                result.steps[statement.step_id] = "ok"
+                result.outputs[statement.step_id] = retained_output
+                result.step_attempts[statement.step_id] = 1
+                state[retained_save_as] = retained_output
+                continue
             attempt_index = 0
             while True:
                 attempt_index += 1
                 result.step_attempts[statement.step_id] = attempt_index
                 try:
-                    run_statement_once(statement=statement, state=state, result=result)
+                    step_output = run_statement_once(statement=statement, state=state, result=result)
+                    retained_save_as = str(statement.save_as or "").strip()
+                    if retained_save_as and _retain_output_across_task_retry(statement):
+                        task_retry_retained_outputs[retained_save_as] = step_output
                     break
                 except Exception as exc:
                     error_details = step_error_details(step_type=statement.step_type, exc=exc)
@@ -655,6 +688,13 @@ def run_dst_flow_once(
                                 result.error_step = statement.step_id
                                 state["task"]["errorCode"] = str(refresh_details.get("code") or "").strip()
                                 state["task"]["errorStep"] = statement.step_id
+                                state["task"]["willRetry"] = should_retry_task(
+                                    plan=plan,
+                                    error_step=statement.step_id,
+                                    error_details=refresh_details,
+                                    attempt_index=task_attempt,
+                                    override=task_max_attempts,
+                                )
                                 flow_failed = True
                             break
                     result.steps[statement.step_id] = "failed"
@@ -663,6 +703,13 @@ def run_dst_flow_once(
                         result.error_step = statement.step_id
                         state["task"]["errorCode"] = str(error_details.get("code") or "").strip()
                         state["task"]["errorStep"] = statement.step_id
+                        state["task"]["willRetry"] = should_retry_task(
+                            plan=plan,
+                            error_step=statement.step_id,
+                            error_details=error_details,
+                            attempt_index=task_attempt,
+                            override=task_max_attempts,
+                        )
                         flow_failed = True
                     break
         result.ok = not flow_failed
