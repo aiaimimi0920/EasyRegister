@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from unittest import mock
 
 
@@ -728,6 +729,63 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("blacklisted_phone_number", reported_outcomes[0]["detail"])
         self.assertEqual("sms_good", session.session_id)
         self.assertEqual("+33774749623", session.phone_number)
+
+    def test_easy_sms_client_merges_selection_candidates_across_country_codes(self) -> None:
+        queried_country_codes: list[str] = []
+        post_payloads: list[dict[str, object]] = []
+
+        def _get(path: str) -> dict[str, object]:
+            if not path.startswith("/sms/query/providers/selection-plan?"):
+                return {}
+            query = parse_qs(urlparse(path).query)
+            country_code = query.get("countryCode", [""])[0]
+            queried_country_codes.append(country_code)
+            if country_code == "+44":
+                return {"candidates": [{"providerKey": "smstome", "available": False}]}
+            if country_code == "+358":
+                return {"candidates": [{"providerKey": "receive_sms_free_cc", "available": True}]}
+            return {"candidates": []}
+
+        def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            post_payloads.append(dict(payload))
+            return {
+                "session": {
+                    "id": "sms_good",
+                    "phoneNumber": "+3584573980000",
+                    "providerKey": "receive_sms_free_cc",
+                }
+            }
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            side_effect=_get,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=_post,
+        ):
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=("+44", "+358"),
+                selection_mode="balanced",
+            )
+
+        self.assertEqual(["+44", "+358"], queried_country_codes)
+        self.assertEqual(
+            [("receive_sms_free_cc", "+358")],
+            [(payload["providerKey"], payload["countryCode"]) for payload in post_payloads],
+        )
+        self.assertEqual("sms_good", session.session_id)
+        self.assertEqual("receive_sms_free_cc", session.provider_key)
 
     def test_easy_sms_client_skips_provider_country_blacklist_before_opening_session(self) -> None:
         post_payloads: list[dict[str, object]] = []

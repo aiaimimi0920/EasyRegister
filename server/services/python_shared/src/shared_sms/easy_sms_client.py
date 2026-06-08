@@ -38,6 +38,12 @@ class SmsSession:
     provider_key: str
 
 
+@dataclass(frozen=True)
+class _SmsProviderCountryCandidate:
+    provider_key: str
+    country_code: str
+
+
 def _sms_service_base_url() -> str:
     value = str(os.environ.get("SMS_SERVICE_BASE_URL") or "").strip().rstrip("/")
     if not value:
@@ -303,48 +309,94 @@ def _query_provider_selection_candidates_with_seen(
     allow_paid: bool,
     country_codes: tuple[str, ...],
 ) -> tuple[list[str], set[str], set[str]]:
+    provider_country_candidates, seen_provider_keys, unavailable_provider_keys = (
+        _query_provider_country_selection_candidates_with_seen(
+            provider_blacklist=provider_blacklist,
+            allow_paid=allow_paid,
+            country_codes=country_codes,
+        )
+    )
+    return (
+        _dedupe_provider_keys(provider_country_candidates),
+        seen_provider_keys,
+        unavailable_provider_keys,
+    )
+
+
+def _query_provider_country_selection_candidates_with_seen(
+    *,
+    provider_blacklist: tuple[str, ...],
+    allow_paid: bool,
+    country_codes: tuple[str, ...],
+) -> tuple[list[_SmsProviderCountryCandidate], set[str], set[str]]:
     query = {
         "costTier": "paid" if allow_paid else "free",
         "limit": "20",
     }
-    first_country_code = _first_country_code(country_codes)
-    if first_country_code:
-        query["countryCode"] = first_country_code
-    plan_response = _get_json(
-        "/sms/query/providers/selection-plan?" + urllib.parse.urlencode(query)
-    )
-    if "candidates" not in plan_response:
-        return (
-            _query_provider_catalog_candidates(
-                provider_blacklist=provider_blacklist,
-                allow_paid=allow_paid,
-            ),
-            set(),
-            set(),
-        )
-    raw_candidates = plan_response.get("candidates") or []
-    candidates: list[str] = []
+    country_candidates = _country_code_candidates(country_codes)
+    candidates: list[_SmsProviderCountryCandidate] = []
     seen_provider_keys: set[str] = set()
     unavailable_provider_keys: set[str] = set()
     blacklist = {str(item or "").strip().lower() for item in provider_blacklist if str(item or "").strip()}
-    for raw_candidate in raw_candidates:
-        if not isinstance(raw_candidate, dict):
-            continue
-        provider_key = str(raw_candidate.get("providerKey") or "").strip().lower()
-        if not provider_key:
-            continue
-        seen_provider_keys.add(provider_key)
-        if raw_candidate.get("available") is False:
-            unavailable_provider_keys.add(provider_key)
-        if provider_key in blacklist:
-            continue
-        if raw_candidate.get("available") is False:
-            continue
-        health_state = str(raw_candidate.get("healthState") or "").strip().lower()
-        if health_state in UNPRODUCTIVE_SELECTION_HEALTH_STATES:
-            continue
-        candidates.append(provider_key)
+
+    for country_code in country_candidates:
+        scoped_query = dict(query)
+        if country_code:
+            scoped_query["countryCode"] = country_code
+        plan_response = _get_json(
+            "/sms/query/providers/selection-plan?" + urllib.parse.urlencode(scoped_query)
+        )
+        if "candidates" not in plan_response:
+            catalog_candidates = _query_provider_catalog_candidates(
+                provider_blacklist=provider_blacklist,
+                allow_paid=allow_paid,
+            )
+            return (
+                [
+                    _SmsProviderCountryCandidate(
+                        provider_key=provider_key,
+                        country_code=country_code,
+                    )
+                    for provider_key in catalog_candidates
+                ],
+                seen_provider_keys,
+                unavailable_provider_keys,
+            )
+        raw_candidates = plan_response.get("candidates") or []
+        for raw_candidate in raw_candidates:
+            if not isinstance(raw_candidate, dict):
+                continue
+            provider_key = str(raw_candidate.get("providerKey") or "").strip().lower()
+            if not provider_key:
+                continue
+            seen_provider_keys.add(provider_key)
+            if raw_candidate.get("available") is False:
+                unavailable_provider_keys.add(provider_key)
+            if provider_key in blacklist:
+                continue
+            if raw_candidate.get("available") is False:
+                continue
+            health_state = str(raw_candidate.get("healthState") or "").strip().lower()
+            if health_state in UNPRODUCTIVE_SELECTION_HEALTH_STATES:
+                continue
+            candidates.append(
+                _SmsProviderCountryCandidate(
+                    provider_key=provider_key,
+                    country_code=country_code,
+                )
+            )
     return candidates, seen_provider_keys, unavailable_provider_keys
+
+
+def _dedupe_provider_keys(candidates: list[_SmsProviderCountryCandidate]) -> list[str]:
+    provider_keys: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate.provider_key in seen:
+            continue
+        provider_keys.append(candidate.provider_key)
+        seen.add(candidate.provider_key)
+    return provider_keys
 
 
 def _query_provider_selection_candidates(
@@ -441,10 +493,10 @@ def open_sms_session(
 ) -> SmsSession:
     _wait_sms_service_ready()
     (
-        selection_plan_candidates,
+        selection_plan_provider_country_candidates,
         selection_plan_seen_provider_keys,
         selection_plan_unavailable_provider_keys,
-    ) = _query_provider_selection_candidates_with_seen(
+    ) = _query_provider_country_selection_candidates_with_seen(
         provider_blacklist=provider_blacklist,
         allow_paid=allow_paid,
         country_codes=country_codes,
@@ -455,7 +507,7 @@ def open_sms_session(
         "allowReuse": bool(allow_reuse),
         "maxBindingsPerPhone": max(1, int(max_bindings_per_phone or 1)),
     }
-    candidate_provider_keys = list(selection_plan_candidates)
+    candidate_provider_keys = _dedupe_provider_keys(selection_plan_provider_country_candidates)
     if not candidate_provider_keys:
         candidate_provider_keys = _query_provider_catalog_candidates(
             provider_blacklist=provider_blacklist,
@@ -486,61 +538,75 @@ def open_sms_session(
     opened_session_attempts = 0
     provider_country_skip_count = 0
 
-    def _try_provider_candidates(provider_keys: list[str]) -> SmsSession | None:
+    def _try_provider_country_candidates(candidates: list[_SmsProviderCountryCandidate]) -> SmsSession | None:
         nonlocal last_error, opened_session_attempts, provider_country_skip_count
-        for provider_key_candidate in provider_keys:
-            normalized_provider_key = str(provider_key_candidate or "").strip().lower()
-            for country_code_candidate in country_candidates:
-                if (
-                    normalized_provider_key
-                    and country_code_candidate
-                    and (normalized_provider_key, country_code_candidate) in blocked_provider_country_pairs
-                ):
-                    provider_country_skip_count += 1
+        for candidate in candidates:
+            normalized_provider_key = str(candidate.provider_key or "").strip().lower()
+            country_code_candidate = str(candidate.country_code or "").strip()
+            if (
+                normalized_provider_key
+                and country_code_candidate
+                and (normalized_provider_key, country_code_candidate) in blocked_provider_country_pairs
+            ):
+                provider_country_skip_count += 1
+                continue
+            request_payload = dict(base_payload)
+            if country_code_candidate:
+                request_payload["countryCode"] = country_code_candidate
+            if normalized_provider_key:
+                request_payload["providerKey"] = normalized_provider_key
+            if normalized_selection_mode and normalized_provider_key == "hero_sms":
+                request_payload["selectionMode"] = normalized_selection_mode
+            if blocked_phones:
+                request_payload["phoneBlacklist"] = list(phone_blacklist)
+            opened_session_attempts += 1
+            try:
+                response = _post_json("/sms/sessions/open", request_payload)
+            except Exception as exc:
+                last_error = exc
+                if normalized_provider_key and _is_retryable_provider_open_error(exc):
                     continue
-                request_payload = dict(base_payload)
-                if country_code_candidate:
-                    request_payload["countryCode"] = country_code_candidate
-                if normalized_provider_key:
-                    request_payload["providerKey"] = normalized_provider_key
-                if normalized_selection_mode and normalized_provider_key == "hero_sms":
-                    request_payload["selectionMode"] = normalized_selection_mode
-                if blocked_phones:
-                    request_payload["phoneBlacklist"] = list(phone_blacklist)
-                opened_session_attempts += 1
-                try:
-                    response = _post_json("/sms/sessions/open", request_payload)
-                except Exception as exc:
-                    last_error = exc
-                    if normalized_provider_key and _is_retryable_provider_open_error(exc):
-                        continue
-                    raise
-                session = dict(response.get("session") or (response.get("result") or {}).get("session") or {})
-                session_id = str(session.get("id") or "").strip()
-                phone_number = str(session.get("phoneNumberE164") or session.get("phoneNumber") or "").strip()
-                provider_key = str(session.get("providerKey") or "").strip().lower()
-                if session_id and phone_number:
-                    if _phone_lookup_keys(phone_number) & blocked_phones:
-                        _safe_report_rejected_sms_session(
-                            session_id=session_id,
-                            detail="blacklisted_phone_number",
-                        )
-                        last_error = RuntimeError(f"sms service returned blacklisted phone number: {phone_number}")
-                        continue
-                    return SmsSession(
+                raise
+            session = dict(response.get("session") or (response.get("result") or {}).get("session") or {})
+            session_id = str(session.get("id") or "").strip()
+            phone_number = str(session.get("phoneNumberE164") or session.get("phoneNumber") or "").strip()
+            provider_key = str(session.get("providerKey") or "").strip().lower()
+            if session_id and phone_number:
+                if _phone_lookup_keys(phone_number) & blocked_phones:
+                    _safe_report_rejected_sms_session(
                         session_id=session_id,
-                        phone_number=phone_number,
-                        provider_key=provider_key,
+                        detail="blacklisted_phone_number",
                     )
-                last_error = RuntimeError("sms service returned invalid sms session")
+                    last_error = RuntimeError(f"sms service returned blacklisted phone number: {phone_number}")
+                    continue
+                return SmsSession(
+                    session_id=session_id,
+                    phone_number=phone_number,
+                    provider_key=provider_key,
+                )
+            last_error = RuntimeError("sms service returned invalid sms session")
         return None
 
-    selected_session = _try_provider_candidates(candidate_provider_keys)
+    def _provider_country_candidates_from_provider_keys(provider_keys: list[str]) -> list[_SmsProviderCountryCandidate]:
+        return [
+            _SmsProviderCountryCandidate(
+                provider_key=str(provider_key or "").strip().lower(),
+                country_code=country_code,
+            )
+            for provider_key in provider_keys
+            for country_code in country_candidates
+        ]
+
+    initial_provider_country_candidates = (
+        selection_plan_provider_country_candidates
+        or _provider_country_candidates_from_provider_keys(candidate_provider_keys)
+    )
+    selected_session = _try_provider_country_candidates(initial_provider_country_candidates)
     if selected_session is not None:
         return selected_session
-    if selection_plan_candidates and opened_session_attempts == 0 and provider_country_skip_count > 0:
+    if selection_plan_provider_country_candidates and opened_session_attempts == 0 and provider_country_skip_count > 0:
         raise RuntimeError("sms_no_unblocked_provider_country_candidates")
-    if selection_plan_candidates:
+    if selection_plan_provider_country_candidates:
         fallback_provider_keys = _query_provider_catalog_candidates(
             provider_blacklist=provider_blacklist,
             allow_paid=allow_paid,
@@ -555,7 +621,9 @@ def open_sms_session(
                 exclude_provider_keys=tuple(sorted(selection_plan_unavailable_provider_keys)),
             )
         if fallback_provider_keys:
-            selected_session = _try_provider_candidates(fallback_provider_keys)
+            selected_session = _try_provider_country_candidates(
+                _provider_country_candidates_from_provider_keys(fallback_provider_keys)
+            )
             if selected_session is not None:
                 return selected_session
     if last_error is not None:
