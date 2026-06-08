@@ -1216,6 +1216,64 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("resume_123", captured_inputs[1]["resume_context"]["token"])
         self.assertEqual("resume_123_step2", captured_inputs[2]["resume_context"]["token"])
 
+    def test_dispatch_obtain_codex_oauth_completes_raw_phone_wall_artifact_result(self) -> None:
+        captured_calls: list[dict[str, object]] = []
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured_calls.append({"step_type": step_type, **dict(step_input)})
+            if step_type == "obtain_codex_oauth":
+                return {
+                    "ok": True,
+                    "outcome": "phone_wall",
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_raw_phone_wall"},
+                }
+            if step_type == "submit_phone_verification_number":
+                return {
+                    "ok": True,
+                    "status": "phone_number_submitted",
+                    "pageType": "sms_verification",
+                    "resumeContext": {"flow": "oauth", "token": "resume_after_number"},
+                }
+            return {
+                "ok": True,
+                "status": "completed",
+                "successPath": "C:/tmp/codex-free.json",
+                "userId": "user_123",
+            }
+
+        with mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            return_value={"sessionId": "sms_123", "phoneNumber": "+15551234567", "providerKey": "sms24"},
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+            return_value="123456",
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ):
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("completed", result.get("status"))
+        self.assertTrue(result.get("phoneVerificationAttempted"))
+        self.assertEqual(
+            ["obtain_codex_oauth", "submit_phone_verification_number", "submit_phone_verification_code"],
+            [str(item["step_type"]) for item in captured_calls],
+        )
+        self.assertEqual("resume_raw_phone_wall", captured_calls[1]["resume_context"]["token"])
+        self.assertEqual("resume_after_number", captured_calls[2]["resume_context"]["token"])
+
     def test_dispatch_obtain_codex_oauth_recovers_phone_wall_artifact_after_protocol_timeout(self) -> None:
         captured_inputs: list[dict[str, object]] = []
 

@@ -378,6 +378,29 @@ def _looks_like_phone_wall_recovery_error(exc: BaseException) -> bool:
     return bool(message) and any(marker in message for marker in PHONE_WALL_RECOVERY_ERROR_MARKERS)
 
 
+def _looks_like_phone_wall_result(result: dict[str, Any]) -> bool:
+    if bool(result.get("phoneVerificationRequired")):
+        return True
+    resume_context = result.get("resumeContext")
+    if not isinstance(resume_context, dict) or not resume_context:
+        return False
+    outcome = str(result.get("outcome") or "").strip().lower()
+    status = str(result.get("status") or "").strip().lower()
+    page_type = str(result.get("pageType") or result.get("page_type") or "").strip().lower()
+    return outcome == "phone_wall" or status == "phone_verification_required" or "phone" in page_type
+
+
+def _normalize_phone_wall_result(result: dict[str, Any]) -> dict[str, Any]:
+    if not _looks_like_phone_wall_result(result):
+        return result
+    normalized = dict(result)
+    normalized["ok"] = True
+    normalized["status"] = str(normalized.get("status") or "").strip() or "phone_verification_required"
+    normalized["phoneVerificationRequired"] = True
+    normalized["pageType"] = str(normalized.get("pageType") or normalized.get("page_type") or "").strip() or "add_phone"
+    return normalized
+
+
 def _phone_wall_artifact_base_dirs(step_input: dict[str, Any]) -> list[Path]:
     bases: list[Path] = []
     for key in ("output_dir", "outputDir"):
@@ -595,6 +618,7 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
 
 
 def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, Any], step_input: dict[str, Any]) -> dict[str, Any]:
+    initial_result = _normalize_phone_wall_result(initial_result)
     if not bool(initial_result.get("phoneVerificationRequired")):
         return initial_result
 
