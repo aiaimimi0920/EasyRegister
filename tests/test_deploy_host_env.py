@@ -58,6 +58,10 @@ class DeployHostEnvTests(unittest.TestCase):
                     "proxy-test-key",
                     "-SmsServiceApiKey",
                     "sms-test-key",
+                    "-SmsSelectionPlanTimeoutSeconds",
+                    "75",
+                    "-SmsSelectionPlanAttempts",
+                    "2",
                     "-Image",
                     "ghcr.io/example/easyregister:test",
                     "-MaterializeOnly",
@@ -85,6 +89,8 @@ class DeployHostEnvTests(unittest.TestCase):
             self.assertEqual("21600", env_values.get("REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS"))
             self.assertEqual("http://easy-sms:8080", env_values.get("SMS_SERVICE_BASE_URL"))
             self.assertEqual("sms-test-key", env_values.get("SMS_SERVICE_API_KEY"))
+            self.assertEqual("75", env_values.get("SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS"))
+            self.assertEqual("2", env_values.get("SMS_SERVICE_SELECTION_PLAN_ATTEMPTS"))
             self.assertEqual("openai", env_values.get("REGISTER_SMS_BUSINESS_KEY"))
             self.assertEqual("hero_sms", env_values.get("REGISTER_SMS_PROVIDER_BLACKLIST"))
             self.assertEqual("false", env_values.get("REGISTER_SMS_ALLOW_PAID"))
