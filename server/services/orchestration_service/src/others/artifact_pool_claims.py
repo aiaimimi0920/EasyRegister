@@ -514,7 +514,7 @@ def validate_free_personal_oauth(*, step_input: dict[str, Any]) -> dict[str, Any
         return {
             "ok": False,
             "status": "phone_verification_attempted_small_success",
-            "code": "phone_verification_submitted_small_success",
+            "code": ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS,
             "detail": "phone_verification_attempted_small_success",
             "oauth_account_id": oauth_account_id,
             "team_account_id": team_account_id,

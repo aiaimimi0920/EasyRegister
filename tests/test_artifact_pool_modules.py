@@ -124,7 +124,7 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
         )
 
         self.assertFalse(result["ok"])
-        self.assertEqual("phone_verification_submitted_small_success", result["code"])
+        self.assertEqual("phone_verification_attempted_small_success", result["code"])
         self.assertEqual("phone_verification_attempted_small_success", result["status"])
         self.assertEqual("phone_verification_attempted_small_success", result["detail"])
         self.assertEqual("submit_phone_verification_number", result["phone_failure_stage"])

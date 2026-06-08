@@ -74,6 +74,19 @@ def step_output_ok(*, step_type: str, step_output: Any) -> tuple[bool, str]:
                     if suffix
                     else ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS
                 )
+            if (
+                bool(step_output.get("phoneVerificationAttempted"))
+                and not bool(step_output.get("phoneVerificationSubmitted"))
+                and step_output.get("phoneVerificationAccepted") is False
+            ):
+                detail = str(step_output.get("phoneVerificationFailureDetail") or "").strip()
+                stage = str(step_output.get("phoneVerificationFailureStage") or "").strip()
+                suffix = " ".join(part for part in (stage, detail) if part)
+                return False, (
+                    f"{ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS}: {suffix}"
+                    if suffix
+                    else ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS
+                )
         if isinstance(step_output, dict) and (
             bool(step_output.get("ok")) or bool(str(step_output.get("successPath") or "").strip())
         ):

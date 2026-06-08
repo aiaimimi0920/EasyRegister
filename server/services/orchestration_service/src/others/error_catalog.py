@@ -14,6 +14,7 @@ class ErrorCodes:
     MAILBOX_UNAVAILABLE = "mailbox_unavailable"
     OTP_TIMEOUT = "otp_timeout"
     PASSWORD_VERIFY_BLOCKED = "password_verify_blocked"
+    PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS = "phone_verification_attempted_small_success"
     PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS = "phone_verification_submitted_small_success"
     PROXY_CONNECT_FAILED = "proxy_connect_failed"
     REFRESH_TOKEN_REUSED = "refresh_token_reused"
@@ -41,6 +42,7 @@ CODE_CATEGORY_MAP: dict[str, str] = {
     ErrorCodes.MAILBOX_UNAVAILABLE: "flow_error",
     ErrorCodes.OTP_TIMEOUT: "otp_timeout",
     ErrorCodes.PASSWORD_VERIFY_BLOCKED: "blocked",
+    ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS: "flow_error",
     ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS: "flow_error",
     ErrorCodes.PROXY_CONNECT_FAILED: "proxy_error",
     ErrorCodes.REFRESH_TOKEN_REUSED: "auth_error",
@@ -404,4 +406,6 @@ def classify_error_code(
         return ErrorCodes.FLOW_TIMEOUT_EXCEEDED
     if "curl" in lowered or "connect" in lowered or "tls" in lowered:
         return ErrorCodes.TRANSPORT_ERROR
+    if ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS in combined:
+        return ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS
     return normalize_error_code(f"{normalized_step_type}_failed")
