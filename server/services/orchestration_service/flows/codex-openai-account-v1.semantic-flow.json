@@ -27,26 +27,6 @@
     },
     "steps": [
       {
-        "id": "acquire-mailbox",
-        "type": "acquire_mailbox",
-        "input": {
-          "preallocated_email": "{{task.preallocated_email}}",
-          "preallocated_session_id": "{{task.preallocated_session_id}}",
-          "preallocated_mailbox_ref": "{{task.preallocated_mailbox_ref}}",
-          "recreate_preallocated_email": "{{task.mailbox_recreate_preallocated}}",
-          "business_key": "{{task.mailbox_business_key}}",
-          "avoid_emails": "{{task.avoidMailboxEmails}}",
-          "avoid_domains": "{{task.avoidMailboxDomains}}",
-          "avoid_providers": "{{task.avoidMailboxProviders}}",
-          "avoid_reason": "{{task.avoidMailboxReason}}"
-        },
-        "saveAs": "mailbox",
-        "metadata": {
-          "owner": "easyemail",
-          "stage": "mailbox-acquire"
-        }
-      },
-      {
         "id": "acquire-proxy-chain",
         "type": "acquire_proxy_chain",
         "input": {
@@ -72,6 +52,26 @@
         "metadata": {
           "owner": "easyproxy",
           "stage": "proxy-acquire"
+        }
+      },
+      {
+        "id": "acquire-mailbox",
+        "type": "acquire_mailbox",
+        "input": {
+          "preallocated_email": "{{task.preallocated_email}}",
+          "preallocated_session_id": "{{task.preallocated_session_id}}",
+          "preallocated_mailbox_ref": "{{task.preallocated_mailbox_ref}}",
+          "recreate_preallocated_email": "{{task.mailbox_recreate_preallocated}}",
+          "business_key": "{{task.mailbox_business_key}}",
+          "avoid_emails": "{{task.avoidMailboxEmails}}",
+          "avoid_domains": "{{task.avoidMailboxDomains}}",
+          "avoid_providers": "{{task.avoidMailboxProviders}}",
+          "avoid_reason": "{{task.avoidMailboxReason}}"
+        },
+        "saveAs": "mailbox",
+        "metadata": {
+          "owner": "easyemail",
+          "stage": "mailbox-acquire"
         }
       },
       {

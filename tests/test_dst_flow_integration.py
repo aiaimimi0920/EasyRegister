@@ -465,6 +465,20 @@ class DstFlowIntegrationTests(unittest.TestCase):
                 self.assertEqual(expected_probe_urls, proxy_steps[0].input.get("probe_urls"))
                 self.assertEqual([200], proxy_steps[0].input.get("probe_expected_statuses"))
 
+    def test_canonical_main_flow_acquires_proxy_before_mailbox(self) -> None:
+        flow_path = (
+            Path(__file__).resolve().parents[1]
+            / "server"
+            / "services"
+            / "orchestration_service"
+            / "flows"
+            / "codex-openai-account-v1.semantic-flow.json"
+        )
+        plan = load_dst_flow(flow_path)
+        step_ids = [statement.step_id for statement in plan.steps]
+
+        self.assertLess(step_ids.index("acquire-proxy-chain"), step_ids.index("acquire-mailbox"))
+
     def test_run_dst_flow_once_claims_configured_input_file_and_releases_mailbox_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             input_dir = Path(tmp_dir) / "input"
