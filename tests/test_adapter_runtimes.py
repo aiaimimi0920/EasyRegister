@@ -2179,7 +2179,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             detail="blacklisted_phone_number",
         )
 
-    def test_open_phone_session_for_business_passes_provider_country_blacklist(self) -> None:
+    def test_open_phone_session_for_business_keeps_phone_failures_exactly_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
             state_path.write_text(
@@ -2231,7 +2231,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
         self.assertEqual("sms_2", session["sessionId"])
         self.assertEqual(
-            [("smstome|+44",)],
+            [()],
             captured_provider_country_blacklists,
         )
 

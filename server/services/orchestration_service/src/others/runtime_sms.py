@@ -30,10 +30,8 @@ PHONE_SCOPED_TERMINAL_CODES = {
     "rate_limit_exceeded",
     "wrong_otp_code",
 }
-PROVIDER_COUNTRY_BLACKLIST_PHONE_REASONS = {
-    "phone_number_in_use",
-    "phone_max_usage_exceeded",
-}
+# Exact public numbers are blocked via phone_blacklist; do not widen them to provider-country routes.
+PROVIDER_COUNTRY_BLACKLIST_PHONE_REASONS: set[str] = set()
 SOFT_SMS_TERMINAL_CODES = {
     "sms_code_timeout",
     "wait_code_timeout",
