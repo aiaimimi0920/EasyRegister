@@ -7,6 +7,10 @@ from pathlib import Path
 
 PREFIX = "EASYREGISTER_ENV_"
 RUNTIME_ENV_B64 = "EASYREGISTER_RUNTIME_ENV_B64"
+RELEASE_DEFAULT_KEYS = {
+    "SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS",
+    "SMS_SERVICE_SELECTION_PLAN_ATTEMPTS",
+}
 
 
 def _parse_env_file(path: Path) -> tuple[list[str], dict[str, str]]:
@@ -38,6 +42,17 @@ def _load_secret_env(os_env: dict[str, str]) -> dict[str, str]:
             continue
         overrides[runtime_key] = value_text
     return overrides
+
+
+def _fill_release_defaults(values: dict[str, str], release_defaults: dict[str, str]) -> dict[str, str]:
+    merged = dict(values)
+    for key in RELEASE_DEFAULT_KEYS:
+        default_value = str(release_defaults.get(key) or "")
+        if default_value == "":
+            continue
+        if str(merged.get(key) or "") == "":
+            merged[key] = default_value
+    return merged
 
 
 def _render_lines(base_lines: list[str], merged: dict[str, str]) -> str:
@@ -76,6 +91,8 @@ def main() -> int:
     if runtime_env_b64:
         decoded = base64.b64decode(runtime_env_b64).decode("utf-8")
         base_lines, base_values = _parse_env_text(decoded)
+        _committed_base_lines, committed_base_values = _parse_env_file(base_env_path)
+        base_values = _fill_release_defaults(base_values, committed_base_values)
         overrides = _load_secret_env(__import__("os").environ)
         merged = {**base_values, **overrides}
         output_path.write_text(_render_lines(base_lines, merged), encoding="utf-8")
