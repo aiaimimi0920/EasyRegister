@@ -18,6 +18,8 @@ DEFAULT_SMS_SERVICE_READY_TIMEOUT_SECONDS = 90
 DEFAULT_SMS_SERVICE_READY_PROBE_INTERVAL_SECONDS = 2
 DEFAULT_SMS_SERVICE_REQUEST_ATTEMPTS = 3
 DEFAULT_SMS_SERVICE_OPEN_TIMEOUT_SECONDS = 120
+DEFAULT_SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS = 8
+DEFAULT_SMS_SERVICE_SELECTION_PLAN_ATTEMPTS = 1
 SUPPORTED_SMS_SELECTION_MODES = {
     "price-first",
     "success-first",
@@ -104,6 +106,28 @@ def _sms_service_open_timeout_seconds() -> int:
         return max(30, int(float(raw)))
     except Exception:
         return DEFAULT_SMS_SERVICE_OPEN_TIMEOUT_SECONDS
+
+
+def _sms_service_selection_plan_timeout_seconds() -> int:
+    raw = str(
+        os.environ.get("SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS")
+        or DEFAULT_SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS
+    ).strip()
+    try:
+        return max(2, int(float(raw)))
+    except Exception:
+        return DEFAULT_SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS
+
+
+def _sms_service_selection_plan_attempts() -> int:
+    raw = str(
+        os.environ.get("SMS_SERVICE_SELECTION_PLAN_ATTEMPTS")
+        or DEFAULT_SMS_SERVICE_SELECTION_PLAN_ATTEMPTS
+    ).strip()
+    try:
+        return max(1, int(float(raw)))
+    except Exception:
+        return DEFAULT_SMS_SERVICE_SELECTION_PLAN_ATTEMPTS
 
 
 def _build_opener() -> urllib.request.OpenerDirector:
@@ -241,6 +265,13 @@ def _post_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _get_json(path: str) -> dict[str, Any]:
+    if path.startswith("/sms/query/providers/selection-plan?"):
+        return _sms_service_request(
+            method="GET",
+            path=path,
+            timeout_seconds=_sms_service_selection_plan_timeout_seconds(),
+            attempts=_sms_service_selection_plan_attempts(),
+        )
     return _sms_service_request(method="GET", path=path)
 
 
@@ -303,6 +334,25 @@ def _is_retryable_provider_open_error(exc: Exception) -> bool:
     )
 
 
+def _is_transient_selection_plan_error(exc: Exception) -> bool:
+    if _is_transient_sms_service_error(exc, path="/sms/query/providers/selection-plan"):
+        return True
+    normalized = str(exc or "").strip().lower()
+    return any(
+        token in normalized
+        for token in (
+            "http 502",
+            "http 503",
+            "http 504",
+            "temporarily unavailable",
+            "upstream transient",
+            "capacity unavailable",
+            "timed out",
+            "timeout",
+        )
+    )
+
+
 def _query_provider_selection_candidates_with_seen(
     *,
     provider_blacklist: tuple[str, ...],
@@ -358,9 +408,13 @@ def _query_provider_country_selection_candidates_with_seen(
         scoped_query = dict(query)
         if country_code:
             scoped_query["countryCode"] = country_code
-        plan_response = _get_json(
-            "/sms/query/providers/selection-plan?" + urllib.parse.urlencode(scoped_query)
-        )
+        selection_plan_path = "/sms/query/providers/selection-plan?" + urllib.parse.urlencode(scoped_query)
+        try:
+            plan_response = _get_json(selection_plan_path)
+        except Exception as exc:
+            if _is_transient_selection_plan_error(exc):
+                continue
+            raise
         if "candidates" not in plan_response:
             catalog_candidates = _query_provider_catalog_candidates(
                 provider_blacklist=provider_blacklist,

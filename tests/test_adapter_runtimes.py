@@ -431,6 +431,94 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual(["false"], query.get("allowReuse"))
         self.assertEqual(["+15551234567,+15557654321"], query.get("phoneBlacklist"))
 
+    def test_easy_sms_client_uses_bounded_selection_plan_requests(self) -> None:
+        def _request(**kwargs):
+            if kwargs["path"].startswith("/sms/query/providers/selection-plan?"):
+                return {
+                    "candidates": [
+                        {"providerKey": "sms24", "available": True, "healthState": "healthy"},
+                    ]
+                }
+            return {}
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_sms_service_request",
+            side_effect=_request,
+        ) as request:
+            candidates = easy_sms_client._query_provider_selection_candidates(
+                provider_blacklist=(),
+                allow_paid=False,
+                country_codes=("+44",),
+                allow_reuse=False,
+                phone_blacklist=("+15551234567",),
+            )
+
+        self.assertEqual(["sms24"], candidates)
+        selection_call = request.call_args_list[0].kwargs
+        self.assertTrue(selection_call["path"].startswith("/sms/query/providers/selection-plan?"))
+        self.assertEqual(8, selection_call.get("timeout_seconds"))
+        self.assertEqual(1, selection_call.get("attempts"))
+
+    def test_easy_sms_client_skips_timed_out_selection_plan_country(self) -> None:
+        selection_countries: list[str] = []
+        post_payloads: list[dict[str, object]] = []
+
+        def _request(**kwargs):
+            path = str(kwargs["path"])
+            if path.startswith("/sms/query/providers/selection-plan?"):
+                country = parse_qs(urlparse(path).query).get("countryCode", [""])[0]
+                selection_countries.append(country)
+                if country == "+44":
+                    raise TimeoutError("timed out")
+                if country == "+1":
+                    return {
+                        "candidates": [
+                            {"providerKey": "sms24", "available": True, "healthState": "healthy"},
+                        ]
+                    }
+            return {}
+
+        def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            post_payloads.append(dict(payload))
+            return {
+                "session": {
+                    "id": "sms_127",
+                    "phoneNumber": "+15557654324",
+                    "providerKey": payload.get("providerKey"),
+                }
+            }
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_sms_service_request",
+            side_effect=_request,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=_post,
+        ):
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=("+44", "+1"),
+                selection_mode="balanced",
+                phone_blacklist=("+15551234567",),
+            )
+
+        self.assertEqual(["+44", "+1"], selection_countries)
+        self.assertEqual("sms24", session.provider_key)
+        self.assertEqual("sms_127", session.session_id)
+        self.assertEqual("+1", post_payloads[0]["countryCode"])
+        self.assertEqual(["+15551234567"], post_payloads[0]["phoneBlacklist"])
+
     def test_easy_sms_client_catalog_fallback_excludes_unproductive_selection_plan_providers(self) -> None:
         post_payloads: list[dict[str, object]] = []
 
