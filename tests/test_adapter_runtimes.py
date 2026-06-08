@@ -2173,7 +2173,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
         self.assertEqual("sms_2", session["sessionId"])
         self.assertEqual(
-            [("onlinesim|+31", "smstome|+44")],
+            [("smstome|+44",)],
             captured_provider_country_blacklists,
         )
 

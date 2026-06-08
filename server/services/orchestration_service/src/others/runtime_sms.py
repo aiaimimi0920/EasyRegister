@@ -29,6 +29,10 @@ PHONE_SCOPED_TERMINAL_CODES = {
     "rate_limit_exceeded",
     "wrong_otp_code",
 }
+PROVIDER_COUNTRY_BLACKLIST_PHONE_REASONS = {
+    "phone_number_in_use",
+    "phone_max_usage_exceeded",
+}
 SOFT_SMS_TERMINAL_CODES = {
     "sms_code_timeout",
     "wait_code_timeout",
@@ -320,6 +324,9 @@ def _provider_country_blacklist_from_state(
             continue
         provider_key = str(raw_value.get("providerKey") or "").strip().lower()
         if not provider_key:
+            continue
+        reason = str(raw_value.get("reason") or "").strip().lower()
+        if reason not in PROVIDER_COUNTRY_BLACKLIST_PHONE_REASONS:
             continue
         country_code = _match_phone_country_code(
             phone_number=str(raw_phone or "").strip(),
