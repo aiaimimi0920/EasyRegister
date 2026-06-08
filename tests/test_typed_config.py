@@ -129,6 +129,26 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual(("ca",), policy.country_codes)
         self.assertEqual("balanced", policy.selection_mode)
 
+    def test_sms_runtime_config_empty_business_country_codes_inherit_global_countries(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_SMS_BUSINESS_KEY": "openai",
+                "REGISTER_SMS_COUNTRY_CODES": "+44,+358,+1",
+                "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                    '{"default":{"enabled":false,"providerBlacklist":["hero_sms"],"allowPaid":false},'
+                    '"openai":{"enabled":true,"providerBlacklist":["hero_sms"],'
+                    '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
+                    '"countryCodes":[],"selectionMode":"balanced"}}'
+                ),
+            },
+            clear=True,
+        ):
+            config = SmsRuntimeConfig.from_env(default_state_path=Path("C:/tmp/register-sms-state.json"))
+
+        policy = config.resolve_business_policy("openai")
+        self.assertEqual(("+44", "+358", "+1"), policy.country_codes)
+
     def test_sms_runtime_config_ignores_invalid_selection_mode(self) -> None:
         with mock.patch.dict(
             os.environ,

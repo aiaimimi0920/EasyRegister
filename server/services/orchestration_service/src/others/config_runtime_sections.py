@@ -920,22 +920,37 @@ class SmsRuntimeConfig:
         fallback = _normalize_mailbox_business_key(self.business_key)
         return fallback or "default"
 
+    def _policy_with_runtime_country_defaults(
+        self,
+        policy: SmsBusinessPolicy,
+        *,
+        business_key: str | None = None,
+    ) -> SmsBusinessPolicy:
+        resolved_country_codes = policy.country_codes or self.country_codes
+        resolved_business_key = business_key or policy.business_key
+        if resolved_business_key == policy.business_key and resolved_country_codes == policy.country_codes:
+            return policy
+        return SmsBusinessPolicy(
+            business_key=resolved_business_key,
+            enabled=policy.enabled,
+            explicit_blacklist_providers=policy.explicit_blacklist_providers,
+            allow_paid=policy.allow_paid,
+            allow_reuse=policy.allow_reuse,
+            max_bindings_per_phone=policy.max_bindings_per_phone,
+            country_codes=resolved_country_codes,
+            selection_mode=policy.selection_mode,
+        )
+
     def resolve_business_policy(self, business_key: str | None = None) -> SmsBusinessPolicy:
         resolved_business_key = self.resolve_business_key(business_key)
         for policy in self.business_policies:
             if policy.business_key == resolved_business_key:
-                return policy
+                return self._policy_with_runtime_country_defaults(policy)
         for policy in self.business_policies:
             if policy.business_key in _SMS_DEFAULT_POLICY_KEYS:
-                return SmsBusinessPolicy(
+                return self._policy_with_runtime_country_defaults(
+                    policy,
                     business_key=resolved_business_key,
-                    enabled=policy.enabled,
-                    explicit_blacklist_providers=policy.explicit_blacklist_providers,
-                    allow_paid=policy.allow_paid,
-                    allow_reuse=policy.allow_reuse,
-                    max_bindings_per_phone=policy.max_bindings_per_phone,
-                    country_codes=policy.country_codes,
-                    selection_mode=policy.selection_mode,
                 )
         return SmsBusinessPolicy(
             business_key=resolved_business_key,
