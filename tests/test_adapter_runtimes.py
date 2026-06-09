@@ -120,6 +120,43 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual(["+1 555 123 4567"], payload["phoneBlacklist"])
         self.assertEqual("sms_124", session.session_id)
 
+    def test_easy_sms_client_sends_provider_phone_blacklist_to_plan_and_open_request(self) -> None:
+        with mock.patch.object(
+            easy_sms_client,
+            "_wait_sms_service_ready",
+            return_value=None,
+        ), mock.patch.object(
+            easy_sms_client,
+            "_get_json",
+            return_value={"candidates": [{"providerKey": "onlinesim"}]},
+        ) as get_json, mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            return_value={
+                "session": {
+                    "id": "sms_125",
+                    "phoneNumber": "+15557654321",
+                    "providerKey": "onlinesim",
+                }
+            },
+        ) as post_json:
+            session = easy_sms_client.open_sms_session(
+                business_key="openai",
+                provider_blacklist=(),
+                allow_paid=False,
+                allow_reuse=False,
+                max_bindings_per_phone=1,
+                country_codes=(),
+                selection_mode="balanced",
+                provider_phone_blacklist=("onlinesim|+15551234567",),
+            )
+
+        plan_query = parse_qs(urlparse(get_json.call_args.args[0]).query)
+        self.assertEqual(["onlinesim|+15551234567"], plan_query.get("providerPhoneBlacklist"))
+        payload = post_json.call_args.args[1]
+        self.assertEqual(["onlinesim|+15551234567"], payload["providerPhoneBlacklist"])
+        self.assertEqual("sms_125", session.session_id)
+
     def test_easy_sms_client_report_outcome_uses_native_payload(self) -> None:
         with mock.patch.object(
             easy_sms_client,
@@ -1688,6 +1725,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             provider_key="sms24",
             terminal_code="unsupported_phone_region",
             terminal_message="Phone region is not supported.",
+            business_key="openai",
         )
         report_phone_outcome.assert_called_once()
 
@@ -1782,12 +1820,14 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                     provider_key="onlinesim",
                     terminal_code="phone_number_in_use",
                     terminal_message="Phone number already in use.",
+                    business_key="openai",
                 ),
                 mock.call(
                     phone_number="+33774749623",
                     provider_key="onlinesim",
                     terminal_code="sms_code_timeout",
                     terminal_message="wait_code_timeout",
+                    business_key="openai",
                 ),
             ],
             record_terminal_phone_outcome.call_args_list,
@@ -1885,12 +1925,14 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                     provider_key="onlinesim",
                     terminal_code="rate_limit_exceeded",
                     terminal_message="Too many phone verification requests.",
+                    business_key="openai",
                 ),
                 mock.call(
                     phone_number="+353894602760",
                     provider_key="onlinesim",
                     terminal_code="sms_code_timeout",
                     terminal_message="wait_code_timeout",
+                    business_key="openai",
                 ),
             ],
             record_terminal_phone_outcome.call_args_list,
@@ -1976,12 +2018,14 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                     provider_key="freepool",
                     terminal_code="phone_number_in_use",
                     terminal_message=mock.ANY,
+                    business_key="openai",
                 ),
                 mock.call(
                     phone_number="+15550001002",
                     provider_key="freepool",
                     terminal_code="sms_code_timeout",
                     terminal_message="wait_code_timeout",
+                    business_key="openai",
                 ),
             ],
             record_terminal_phone_outcome.call_args_list,
@@ -2219,6 +2263,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             provider_key="freepool",
             terminal_code="wrong_otp_code",
             terminal_message=mock.ANY,
+            business_key="openai",
         )
         self.assertEqual(
             [mock.call(session_id="sms_1", outcome="failure", detail=mock.ANY), mock.call(session_id="sms_2", outcome="success", detail="codex_oauth_completed")],
@@ -2304,6 +2349,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             provider_key="freepool",
             terminal_code="wrong_otp_code",
             terminal_message=mock.ANY,
+            business_key="openai",
         )
         self.assertEqual(
             [mock.call(session_id="sms_1", outcome="failure", detail=mock.ANY), mock.call(session_id="sms_2", outcome="success", detail="codex_oauth_completed")],
@@ -2421,6 +2467,63 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             [()],
             captured_provider_country_blacklists,
         )
+
+    def test_open_phone_session_for_business_passes_provider_phone_blacklist_only_for_business(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "businessPhones": {
+                            "openai": {
+                                "onlinesim|+15551234567": {
+                                    "blockedUntilTs": 9999999999,
+                                    "providerKey": "onlinesim",
+                                    "phoneNumber": "+15551234567",
+                                    "reason": "phone_number_in_use",
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            captured_provider_phone_blacklists: list[tuple[str, ...]] = []
+            captured_phone_blacklists: list[tuple[str, ...]] = []
+
+            def _open_sms_session(**kwargs):
+                captured_provider_phone_blacklists.append(tuple(kwargs["provider_phone_blacklist"]))
+                captured_phone_blacklists.append(tuple(kwargs["phone_blacklist"]))
+                return easy_sms_client.SmsSession(
+                    session_id=f"sms_{len(captured_provider_phone_blacklists)}",
+                    phone_number="+15557654321",
+                    provider_key="smstome",
+                )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"enabled":true,"allowPaid":false,"allowReuse":false,'
+                        '"maxBindingsPerPhone":1,"countryCodes":[],"selectionMode":"balanced"},'
+                        '"other":{"enabled":true,"allowPaid":false,"allowReuse":false,'
+                        '"maxBindingsPerPhone":1,"countryCodes":[],"selectionMode":"balanced"}}'
+                    ),
+                },
+                clear=False,
+            ), mock.patch.object(
+                runtime_sms,
+                "open_sms_session",
+                side_effect=_open_sms_session,
+            ):
+                openai_session = runtime_sms.open_phone_session_for_business(business_key="openai")
+                other_session = runtime_sms.open_phone_session_for_business(business_key="other")
+
+        self.assertEqual("sms_1", openai_session["sessionId"])
+        self.assertEqual("sms_2", other_session["sessionId"])
+        self.assertEqual([("onlinesim|+15551234567",), ()], captured_provider_phone_blacklists)
+        self.assertEqual([(), ()], captured_phone_blacklists)
 
     def test_open_phone_session_for_business_blocks_provider_from_repeated_phone_scoped_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2995,6 +3098,36 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("phone_number_in_use", payload["phones"]["+46720085698"]["reason"])
         self.assertNotIn("onlinesim", payload["providers"])
 
+    def test_record_terminal_phone_outcome_records_business_provider_phone_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "3600",
+                    "REGISTER_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS": "3600",
+                },
+                clear=False,
+            ):
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number="+15551234567",
+                    provider_key="OnlineSim",
+                    terminal_code="phone_number_in_use",
+                    terminal_message="Phone number already in use.",
+                    business_key="openai",
+                )
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+        business_record = payload["businessPhones"]["openai"]["onlinesim|+15551234567"]
+        self.assertEqual("phone_number_in_use", business_record["reason"])
+        self.assertEqual("onlinesim", business_record["providerKey"])
+        self.assertEqual("+15551234567", business_record["phoneNumber"])
+        self.assertNotIn("+15551234567", payload["phones"])
+        self.assertNotIn("onlinesim", payload["providers"])
+
     def test_record_terminal_phone_outcome_keeps_rate_limit_block_phone_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
@@ -3446,6 +3579,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             provider_key="freepool",
             terminal_code="sms_code_timeout",
             terminal_message="timeout waiting for sms verification code",
+            business_key="openai",
         )
         self.assertEqual(
             [

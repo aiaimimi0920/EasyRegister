@@ -360,6 +360,7 @@ def _query_provider_selection_candidates_with_seen(
     country_codes: tuple[str, ...],
     allow_reuse: bool | None = None,
     phone_blacklist: tuple[str, ...] = (),
+    provider_phone_blacklist: tuple[str, ...] = (),
 ) -> tuple[list[str], set[str], set[str]]:
     provider_country_candidates, seen_provider_keys, unavailable_provider_keys = (
         _query_provider_country_selection_candidates_with_seen(
@@ -368,6 +369,7 @@ def _query_provider_selection_candidates_with_seen(
             country_codes=country_codes,
             allow_reuse=allow_reuse,
             phone_blacklist=phone_blacklist,
+            provider_phone_blacklist=provider_phone_blacklist,
         )
     )
     return (
@@ -384,6 +386,7 @@ def _query_provider_country_selection_candidates_with_seen(
     country_codes: tuple[str, ...],
     allow_reuse: bool | None = None,
     phone_blacklist: tuple[str, ...] = (),
+    provider_phone_blacklist: tuple[str, ...] = (),
 ) -> tuple[list[_SmsProviderCountryCandidate], set[str], set[str]]:
     query = {
         "costTier": "paid" if allow_paid else "free",
@@ -398,6 +401,13 @@ def _query_provider_country_selection_candidates_with_seen(
     ]
     if normalized_phone_blacklist:
         query["phoneBlacklist"] = ",".join(normalized_phone_blacklist)
+    normalized_provider_phone_blacklist = [
+        str(item or "").strip()
+        for item in provider_phone_blacklist
+        if str(item or "").strip()
+    ]
+    if normalized_provider_phone_blacklist:
+        query["providerPhoneBlacklist"] = ",".join(normalized_provider_phone_blacklist)
     country_candidates = _country_code_candidates(country_codes)
     candidates: list[_SmsProviderCountryCandidate] = []
     seen_provider_keys: set[str] = set()
@@ -475,6 +485,7 @@ def _query_provider_selection_candidates(
     country_codes: tuple[str, ...],
     allow_reuse: bool | None = None,
     phone_blacklist: tuple[str, ...] = (),
+    provider_phone_blacklist: tuple[str, ...] = (),
 ) -> list[str]:
     candidates, _seen_provider_keys, _unavailable_provider_keys = _query_provider_selection_candidates_with_seen(
         provider_blacklist=provider_blacklist,
@@ -482,6 +493,7 @@ def _query_provider_selection_candidates(
         country_codes=country_codes,
         allow_reuse=allow_reuse,
         phone_blacklist=phone_blacklist,
+        provider_phone_blacklist=provider_phone_blacklist,
     )
     return candidates
 
@@ -539,6 +551,35 @@ def _phone_lookup_keys(phone_number: str) -> set[str]:
     return keys
 
 
+def _normalize_provider_phone_blacklist(items: tuple[str, ...]) -> dict[str, set[str]]:
+    blocked: dict[str, set[str]] = {}
+    for item in items:
+        raw = str(item or "").strip()
+        if not raw or "|" not in raw:
+            continue
+        provider_key, phone_number = raw.split("|", 1)
+        normalized_provider_key = provider_key.strip().lower()
+        phone_keys = _phone_lookup_keys(phone_number)
+        if normalized_provider_key and phone_keys:
+            blocked.setdefault(normalized_provider_key, set()).update(phone_keys)
+    return blocked
+
+
+def _is_provider_phone_blacklisted(
+    *,
+    provider_key: str,
+    phone_number: str,
+    blocked_provider_phone_lookup: dict[str, set[str]],
+) -> bool:
+    normalized_provider_key = str(provider_key or "").strip().lower()
+    if not normalized_provider_key:
+        return False
+    blocked_phone_keys = blocked_provider_phone_lookup.get(normalized_provider_key)
+    if not blocked_phone_keys:
+        return False
+    return bool(_phone_lookup_keys(phone_number) & blocked_phone_keys)
+
+
 def _safe_report_rejected_sms_session(*, session_id: str, detail: str) -> None:
     if not str(session_id or "").strip():
         return
@@ -562,6 +603,7 @@ def open_sms_session(
     country_codes: tuple[str, ...],
     selection_mode: str,
     phone_blacklist: tuple[str, ...] = (),
+    provider_phone_blacklist: tuple[str, ...] = (),
     provider_country_blacklist: tuple[str, ...] = (),
 ) -> SmsSession:
     _wait_sms_service_ready()
@@ -575,6 +617,7 @@ def open_sms_session(
         country_codes=country_codes,
         allow_reuse=allow_reuse,
         phone_blacklist=phone_blacklist,
+        provider_phone_blacklist=provider_phone_blacklist,
     )
     base_payload: dict[str, Any] = {
         "businessKey": str(business_key or "").strip(),
@@ -607,6 +650,12 @@ def open_sms_session(
         for key in _phone_lookup_keys(str(item or ""))
         if key
     }
+    normalized_provider_phone_blacklist = tuple(
+        str(item or "").strip()
+        for item in provider_phone_blacklist
+        if str(item or "").strip()
+    )
+    blocked_provider_phone_lookup = _normalize_provider_phone_blacklist(normalized_provider_phone_blacklist)
     blocked_provider_country_pairs = _normalize_provider_country_blacklist(provider_country_blacklist)
     country_candidates = _country_code_candidates(country_codes)
     last_error: Exception | None = None
@@ -634,6 +683,8 @@ def open_sms_session(
                 request_payload["selectionMode"] = normalized_selection_mode
             if blocked_phones:
                 request_payload["phoneBlacklist"] = list(phone_blacklist)
+            if normalized_provider_phone_blacklist:
+                request_payload["providerPhoneBlacklist"] = list(normalized_provider_phone_blacklist)
             opened_session_attempts += 1
             try:
                 response = _post_json("/sms/sessions/open", request_payload)
@@ -646,6 +697,7 @@ def open_sms_session(
             session_id = str(session.get("id") or "").strip()
             phone_number = str(session.get("phoneNumberE164") or session.get("phoneNumber") or "").strip()
             provider_key = str(session.get("providerKey") or "").strip().lower()
+            effective_provider_key = provider_key or normalized_provider_key
             if session_id and phone_number:
                 if _phone_lookup_keys(phone_number) & blocked_phones:
                     _safe_report_rejected_sms_session(
@@ -654,10 +706,23 @@ def open_sms_session(
                     )
                     last_error = RuntimeError(f"sms service returned blacklisted phone number: {phone_number}")
                     continue
+                if _is_provider_phone_blacklisted(
+                    provider_key=effective_provider_key,
+                    phone_number=phone_number,
+                    blocked_provider_phone_lookup=blocked_provider_phone_lookup,
+                ):
+                    _safe_report_rejected_sms_session(
+                        session_id=session_id,
+                        detail="blacklisted_provider_phone_number",
+                    )
+                    last_error = RuntimeError(
+                        f"sms service returned blacklisted provider phone number: {effective_provider_key}"
+                    )
+                    continue
                 return SmsSession(
                     session_id=session_id,
                     phone_number=phone_number,
-                    provider_key=provider_key,
+                    provider_key=effective_provider_key,
                 )
             last_error = RuntimeError("sms service returned invalid sms session")
         return None
