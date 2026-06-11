@@ -15,6 +15,9 @@ from others.dst_flow_support import step_always_run
 from others.dst_flow_support import step_error_details
 from others.dst_flow_support import step_output_ok
 from others.dst_flow_support import step_retry_policy
+from others.resource_cleanup import ResourceCleanupGuard
+from others.structured_logger import StructuredLogger
+from others.circuit_breaker import CircuitBreaker
 
 
 def _normalize_mailbox_provider(provider: Any) -> str:
@@ -266,10 +269,15 @@ def should_retry_step(*, statement: DstStatement, error_details: dict[str, Any],
     return False
 
 
-def step_retry_backoff_seconds(statement: DstStatement) -> float:
+def step_retry_backoff_seconds(statement: DstStatement, attempt: int = 0) -> float:
     retry = step_retry_policy(statement)
     try:
-        return max(0.0, float(retry.get("backoffSeconds") or 0.0))
+        base = max(0.0, float(retry.get("backoffSeconds") or 0.0))
+        if base == 0.0:
+            return 0.0
+        # 使用指数退避: base * 2^attempt，最大300秒
+        from others.exponential_backoff import exponential_backoff
+        return exponential_backoff(attempt, base_seconds=base, max_seconds=300.0)
     except Exception:
         return 0.0
 
@@ -442,10 +450,14 @@ def task_retry_max_attempts(plan: DstPlan, override: int | None = None) -> int:
         return 1
 
 
-def task_retry_backoff_seconds(plan: DstPlan) -> float:
+def task_retry_backoff_seconds(plan: DstPlan, attempt: int = 0) -> float:
     retry = task_retry_policy(plan)
     try:
-        return max(0.0, float(retry.get("backoffSeconds") or 0.0))
+        base = max(0.0, float(retry.get("backoffSeconds") or 0.0))
+        if base == 0.0:
+            return 0.0
+        from others.exponential_backoff import exponential_backoff
+        return exponential_backoff(attempt, base_seconds=base, max_seconds=300.0)
     except Exception:
         return 0.0
 
@@ -557,7 +569,26 @@ def run_dst_flow_once(
         if str(statement.save_as or "").strip()
     }
     task_retry_retained_outputs: dict[str, Any] = {}
+    circuit_breaker = CircuitBreaker(failure_threshold=3, timeout_seconds=60.0)
+
     for task_attempt in range(1, task_retry_max_attempts(plan, task_max_attempts) + 1):
+        # 检查熔断器
+        if circuit_breaker.is_open():
+            logger.warning("circuit_breaker_open", state=circuit_breaker.get_state())
+            last_result.error = "Circuit breaker open - too many consecutive failures"
+            last_result.task_context["circuitBreakerState"] = circuit_breaker.get_state()
+            return last_result
+
+        # 创建资源清理守护
+        cleanup_guard = ResourceCleanupGuard()
+
+        # 创建结构化日志
+        logger = StructuredLogger({
+            "flow_id": str(plan.flow_id or ""),
+            "task_attempt": task_attempt
+        })
+        logger.info("task_started", platform=str(plan.platform or ""))
+
         resolved_team_auth_path = str(team_auth_path or "").strip()
         resolved_team_invite_enabled = bool(team_invite_enabled) if team_invite_enabled is not None else bool(resolved_team_auth_path)
         state = {
@@ -612,7 +643,8 @@ def run_dst_flow_once(
         )
         flow_failed = False
 
-        for statement in plan.steps:
+        try:
+            for statement in plan.steps:
             if not statement_enabled(statement=statement, state=state):
                 result.steps.setdefault(statement.step_id, "skipped")
                 continue
@@ -639,15 +671,39 @@ def run_dst_flow_once(
             while True:
                 attempt_index += 1
                 result.step_attempts[statement.step_id] = attempt_index
+                step_start = time.time()
                 try:
+                    logger.info("step_started", step_id=statement.step_id, attempt=attempt_index)
                     step_output = run_statement_once(statement=statement, state=state, result=result)
+                    duration_ms = int((time.time() - step_start) * 1000)
+                    logger.info("step_completed", step_id=statement.step_id, duration_ms=duration_ms)
+
                     retained_save_as = str(statement.save_as or "").strip()
                     if retained_save_as and _retain_output_across_task_retry(statement):
                         task_retry_retained_outputs[retained_save_as] = step_output
+
+                    # 标记资源获取
+                    step_type = str(statement.step_type or "").strip()
+                    if step_type == "acquire_mailbox" and isinstance(step_output, dict):
+                        cleanup_guard.mark_acquired("mailbox", step_output)
+                    elif step_type == "acquire_proxy_chain" and isinstance(step_output, dict):
+                        cleanup_guard.mark_acquired("proxy_chain", step_output)
+                    # 标记资源释放
+                    elif step_type == "release_mailbox":
+                        cleanup_guard.mark_released("mailbox")
+                    elif step_type == "release_proxy_chain":
+                        cleanup_guard.mark_released("proxy_chain")
+
                     break
                 except Exception as exc:
                     error_details = step_error_details(step_type=statement.step_type, exc=exc)
                     result.step_errors[statement.step_id] = error_details
+                    logger.error("step_failed",
+                        step_id=statement.step_id,
+                        attempt=attempt_index,
+                        error_code=error_details.get("code"),
+                        error_message=str(exc)[:200]
+                    )
                     if cleanup_failure_is_nonfatal(statement=statement, flow_failed=flow_failed):
                         result.steps[statement.step_id] = "cleanup_warning"
                         break
@@ -664,7 +720,7 @@ def run_dst_flow_once(
                         attempt_index=attempt_index,
                     ):
                         try:
-                            backoff_seconds = step_retry_backoff_seconds(statement)
+                            backoff_seconds = step_retry_backoff_seconds(statement, attempt=attempt_index)
                             if backoff_seconds > 0:
                                 time.sleep(backoff_seconds)
                             refresh_retry_state(
@@ -712,10 +768,21 @@ def run_dst_flow_once(
                         )
                         flow_failed = True
                     break
+        finally:
+            # 确保资源清理
+            if cleanup_guard.acquired_resources:
+                cleanup_results = cleanup_guard.cleanup_all()
+                if cleanup_results:
+                    result.task_context["cleanupResults"] = cleanup_results
+
         result.ok = not flow_failed
         last_result = result
         if result.ok:
+            circuit_breaker.record_success()
+            logger.info("task_completed", status="success")
             return result
+        circuit_breaker.record_failure()
+        logger.warning("task_failed", error_step=result.error_step, circuit_breaker_state=circuit_breaker.get_state())
         root_error_details = dict(result.step_errors.get(result.error_step) or {})
         if not should_retry_task(
             plan=plan,
@@ -730,7 +797,7 @@ def run_dst_flow_once(
             proxy_url = str(proxy_chain_output.get("proxy_url") or "").strip().lower()
             if proxy_url and proxy_url not in failed_task_proxy_urls:
                 failed_task_proxy_urls.append(proxy_url)
-        backoff_seconds = task_retry_backoff_seconds(plan)
+        backoff_seconds = task_retry_backoff_seconds(plan, attempt=task_attempt)
         if backoff_seconds > 0:
             time.sleep(backoff_seconds)
     return last_result
