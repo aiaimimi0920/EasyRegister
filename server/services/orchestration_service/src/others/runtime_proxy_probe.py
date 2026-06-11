@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+from urllib.parse import urlparse
 
 from others.common_io import write_json_atomic
 from others.bootstrap import ensure_local_bundle_imports
@@ -23,6 +24,40 @@ ACTIVE_FLOW_PROXY_URLS: set[str] = set()
 RECENT_FLOW_PROXY_URLS: dict[str, float] = {}
 FAILED_FLOW_PROXY_URLS: dict[str, float] = {}
 FAILED_FLOW_PROXY_STATE_SCHEMA_VERSION = 1
+
+
+def _is_openai_auth_probe_url(probe_url: str) -> bool:
+    try:
+        parsed = urlparse(str(probe_url or "").strip())
+    except Exception:
+        return False
+    host = str(parsed.hostname or "").strip().lower()
+    path = str(parsed.path or "/").strip().lower() or "/"
+    if host == "auth.openai.com":
+        return path.startswith(("/log-in-or-create-account", "/authorize", "/login", "/u/login"))
+    if host in {"chatgpt.com", "www.chatgpt.com"}:
+        return path.startswith("/auth/")
+    if host == "platform.openai.com":
+        return path.startswith("/login")
+    return False
+
+
+def _is_openai_auth_challenge_probe_response(probe_url: str, status_code: int, body: str) -> bool:
+    if int(status_code or 0) != 403:
+        return False
+    if not _is_openai_auth_probe_url(probe_url):
+        return False
+    normalized_body = str(body or "").strip().lower()
+    if not normalized_body:
+        return True
+    challenge_markers = (
+        "just a moment",
+        "cf-mitigated",
+        "cloudflare",
+        "__cf_chl_",
+        "/cdn-cgi/challenge-platform",
+    )
+    return any(marker in normalized_body for marker in challenge_markers)
 
 
 def failed_flow_proxy_state_path():
@@ -120,6 +155,8 @@ def probe_flow_proxy(
     if status_code in accepted:
         return
     body_preview = str(getattr(response, "text", "") or "")[:180]
+    if _is_openai_auth_challenge_probe_response(probe_url, status_code, body_preview):
+        return
     raise RuntimeError(f"easy_proxy_probe_failed status={status_code} url={probe_url} body={body_preview}")
 
 

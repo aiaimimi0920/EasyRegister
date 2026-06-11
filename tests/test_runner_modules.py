@@ -503,6 +503,65 @@ class RunnerArtifactsTests(unittest.TestCase):
             self.assertEqual("small-target-bridge-valid.json", Path(copied_paths[0]).name)
             self.assertFalse(payload_path.exists())
 
+    def test_copy_openai_oauth_artifacts_to_pool_prefers_valid_bridge_sibling_over_partial_run_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_output_dir = Path(tmp_dir) / "run-1"
+            run_small_dir = run_output_dir / "small_success"
+            bridge_dir = Path(tmp_dir) / "protocol-register-output" / "easyregister-bridge"
+            pool_dir = Path(tmp_dir) / "openai" / "failed-once"
+            run_small_dir.mkdir(parents=True, exist_ok=True)
+            bridge_dir.mkdir(parents=True, exist_ok=True)
+            artifact_name = "small-bridge-sibling-valid.json"
+            partial_run_path = run_small_dir / artifact_name
+            bridge_path = bridge_dir / artifact_name
+            partial_run_path.write_text(
+                json.dumps(
+                    {
+                        "email": "bridge-sibling@example.com",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                        "createdAt": "2026-05-01T00:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bridge_path.write_text(
+                json.dumps(
+                    {
+                        "email": "bridge-sibling@example.com",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                        "createdAt": "2026-05-01T00:00:00Z",
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"REGISTER_PROTOCOL_BRIDGE_DIR": str(bridge_dir)},
+                clear=False,
+            ):
+                copied_paths = runner_artifacts.copy_openai_oauth_artifacts_to_pool(
+                    run_output_dir=run_output_dir,
+                    pool_dir=pool_dir,
+                    worker_label="worker-01",
+                    task_index=1,
+                )
+
+            self.assertEqual(1, len(copied_paths))
+            copied_path = Path(copied_paths[0])
+            self.assertTrue(copied_path.is_file())
+            self.assertEqual(artifact_name, copied_path.name)
+            self.assertFalse(bridge_path.exists())
+            copied_payload = json.loads(copied_path.read_text(encoding="utf-8"))
+            self.assertEqual("completed", copied_payload["platformOrganization"]["status"])
+
     def test_copy_openai_oauth_artifacts_to_pool_ignores_seed_age_during_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_output_dir = Path(tmp_dir) / "run-1"

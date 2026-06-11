@@ -135,21 +135,36 @@ def _normalize_openai_oauth_artifact_name(*, payload: dict[str, Any], preferred_
 
 def _iter_openai_oauth_artifacts(*, run_output_dir: Path, result_or_payload: Any | None = None) -> list[Path]:
     candidates: dict[str, Path] = {}
+
+    def add_candidate(path: Path) -> None:
+        try:
+            resolved_path = path.resolve()
+        except Exception:
+            return
+        if not resolved_path.is_file():
+            return
+        bridge_sibling_path = _resolve_protocol_bridge_sibling_source(resolved_path)
+        selected_path = bridge_sibling_path or resolved_path
+        if not selected_path.is_file():
+            return
+        candidate_key = str(selected_path.resolve()).lower()
+        if bridge_sibling_path is not None:
+            candidate_key = f"protocol-bridge:{selected_path.name.lower()}"
+        candidates[candidate_key] = selected_path.resolve()
+
     for directory_name in ("openai_oauth", "small_success"):
         candidate_dir = run_output_dir / directory_name
         if not candidate_dir.is_dir():
             continue
         for path in candidate_dir.glob("*.json"):
-            if not path.is_file():
-                continue
-            candidates[str(path.resolve()).lower()] = path.resolve()
+            add_candidate(path)
 
     if result_or_payload is not None:
         for path_text in all_output_texts(result_or_payload, _OPENAI_OAUTH_COLLECTION_SOURCE_CANDIDATES):
             candidate = _resolve_openai_oauth_output_path(path_text)
             if candidate is None:
                 continue
-            candidates[str(candidate).lower()] = candidate
+            add_candidate(candidate)
 
     if not candidates and result_or_payload is not None:
         materialized_path = _materialize_openai_oauth_artifact_from_output(
@@ -157,7 +172,7 @@ def _iter_openai_oauth_artifacts(*, run_output_dir: Path, result_or_payload: Any
             run_output_dir=run_output_dir,
         )
         if materialized_path is not None and materialized_path.is_file():
-            candidates[str(materialized_path).lower()] = materialized_path
+            add_candidate(materialized_path)
 
     return _sort_file_paths_newest_first(list(candidates.values()))
 
@@ -248,6 +263,21 @@ def _is_protocol_bridge_source_path(path: Path) -> bool:
     if not bridge_dir_text:
         return False
     return _is_path_inside_directory(Path(path), Path(bridge_dir_text))
+
+
+def _resolve_protocol_bridge_sibling_source(path: Path) -> Path | None:
+    if _is_protocol_bridge_source_path(path):
+        return Path(path).resolve()
+    bridge_dir_text = str(os.environ.get("REGISTER_PROTOCOL_BRIDGE_DIR") or "").strip()
+    if not bridge_dir_text:
+        return None
+    try:
+        candidate = (Path(bridge_dir_text) / Path(path).name).resolve()
+    except Exception:
+        return None
+    if candidate.is_file():
+        return candidate
+    return None
 
 
 def _delete_protocol_bridge_source_quiet(path: Path) -> None:
