@@ -332,6 +332,10 @@ def sync_protocol_source_bridge_back(*, bridge_info: dict[str, str]) -> None:
     original_source_path.parent.mkdir(parents=True, exist_ok=True)
     if original_source_path.resolve() != local_bridge_path.resolve():
         shutil.copy2(local_bridge_path, original_source_path)
+        try:
+            local_bridge_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def rewrite_protocol_source_bridge_result_paths(

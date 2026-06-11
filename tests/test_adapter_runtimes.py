@@ -1223,6 +1223,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             self.assertEqual(str(local_source.resolve()), result["sourcePath"])
             self.assertEqual(str(local_source.resolve()), result["successPath"])
             self.assertIn("org_target", local_source.read_text(encoding="utf-8"))
+            self.assertFalse((bridge_dir / local_source.name).exists())
 
     def test_easyprotocol_source_path_defaults_to_bridge_inside_protocol_output_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

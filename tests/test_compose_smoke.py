@@ -75,6 +75,11 @@ class ComposeSmokeTests(unittest.TestCase):
         ):
             self.assertIn(expected, payload)
 
+    def test_deploy_host_autodetects_easyprotocol_python_provider_output_mount(self) -> None:
+        payload = (REPO_ROOT / "deploy-host.ps1").read_text(encoding="utf-8")
+        self.assertIn("Get-DockerBindSourceForProtocolTarget", payload)
+        self.assertIn("$ContainerName-python-*", payload)
+
     def test_test_compose_keeps_isolated_contract_strings(self) -> None:
         payload = TEST_COMPOSE_PATH.read_text(encoding="utf-8")
         for expected in (

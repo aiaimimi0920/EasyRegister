@@ -306,6 +306,41 @@ function Get-DockerBindSourceForContainerTarget {
     return ""
 }
 
+function Get-DockerBindSourceForProtocolTarget {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ContainerName,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath
+    )
+
+    $directSource = Get-DockerBindSourceForContainerTarget -ContainerName $ContainerName -TargetPath $TargetPath
+    if (-not [string]::IsNullOrWhiteSpace($directSource)) {
+        return $directSource
+    }
+
+    try {
+        $providerNamePattern = "$ContainerName-python-*"
+        $containerNames = & docker ps --format '{{.Names}}' 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            return ""
+        }
+        foreach ($providerContainerName in @($containerNames)) {
+            $candidate = [string]$providerContainerName
+            if ([string]::IsNullOrWhiteSpace($candidate) -or $candidate -notlike $providerNamePattern) {
+                continue
+            }
+            $providerSource = Get-DockerBindSourceForContainerTarget -ContainerName $candidate -TargetPath $TargetPath
+            if (-not [string]::IsNullOrWhiteSpace($providerSource)) {
+                return $providerSource
+            }
+        }
+    } catch {
+        return ""
+    }
+    return ""
+}
+
 function New-ProtocolBridgeMountOverrideFile {
     param(
         [string]$ProtocolRegisterOutputDirHost,
@@ -693,7 +728,7 @@ $resolvedProtocolRegisterOutputDirHost = if ($deployBoundParameters.ContainsKey(
 } elseif (-not [string]::IsNullOrWhiteSpace($env:REGISTER_PROTOCOL_REGISTER_OUTPUT_DIR_HOST)) {
     [string]$env:REGISTER_PROTOCOL_REGISTER_OUTPUT_DIR_HOST
 } else {
-    Get-DockerBindSourceForContainerTarget `
+    Get-DockerBindSourceForProtocolTarget `
         -ContainerName $ProtocolContainerName `
         -TargetPath $resolvedProtocolOutputTargetContainerPath
 }

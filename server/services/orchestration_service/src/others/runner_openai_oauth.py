@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import time
 import uuid
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -159,6 +160,30 @@ def _iter_openai_oauth_artifacts(*, run_output_dir: Path, result_or_payload: Any
     return _sort_file_paths_newest_first(list(candidates.values()))
 
 
+def _is_path_inside_directory(path: Path, directory: Path) -> bool:
+    try:
+        path.resolve().relative_to(directory.resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _is_protocol_bridge_source_path(path: Path) -> bool:
+    bridge_dir_text = str(os.environ.get("REGISTER_PROTOCOL_BRIDGE_DIR") or "").strip()
+    if not bridge_dir_text:
+        return False
+    return _is_path_inside_directory(Path(path), Path(bridge_dir_text))
+
+
+def _delete_protocol_bridge_source_quiet(path: Path) -> None:
+    if not _is_protocol_bridge_source_path(path):
+        return
+    try:
+        Path(path).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _materialize_openai_oauth_artifact_from_output(
     *,
     result_or_payload: Any,
@@ -269,6 +294,7 @@ def copy_openai_oauth_artifacts_to_pool(
         valid, reason = validate_openai_oauth_seed_payload(payload, enforce_max_age=False)
         if not valid:
             discarded_paths.append({"source_path": str(resolved_source), "reason": reason})
+            _delete_protocol_bridge_source_quiet(resolved_source)
             continue
         artifact_name = _normalize_openai_oauth_artifact_name(payload=payload, preferred_name=resolved_source.name)
         destination = (pool_dir / artifact_name).resolve()
@@ -279,6 +305,7 @@ def copy_openai_oauth_artifacts_to_pool(
             destination = pool_dir / f"{Path(artifact_name).stem}-{uuid.uuid4().hex[:6]}{Path(artifact_name).suffix}"
         shutil.copy2(resolved_source, destination)
         copied_paths.append(str(destination))
+        _delete_protocol_bridge_source_quiet(resolved_source)
     json_log(
         {
             "event": "register_openai_oauth_collected",
