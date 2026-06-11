@@ -255,6 +255,34 @@ function Convert-HostPathToComposeSource {
     return ([System.IO.Path]::GetFullPath($Path) -replace '\\', '/')
 }
 
+function Convert-DockerBindSourceToHostPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Source
+    )
+
+    $text = $Source.Trim()
+    if ($text -match '^/(?:run/desktop/)?mnt/host/(?<drive>[A-Za-z])(?:/(?<rest>.*))?$') {
+        $drive = $matches['drive'].ToUpperInvariant()
+        $rest = if ($matches.ContainsKey('rest')) { [string]$matches['rest'] } else { "" }
+        $rest = $rest -replace '/', '\'
+        if ([string]::IsNullOrWhiteSpace($rest)) {
+            return "$($drive):\"
+        }
+        return "$($drive):\$rest"
+    }
+    if ($text -match '^/host_mnt/(?<drive>[A-Za-z])(?:/(?<rest>.*))?$') {
+        $drive = $matches['drive'].ToUpperInvariant()
+        $rest = if ($matches.ContainsKey('rest')) { [string]$matches['rest'] } else { "" }
+        $rest = $rest -replace '/', '\'
+        if ([string]::IsNullOrWhiteSpace($rest)) {
+            return "$($drive):\"
+        }
+        return "$($drive):\$rest"
+    }
+    return $text
+}
+
 function Join-ContainerPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -297,7 +325,7 @@ function Get-DockerBindSourceForContainerTarget {
                 continue
             }
             if ($mount.PSObject.Properties.Name -contains "Source") {
-                return [string]$mount.Source
+                return Convert-DockerBindSourceToHostPath -Source ([string]$mount.Source)
             }
         }
     } catch {
@@ -325,6 +353,7 @@ function Get-DockerBindSourceForProtocolTarget {
         if ($LASTEXITCODE -ne 0) {
             return ""
         }
+        $providerSources = New-Object System.Collections.Generic.List[string]
         foreach ($providerContainerName in @($containerNames)) {
             $candidate = [string]$providerContainerName
             if ([string]::IsNullOrWhiteSpace($candidate) -or $candidate -notlike $providerNamePattern) {
@@ -332,8 +361,12 @@ function Get-DockerBindSourceForProtocolTarget {
             }
             $providerSource = Get-DockerBindSourceForContainerTarget -ContainerName $candidate -TargetPath $TargetPath
             if (-not [string]::IsNullOrWhiteSpace($providerSource)) {
-                return $providerSource
+                $providerSources.Add($providerSource) | Out-Null
             }
+        }
+        if ($providerSources.Count -gt 0) {
+            $selected = $providerSources | Group-Object | Sort-Object -Property Count -Descending | Select-Object -First 1
+            return [string]$selected.Name
         }
     } catch {
         return ""

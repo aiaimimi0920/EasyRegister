@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -102,6 +103,131 @@ class DeployHostEnvTests(unittest.TestCase):
             self.assertIn('"openai":{"enabled":true', policies)
             self.assertIn('"providerBlacklist":["hero_sms"]', policies)
             self.assertIn('"allowPaid":false', policies)
+
+    def test_materialize_only_autodetects_majority_easyprotocol_provider_output_mount(self) -> None:
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        if not powershell:
+            self.skipTest("PowerShell not available")
+
+        with tempfile.TemporaryDirectory(prefix="easyregister-deploy-host-") as temp:
+            launcher_root = Path(temp)
+            script_path = launcher_root / "deploy-host.ps1"
+            shutil.copyfile(DEPLOY_HOST, script_path)
+
+            fake_bin = launcher_root / "fake-bin"
+            fake_bin.mkdir()
+            fake_docker_py = fake_bin / "fake_docker.py"
+            fake_docker_py.write_text(
+                """from __future__ import annotations
+
+import json
+import os
+import sys
+
+
+args = sys.argv[1:]
+wrong_source = os.environ["FAKE_PROTOCOL_WRONG_SOURCE"]
+right_source = os.environ["FAKE_PROTOCOL_RIGHT_SOURCE"]
+
+if args[:1] == ["ps"]:
+    print("easy-protocol-python-021")
+    print("easy-protocol-python-022")
+    print("easy-protocol-python-023")
+    raise SystemExit(0)
+
+if args[:1] == ["inspect"]:
+    container_name = args[-1]
+    source_by_container = {
+        "easy-protocol": "",
+        "easy-protocol-python-021": wrong_source,
+        "easy-protocol-python-022": right_source,
+        "easy-protocol-python-023": right_source,
+    }
+    source = source_by_container.get(container_name, "")
+    mounts = []
+    if source:
+        mounts.append({"Source": source, "Destination": "/shared/register-output"})
+    print(json.dumps(mounts))
+    raise SystemExit(0)
+
+raise SystemExit(1)
+""",
+                encoding="utf-8",
+            )
+            (fake_bin / "docker.cmd").write_text(
+                "@echo off\r\npython \"%~dp0fake_docker.py\" %*\r\n",
+                encoding="ascii",
+            )
+
+            wrong_source = launcher_root / "protocol-wrong" / "register-output"
+            right_source = launcher_root / "protocol-right" / "register-output"
+            wrong_docker_source = self._docker_desktop_host_mount_source(wrong_source)
+            right_docker_source = self._docker_desktop_host_mount_source(right_source)
+            command = [powershell, "-NoProfile"]
+            if Path(powershell).name.lower().startswith("powershell"):
+                command.extend(["-ExecutionPolicy", "Bypass"])
+            command.extend(
+                [
+                    "-File",
+                    str(script_path),
+                    "-RepoCacheRoot",
+                    str(REPO_ROOT),
+                    "-OutputDirHost",
+                    str(launcher_root / "runtime" / "register-output"),
+                    "-CodexFreeDirHost",
+                    str(launcher_root / "codex" / "free"),
+                    "-CodexTeamDirHost",
+                    str(launcher_root / "codex" / "team"),
+                    "-CodexTeamInputDirHost",
+                    str(launcher_root / "codex" / "team-input"),
+                    "-CodexTeamMotherInputDirHost",
+                    str(launcher_root / "codex" / "team-mother-input"),
+                    "-MailboxServiceApiKey",
+                    "mailbox-test-key",
+                    "-EasyProxyApiKey",
+                    "proxy-test-key",
+                    "-SmsServiceApiKey",
+                    "sms-test-key",
+                    "-Image",
+                    "ghcr.io/example/easyregister:test",
+                    "-MaterializeOnly",
+                    "-NoBuild",
+                ]
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+            env["FAKE_PROTOCOL_WRONG_SOURCE"] = wrong_docker_source
+            env["FAKE_PROTOCOL_RIGHT_SOURCE"] = right_docker_source
+
+            result = subprocess.run(
+                command,
+                cwd=launcher_root,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                0,
+                result.returncode,
+                msg=(result.stderr or result.stdout).strip(),
+            )
+
+            override_payload = (launcher_root / ".deploy-compose.protocol-bridge.generated.yaml").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(str(right_source).replace("\\", "/"), override_payload)
+            self.assertNotIn(str(wrong_source).replace("\\", "/"), override_payload)
+
+    @staticmethod
+    def _docker_desktop_host_mount_source(path: Path) -> str:
+        normalized = str(path.resolve()).replace("\\", "/")
+        if len(normalized) >= 3 and normalized[1:3] == ":/":
+            drive = normalized[0].lower()
+            rest = normalized[3:]
+            return f"/run/desktop/mnt/host/{drive}/{rest}"
+        return normalized
 
 
 if __name__ == "__main__":
