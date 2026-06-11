@@ -22,7 +22,7 @@ from others.dst_flow_loader import load_dst_flow  # noqa: E402
 
 
 class DstFlowIntegrationTests(unittest.TestCase):
-    def test_main_and_continue_flows_use_capitalized_personal_organization_name(self) -> None:
+    def test_main_and_continue_flows_use_lowercase_personal_organization_slug(self) -> None:
         flow_root = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
 
         for flow_name in (
@@ -38,7 +38,7 @@ class DstFlowIntegrationTests(unittest.TestCase):
                 ]
 
                 self.assertEqual(1, len(platform_org_steps))
-                self.assertEqual("Personal", platform_org_steps[0].input["organization_name"])
+                self.assertEqual("personal", platform_org_steps[0].input["organization_name"])
                 self.assertEqual("Personal", platform_org_steps[0].input["organization_title"])
 
     def test_cleanup_release_mailbox_missing_session_does_not_fail_successful_flow(self) -> None:
