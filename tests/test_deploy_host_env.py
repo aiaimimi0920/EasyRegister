@@ -63,6 +63,10 @@ class DeployHostEnvTests(unittest.TestCase):
                     "75",
                     "-SmsSelectionPlanAttempts",
                     "2",
+                    "-PhoneTerminalRetryAttempts",
+                    "4",
+                    "-PhoneSmsCodeWaitRetryAttempts",
+                    "3",
                     "-Image",
                     "ghcr.io/example/easyregister:test",
                     "-MaterializeOnly",
@@ -92,6 +96,8 @@ class DeployHostEnvTests(unittest.TestCase):
             self.assertEqual("sms-test-key", env_values.get("SMS_SERVICE_API_KEY"))
             self.assertEqual("75", env_values.get("SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS"))
             self.assertEqual("2", env_values.get("SMS_SERVICE_SELECTION_PLAN_ATTEMPTS"))
+            self.assertEqual("4", env_values.get("REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS"))
+            self.assertEqual("3", env_values.get("REGISTER_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS"))
             self.assertEqual("openai", env_values.get("REGISTER_SMS_BUSINESS_KEY"))
             self.assertEqual("hero_sms", env_values.get("REGISTER_SMS_PROVIDER_BLACKLIST"))
             self.assertEqual("false", env_values.get("REGISTER_SMS_ALLOW_PAID"))

@@ -24,6 +24,22 @@ def _load_materializer_module():
 
 
 class MaterializeActionRuntimeEnvTests(unittest.TestCase):
+    def test_runtime_env_example_uses_bounded_sms_defaults(self) -> None:
+        values = {}
+        for raw_line in (REPO_ROOT / "deploy" / "easyregister.runtime.env.example").read_text(
+            encoding="utf-8"
+        ).splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key] = value
+
+        self.assertEqual("8", values.get("SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS"))
+        self.assertEqual("1", values.get("SMS_SERVICE_SELECTION_PLAN_ATTEMPTS"))
+        self.assertEqual("1", values.get("REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS"))
+        self.assertEqual("1", values.get("REGISTER_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS"))
+
     def test_empty_secret_env_does_not_blank_base_defaults(self) -> None:
         materializer = _load_materializer_module()
 
@@ -119,8 +135,10 @@ class MaterializeActionRuntimeEnvTests(unittest.TestCase):
             base_env.write_text(
                 "\n".join(
                     [
-                        "SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS=90",
+                        "SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS=8",
                         "SMS_SERVICE_SELECTION_PLAN_ATTEMPTS=1",
+                        "REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS=1",
+                        "REGISTER_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS=1",
                     ]
                 )
                 + "\n",
@@ -148,8 +166,10 @@ class MaterializeActionRuntimeEnvTests(unittest.TestCase):
 
             rendered = output_env.read_text(encoding="utf-8")
 
-        self.assertIn("SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS=90", rendered)
+        self.assertIn("SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS=8", rendered)
         self.assertIn("SMS_SERVICE_SELECTION_PLAN_ATTEMPTS=1", rendered)
+        self.assertIn("REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS=1", rendered)
+        self.assertIn("REGISTER_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS=1", rendered)
 
 
 if __name__ == "__main__":

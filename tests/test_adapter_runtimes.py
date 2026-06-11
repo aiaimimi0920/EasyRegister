@@ -3497,6 +3497,93 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         wait_phone_code.assert_called_once()
         report_phone_outcome.assert_called_once()
 
+    def test_dispatch_obtain_codex_oauth_does_not_retry_sms_code_wait_timeout_by_default(self) -> None:
+        captured_calls: list[dict[str, object]] = []
+        phone_sessions = [
+            {"sessionId": "sms_1", "phoneNumber": "+15550000011", "providerKey": "freepool"},
+            {"sessionId": "sms_2", "phoneNumber": "+15550000012", "providerKey": "sms24"},
+        ]
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured_calls.append({"step_type": step_type, **dict(step_input)})
+            if step_type == "obtain_codex_oauth":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_123"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            if step_type == "submit_phone_verification_number":
+                return {
+                    "ok": True,
+                    "status": "phone_number_submitted",
+                    "pageType": "sms_verification",
+                    "resumeContext": {"flow": "oauth", "token": f"resume_{step_input['phone_session_id']}"},
+                }
+            raise AssertionError(f"unexpected invoke: {step_type} {step_input!r}")
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS": "2",
+                "REGISTER_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS": "",
+            },
+            clear=False,
+        ), mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            side_effect=phone_sessions,
+        ) as open_phone_session_for_business, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+            side_effect=RuntimeError("timeout waiting for sms verification code"),
+        ) as wait_phone_code, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "record_terminal_phone_outcome",
+            return_value={"ok": True},
+        ) as record_terminal_phone_outcome, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ) as report_phone_outcome:
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("phone_verification_submitted_small_success", result["status"])
+        self.assertEqual("wait_sms_code", result["phoneVerificationFailureStage"])
+        self.assertEqual("sms_1", result["phoneSessionId"])
+        open_phone_session_for_business.assert_called_once()
+        wait_phone_code.assert_called_once()
+        record_terminal_phone_outcome.assert_called_once_with(
+            phone_number="+15550000011",
+            provider_key="freepool",
+            terminal_code="sms_code_timeout",
+            terminal_message="timeout waiting for sms verification code",
+            business_key="openai",
+        )
+        report_phone_outcome.assert_called_once_with(
+            session_id="sms_1",
+            outcome="failure",
+            detail=mock.ANY,
+        )
+        self.assertEqual(
+            ["sms_1"],
+            [
+                str(item["phone_session_id"])
+                for item in captured_calls
+                if item["step_type"] == "submit_phone_verification_number"
+            ],
+        )
+
     def test_dispatch_obtain_codex_oauth_retries_after_sms_code_wait_timeout(self) -> None:
         captured_calls: list[dict[str, object]] = []
         phone_sessions = [
@@ -3535,7 +3622,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
         with mock.patch.dict(
             os.environ,
-            {"REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS": "2"},
+            {
+                "REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS": "2",
+                "REGISTER_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS": "2",
+            },
             clear=False,
         ), mock.patch.object(
             easyprotocol_runtime,

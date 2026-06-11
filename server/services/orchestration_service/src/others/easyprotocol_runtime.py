@@ -23,6 +23,7 @@ DEFAULT_EASY_PROTOCOL_PHONE_TIMEOUT_SECONDS = 120
 DEFAULT_PROTOCOL_OUTPUT_TARGET_DIR = "/shared/register-output"
 DEFAULT_PROTOCOL_BRIDGE_SUBDIR = "easyregister-bridge"
 DEFAULT_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS = 5
+DEFAULT_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS = 1
 PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
     "invalid_phone_number",
     "phone_number_in_use",
@@ -91,6 +92,16 @@ def phone_verification_terminal_retry_attempts() -> int:
         return max(1, int(float(raw)))
     except Exception:
         return DEFAULT_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS
+
+
+def phone_verification_sms_code_wait_retry_attempts() -> int:
+    raw = str(os.environ.get("REGISTER_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS") or "").strip()
+    if not raw:
+        return DEFAULT_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS
+    try:
+        return max(1, int(float(raw)))
+    except Exception:
+        return DEFAULT_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS
 
 
 def _is_retryable_phone_terminal_code(terminal_code: str) -> bool:
@@ -629,6 +640,8 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
     resume_context = dict(initial_result.get("resumeContext") or {})
     business_key = str(step_input.get("business_key") or step_input.get("mailbox_business_key") or "openai")
     max_phone_attempts = phone_verification_terminal_retry_attempts()
+    max_sms_code_wait_attempts = phone_verification_sms_code_wait_retry_attempts()
+    sms_code_wait_failure_count = 0
     for phone_attempt_index in range(max_phone_attempts):
         phone_session = runtime_sms.open_phone_session_for_business(
             business_key=business_key,
@@ -778,7 +791,11 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
                     terminal_message=str(exc),
                     business_key=business_key,
                 )
-                if phone_attempt_index + 1 < max_phone_attempts:
+                sms_code_wait_failure_count += 1
+                if (
+                    sms_code_wait_failure_count < max_sms_code_wait_attempts
+                    and phone_attempt_index + 1 < max_phone_attempts
+                ):
                     continue
             if (
                 phone_number_submitted
