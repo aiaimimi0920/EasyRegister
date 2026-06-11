@@ -53,6 +53,11 @@ from others.storage import load_json_payload
 
 _INVALID_ARTIFACT_FILENAME_CHARS = set('<>:"/\\|?*')
 _SAFE_ARTIFACT_EMAIL_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@._+-")
+_OPENAI_OAUTH_COLLECTION_SOURCE_CANDIDATES: tuple[tuple[str, str], ...] = (
+    *FREE_OPENAI_OAUTH_SOURCE_CANDIDATES,
+    ("obtain-codex-oauth", "successPath"),
+    ("obtain_codex_oauth", "successPath"),
+)
 
 
 def _sort_file_paths_newest_first(paths: list[Path]) -> list[Path]:
@@ -100,7 +105,7 @@ def _small_openai_oauth_artifact_name_from_output(
     create_output: dict[str, Any],
     result_or_payload: Any,
 ) -> str:
-    for path_text in all_output_texts(result_or_payload, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES):
+    for path_text in all_output_texts(result_or_payload, _OPENAI_OAUTH_COLLECTION_SOURCE_CANDIDATES):
         candidate_name = _safe_artifact_filename(Path(path_text).name)
         if candidate_name.lower().startswith("small-") and candidate_name.lower().endswith(".json"):
             return candidate_name
@@ -140,12 +145,9 @@ def _iter_openai_oauth_artifacts(*, run_output_dir: Path, result_or_payload: Any
             candidates[str(path.resolve()).lower()] = path.resolve()
 
     if result_or_payload is not None:
-        for path_text in all_output_texts(result_or_payload, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES):
-            try:
-                candidate = Path(path_text).resolve()
-            except Exception:
-                continue
-            if not candidate.is_file():
+        for path_text in all_output_texts(result_or_payload, _OPENAI_OAUTH_COLLECTION_SOURCE_CANDIDATES):
+            candidate = _resolve_openai_oauth_output_path(path_text)
+            if candidate is None:
                 continue
             candidates[str(candidate).lower()] = candidate
 
@@ -166,6 +168,79 @@ def _is_path_inside_directory(path: Path, directory: Path) -> bool:
         return True
     except Exception:
         return False
+
+
+def _split_relative_path_from_root(*, path_text: str, root_text: str) -> str | None:
+    path_value = str(path_text or "").strip()
+    root_value = str(root_text or "").strip().rstrip("/\\")
+    if not path_value or not root_value:
+        return None
+    if path_value == root_value:
+        return ""
+    for separator in ("/", "\\"):
+        prefix = f"{root_value}{separator}"
+        if path_value.startswith(prefix):
+            return path_value[len(prefix) :]
+    return None
+
+
+def _join_path_text(*, root_text: str, relative_text: str) -> str:
+    root_value = str(root_text or "").strip().rstrip("/\\")
+    relative_value = str(relative_text or "").strip().strip("/\\")
+    if not relative_value:
+        return root_value
+    relative_parts = [part for part in relative_value.replace("\\", "/").split("/") if part]
+    if "\\" in root_value and "/" not in root_value:
+        return str(Path(root_value).joinpath(*relative_parts))
+    return f"{root_value}/{'/'.join(relative_parts)}"
+
+
+def _iter_openai_oauth_output_path_texts(path_text: str) -> list[str]:
+    raw_path_text = str(path_text or "").strip()
+    if not raw_path_text:
+        return []
+    candidates = [raw_path_text]
+
+    bridge_dir_text = str(os.environ.get("REGISTER_PROTOCOL_BRIDGE_DIR") or "").strip()
+    bridge_target_dir_text = str(os.environ.get("REGISTER_PROTOCOL_BRIDGE_TARGET_DIR") or "").strip()
+    bridge_relative = _split_relative_path_from_root(
+        path_text=raw_path_text,
+        root_text=bridge_target_dir_text,
+    )
+    if bridge_relative is not None and bridge_dir_text:
+        candidates.append(_join_path_text(root_text=bridge_dir_text, relative_text=bridge_relative))
+
+    protocol_target_dir_text = str(
+        os.environ.get("REGISTER_PROTOCOL_OUTPUT_TARGET_DIR") or "/shared/register-output"
+    ).strip()
+    protocol_mirror_dir_text = str(os.environ.get("REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR") or "").strip()
+    output_relative = _split_relative_path_from_root(
+        path_text=raw_path_text,
+        root_text=protocol_target_dir_text,
+    )
+    if output_relative is not None and protocol_mirror_dir_text:
+        candidates.append(_join_path_text(root_text=protocol_mirror_dir_text, relative_text=output_relative))
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = candidate.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(candidate)
+    return deduped
+
+
+def _resolve_openai_oauth_output_path(path_text: str) -> Path | None:
+    for candidate_text in _iter_openai_oauth_output_path_texts(path_text):
+        try:
+            candidate = Path(candidate_text).expanduser().resolve()
+        except Exception:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _is_protocol_bridge_source_path(path: Path) -> bool:

@@ -400,6 +400,109 @@ class RunnerArtifactsTests(unittest.TestCase):
             self.assertEqual([], copied_paths)
             self.assertFalse(payload_path.exists())
 
+    def test_copy_openai_oauth_artifacts_to_pool_removes_invalid_target_bridge_source_after_discard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_output_dir = Path(tmp_dir) / "run-1"
+            bridge_dir = Path(tmp_dir) / "protocol-register-output" / "easyregister-bridge"
+            pool_dir = Path(tmp_dir) / "openai" / "failed-once"
+            bridge_dir.mkdir(parents=True, exist_ok=True)
+            payload_path = bridge_dir / "small-target-bridge-raw.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "email": "bridge-raw@example.com",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                        "createdAt": "2026-05-01T00:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            target_bridge_dir = "/shared/register-output/easyregister-bridge"
+            result_payload = {
+                "outputs": {
+                    "obtain-codex-oauth": {
+                        "successPath": f"{target_bridge_dir}/{payload_path.name}",
+                    }
+                }
+            }
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_PROTOCOL_BRIDGE_DIR": str(bridge_dir),
+                    "REGISTER_PROTOCOL_BRIDGE_TARGET_DIR": target_bridge_dir,
+                    "REGISTER_PROTOCOL_OUTPUT_TARGET_DIR": "/shared/register-output",
+                    "REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR": str(Path(tmp_dir) / "protocol-register-output"),
+                },
+                clear=False,
+            ):
+                copied_paths = runner_artifacts.copy_openai_oauth_artifacts_to_pool(
+                    run_output_dir=run_output_dir,
+                    pool_dir=pool_dir,
+                    worker_label="worker-01",
+                    task_index=1,
+                    result_or_payload=result_payload,
+                )
+
+            self.assertEqual([], copied_paths)
+            self.assertFalse(payload_path.exists())
+
+    def test_copy_openai_oauth_artifacts_to_pool_removes_valid_target_bridge_source_after_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_output_dir = Path(tmp_dir) / "run-1"
+            bridge_dir = Path(tmp_dir) / "protocol-register-output" / "easyregister-bridge"
+            pool_dir = Path(tmp_dir) / "openai" / "failed-once"
+            bridge_dir.mkdir(parents=True, exist_ok=True)
+            payload_path = bridge_dir / "small-target-bridge-valid.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "email": "bridge-valid@example.com",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                        "createdAt": "2026-05-01T00:00:00Z",
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            target_bridge_dir = "/shared/register-output/easyregister-bridge"
+            result_payload = {
+                "outputs": {
+                    "obtain-codex-oauth": {
+                        "successPath": f"{target_bridge_dir}/{payload_path.name}",
+                    }
+                }
+            }
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_PROTOCOL_BRIDGE_DIR": str(bridge_dir),
+                    "REGISTER_PROTOCOL_BRIDGE_TARGET_DIR": target_bridge_dir,
+                    "REGISTER_PROTOCOL_OUTPUT_TARGET_DIR": "/shared/register-output",
+                    "REGISTER_PROTOCOL_OUTPUT_MIRROR_DIR": str(Path(tmp_dir) / "protocol-register-output"),
+                },
+                clear=False,
+            ):
+                copied_paths = runner_artifacts.copy_openai_oauth_artifacts_to_pool(
+                    run_output_dir=run_output_dir,
+                    pool_dir=pool_dir,
+                    worker_label="worker-01",
+                    task_index=1,
+                    result_or_payload=result_payload,
+                )
+
+            self.assertEqual(1, len(copied_paths))
+            self.assertTrue(Path(copied_paths[0]).is_file())
+            self.assertEqual("small-target-bridge-valid.json", Path(copied_paths[0]).name)
+            self.assertFalse(payload_path.exists())
+
     def test_copy_openai_oauth_artifacts_to_pool_ignores_seed_age_during_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_output_dir = Path(tmp_dir) / "run-1"
