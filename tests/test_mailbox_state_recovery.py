@@ -285,6 +285,137 @@ class MailboxStateRecoveryTests(unittest.TestCase):
         self.assertEqual(1, summary["recoveredEntries"])
         self.assertEqual(0, summary["preservedProviderRiskEntries"])
 
+    def test_recover_payload_opt_in_resets_zero_success_generic_outage_provider(self) -> None:
+        recovery = _load_recovery_module()
+        payload = {
+            "schemaVersion": 3,
+            "businesses": {
+                "openai": {
+                    "domains": {},
+                    "providers": {
+                        "mail2925": {
+                            "attempts": 205,
+                            "successes": 0,
+                            "failures": 205,
+                            "consecutiveFailures": 205,
+                            "failureRate": 100.0,
+                            "blacklisted": True,
+                            "blacklistReason": "provider_email_otp_failure_threshold",
+                            "failureReasons": {
+                                "email_otp_timeout": 8,
+                                "create_account_failure": 197,
+                            },
+                        }
+                    },
+                }
+            },
+        }
+
+        summary = recovery.recover_payload(
+            payload,
+            business_keys=("openai",),
+            recover_generic_outage=True,
+        )
+
+        provider = payload["businesses"]["openai"]["providers"]["mail2925"]
+        self.assertFalse(provider["blacklisted"])
+        self.assertEqual("", provider["blacklistReason"])
+        self.assertEqual(0, provider["attempts"])
+        self.assertEqual(0, provider["failures"])
+        self.assertEqual(0, provider["consecutiveFailures"])
+        self.assertEqual(0.0, provider["failureRate"])
+        self.assertEqual({}, provider["failureReasons"])
+        self.assertEqual(
+            {"email_otp_timeout": 8, "create_account_failure": 197},
+            provider["suppressedFailureReasons"],
+        )
+        self.assertEqual(1, summary["recoveredEntries"])
+        self.assertEqual(1, summary["outageRecoveredEntries"])
+
+    def test_recover_payload_opt_in_preserves_strong_domain_during_generic_outage(self) -> None:
+        recovery = _load_recovery_module()
+        payload = {
+            "schemaVersion": 3,
+            "businesses": {
+                "openai": {
+                    "domains": {
+                        "guerrillamailblock.com": {
+                            "provider": "guerrillamail",
+                            "attempts": 173,
+                            "successes": 0,
+                            "failures": 173,
+                            "consecutiveFailures": 173,
+                            "blacklisted": True,
+                            "blacklistReason": "unsupported_email",
+                            "failureReasons": {
+                                "unsupported_email": 3,
+                                "create_account_failure": 170,
+                            },
+                        }
+                    },
+                    "providers": {},
+                }
+            },
+        }
+
+        summary = recovery.recover_payload(
+            payload,
+            business_keys=("openai",),
+            recover_generic_outage=True,
+        )
+
+        domain = payload["businesses"]["openai"]["domains"]["guerrillamailblock.com"]
+        self.assertTrue(domain["blacklisted"])
+        self.assertEqual("unsupported_email", domain["blacklistReason"])
+        self.assertEqual({"unsupported_email": 3, "create_account_failure": 170}, domain["failureReasons"])
+        self.assertNotIn("suppressedFailureReasons", domain)
+        self.assertEqual(0, summary["recoveredEntries"])
+        self.assertEqual(1, summary["preservedStrongEntries"])
+
+    def test_recover_payload_opt_in_resets_zero_success_generic_outage_domain(self) -> None:
+        recovery = _load_recovery_module()
+        payload = {
+            "schemaVersion": 3,
+            "businesses": {
+                "openai": {
+                    "domains": {
+                        "duckmail.sbs": {
+                            "provider": "duckmail",
+                            "attempts": 104,
+                            "successes": 0,
+                            "failures": 104,
+                            "consecutiveFailures": 104,
+                            "failureRate": 100.0,
+                            "blacklisted": True,
+                            "blacklistReason": "failure_rate_threshold",
+                            "failureReasons": {
+                                "create_account_failure": 104,
+                            },
+                        }
+                    },
+                    "providers": {},
+                }
+            },
+        }
+
+        summary = recovery.recover_payload(
+            payload,
+            business_keys=("openai",),
+            recover_generic_outage=True,
+        )
+
+        domain = payload["businesses"]["openai"]["domains"]["duckmail.sbs"]
+        self.assertFalse(domain["blacklisted"])
+        self.assertEqual("", domain["blacklistReason"])
+        self.assertEqual(0, domain["attempts"])
+        self.assertEqual(0, domain["failures"])
+        self.assertEqual(0, domain["consecutiveFailures"])
+        self.assertEqual(0.0, domain["failureRate"])
+        self.assertEqual({}, domain["failureReasons"])
+        self.assertEqual({"create_account_failure": 104}, domain["suppressedFailureReasons"])
+        self.assertEqual(1, summary["recoveredEntries"])
+        self.assertEqual(1, summary["outageRecoveredEntries"])
+
     def test_apply_recovery_writes_backup_and_updates_state(self) -> None:
         recovery = _load_recovery_module()
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -26,6 +26,9 @@ THRESHOLD_REEVALUATED_FAILURE_REASONS = {
     "email_otp_timeout",
     "email_otp_wrong_code",
 }
+GENERIC_OUTAGE_FAILURE_REASONS = {
+    "create_account_failure",
+}
 PROVIDER_CONSECUTIVE_BLACKLIST_FAILURE_REASONS = (
     THRESHOLD_REEVALUATED_FAILURE_REASONS
     | STRONG_BLACKLIST_REASONS
@@ -36,6 +39,7 @@ PROVIDER_RISK_FAILURE_RATE = 90.0
 PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES = 10
 PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE = 20.0
 DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MAX_CONSECUTIVE_OTP_FAILURES = 6
+GENERIC_OUTAGE_MIN_DOMINANCE = 0.75
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -96,6 +100,19 @@ def _count_reasons(values: dict[str, Any], reasons: set[str]) -> int:
     return total
 
 
+def _generic_outage_qualified(entry: dict[str, Any]) -> bool:
+    if not bool(entry.get("blacklisted")):
+        return False
+    if _entry_int(entry, "successes") > 0:
+        return False
+    failure_reasons = _as_dict(entry.get("failureReasons"))
+    total = _count_total(failure_reasons)
+    generic_total = _count_reasons(failure_reasons, GENERIC_OUTAGE_FAILURE_REASONS)
+    if total <= 0 or generic_total <= 0:
+        return False
+    return (float(generic_total) / float(total)) >= GENERIC_OUTAGE_MIN_DOMINANCE
+
+
 def _provider_blacklist_recovery_max_consecutive_otp_failures() -> int:
     raw = str(
         os.environ.get("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD")
@@ -142,21 +159,56 @@ def _provider_recovery_qualified(entry: dict[str, Any]) -> bool:
     return failure_rate < PROVIDER_RISK_FAILURE_RATE
 
 
-def _recover_entry(entry: dict[str, Any], *, section_name: str) -> tuple[bool, bool, bool, int]:
+def _recover_outage_entry(entry: dict[str, Any]) -> tuple[bool, bool, bool, int, bool]:
+    failure_reasons = _as_dict(entry.get("failureReasons"))
+    suppressed = _as_dict(entry.get("suppressedFailureReasons"))
+    _merge_counts(suppressed, failure_reasons)
+    entry["blacklisted"] = False
+    entry["blacklistReason"] = ""
+    entry["attempts"] = 0
+    entry["failures"] = 0
+    entry["consecutiveFailures"] = 0
+    if "failureRate" in entry:
+        entry["failureRate"] = 0.0
+    entry["failureReasons"] = {}
+    if suppressed:
+        entry["suppressedFailureReasons"] = suppressed
+    return True, False, False, len(failure_reasons), True
+
+
+def _recover_entry(
+    entry: dict[str, Any],
+    *,
+    section_name: str,
+    recover_generic_outage: bool = False,
+) -> tuple[bool, bool, bool, int, bool]:
     blacklist_reason = str(entry.get("blacklistReason") or "").strip().lower()
     failure_reasons = _as_dict(entry.get("failureReasons"))
+    if (
+        recover_generic_outage
+        and section_name == "providers"
+        and blacklist_reason in TRANSIENT_BLACKLIST_REASONS
+        and _generic_outage_qualified(entry)
+    ):
+        return _recover_outage_entry(entry)
     if blacklist_reason in STRONG_BLACKLIST_REASONS:
-        return False, True, False, 0
+        return False, True, False, 0, False
     if any(reason in failure_reasons for reason in STRONG_BLACKLIST_REASONS):
-        return False, True, False, 0
+        return False, True, False, 0, False
+    if (
+        recover_generic_outage
+        and blacklist_reason in TRANSIENT_BLACKLIST_REASONS
+        and _generic_outage_qualified(entry)
+    ):
+        return _recover_outage_entry(entry)
     if section_name == "providers" and (
         _preserve_provider_risk(entry) or not _provider_recovery_qualified(entry)
     ):
-        return False, False, True, 0
+        return False, False, True, 0, False
     if not bool(entry.get("blacklisted")) and blacklist_reason not in TRANSIENT_BLACKLIST_REASONS:
-        return False, False, False, 0
+        return False, False, False, 0, False
     if blacklist_reason and blacklist_reason not in TRANSIENT_BLACKLIST_REASONS:
-        return False, False, False, 0
+        return False, False, False, 0, False
 
     suppressed = _as_dict(entry.get("suppressedFailureReasons"))
     remaining_reasons: dict[str, Any] = {}
@@ -174,13 +226,19 @@ def _recover_entry(entry: dict[str, Any], *, section_name: str) -> tuple[bool, b
     entry["failureReasons"] = remaining_reasons
     if suppressed:
         entry["suppressedFailureReasons"] = suppressed
-    return True, False, False, len(moved_reasons)
+    return True, False, False, len(moved_reasons), False
 
 
-def recover_payload(payload: dict[str, Any], *, business_keys: tuple[str, ...] = ("openai",)) -> dict[str, Any]:
+def recover_payload(
+    payload: dict[str, Any],
+    *,
+    business_keys: tuple[str, ...] = ("openai",),
+    recover_generic_outage: bool = False,
+) -> dict[str, Any]:
     summary = {
         "businessKeys": list(business_keys),
         "recoveredEntries": 0,
+        "outageRecoveredEntries": 0,
         "preservedStrongEntries": 0,
         "preservedProviderRiskEntries": 0,
         "suppressedFailureReasonEntries": 0,
@@ -195,12 +253,21 @@ def recover_payload(payload: dict[str, Any], *, business_keys: tuple[str, ...] =
             for entry in section.values():
                 if not isinstance(entry, dict):
                     continue
-                recovered, preserved_strong, preserved_provider_risk, suppressed_count = _recover_entry(
+                (
+                    recovered,
+                    preserved_strong,
+                    preserved_provider_risk,
+                    suppressed_count,
+                    recovered_outage,
+                ) = _recover_entry(
                     entry,
                     section_name=section_name,
+                    recover_generic_outage=recover_generic_outage,
                 )
                 if recovered:
                     summary["recoveredEntries"] += 1
+                    if recovered_outage:
+                        summary["outageRecoveredEntries"] += 1
                     summary["suppressedFailureReasonEntries"] += suppressed_count
                     summary["sections"][section_name] += 1
                 elif preserved_strong:
@@ -215,6 +282,7 @@ def apply_recovery(
     state_path: Path,
     *,
     business_keys: tuple[str, ...] = ("openai",),
+    recover_generic_outage: bool = False,
     timestamp_slug: str | None = None,
 ) -> dict[str, Any]:
     path = Path(state_path).resolve()
@@ -224,7 +292,11 @@ def apply_recovery(
     slug = timestamp_slug or datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     backup_path = path.with_name(f"{path.name}.bak-{slug}")
     shutil.copy2(path, backup_path)
-    summary = recover_payload(payload, business_keys=business_keys)
+    summary = recover_payload(
+        payload,
+        business_keys=business_keys,
+        recover_generic_outage=recover_generic_outage,
+    )
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     summary["statePath"] = str(path)
     summary["backupPath"] = str(backup_path)
@@ -232,12 +304,21 @@ def apply_recovery(
     return summary
 
 
-def inspect_recovery(state_path: Path, *, business_keys: tuple[str, ...] = ("openai",)) -> dict[str, Any]:
+def inspect_recovery(
+    state_path: Path,
+    *,
+    business_keys: tuple[str, ...] = ("openai",),
+    recover_generic_outage: bool = False,
+) -> dict[str, Any]:
     path = Path(state_path).resolve()
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise RuntimeError(f"state payload is not an object: {path}")
-    summary = recover_payload(payload, business_keys=business_keys)
+    summary = recover_payload(
+        payload,
+        business_keys=business_keys,
+        recover_generic_outage=recover_generic_outage,
+    )
     summary["statePath"] = str(path)
     summary["backupPath"] = ""
     summary["applied"] = False
@@ -259,6 +340,14 @@ def _parse_args() -> argparse.Namespace:
         default=[],
         help="Business key to recover. Can be repeated. Defaults to openai.",
     )
+    parser.add_argument(
+        "--recover-generic-outage",
+        action="store_true",
+        help=(
+            "Opt in to clearing zero-success entries dominated by generic create-account failures. "
+            "This resets attempts/failures so outage-polluted entries do not immediately re-blacklist."
+        ),
+    )
     parser.add_argument("--apply", action="store_true", help="Write the recovered state. Default is dry-run.")
     return parser.parse_args()
 
@@ -267,9 +356,17 @@ def main() -> int:
     args = _parse_args()
     business_keys = tuple(str(item or "").strip().lower() for item in args.business_keys if str(item or "").strip()) or ("openai",)
     summary = (
-        apply_recovery(args.state_path, business_keys=business_keys)
+        apply_recovery(
+            args.state_path,
+            business_keys=business_keys,
+            recover_generic_outage=args.recover_generic_outage,
+        )
         if args.apply
-        else inspect_recovery(args.state_path, business_keys=business_keys)
+        else inspect_recovery(
+            args.state_path,
+            business_keys=business_keys,
+            recover_generic_outage=args.recover_generic_outage,
+        )
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
