@@ -158,6 +158,14 @@ raise SystemExit(1)
                 "@echo off\r\npython \"%~dp0fake_docker.py\" %*\r\n",
                 encoding="ascii",
             )
+            fake_docker_sh = fake_bin / "docker"
+            fake_docker_sh.write_text(
+                "#!/usr/bin/env python3\n"
+                "import runpy\n"
+                f"runpy.run_path({str(fake_docker_py)!r}, run_name='__main__')\n",
+                encoding="utf-8",
+            )
+            fake_docker_sh.chmod(0o755)
 
             wrong_source = launcher_root / "protocol-wrong" / "register-output"
             right_source = launcher_root / "protocol-right" / "register-output"
