@@ -328,6 +328,8 @@ def _is_retryable_provider_open_error(exc: Exception) -> bool:
             "no available public numbers",
             "empty directory response",
             "provider temporarily unavailable",
+            "capacity unavailable",
+            "sms_capacity_unavailable",
             "timed out",
             "timeout",
         )
