@@ -21,6 +21,7 @@ DEFAULT_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS = 24 * 60 * 60
 DEFAULT_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS = 2 * 60 * 60
 DEFAULT_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS = 30 * 60
 DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD = 5
+DEFAULT_SMS_RATE_LIMIT_PROVIDER_FAILURE_THRESHOLD = 2
 DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS = 60 * 60
 DEFAULT_SMS_SESSION_LOCAL_RETRY_ATTEMPTS = 6
 PHONE_SCOPED_TERMINAL_CODES = {
@@ -368,7 +369,7 @@ def _non_relaxable_provider_blacklist_from_terminal_outcomes(
     payload: dict[str, Any],
     now_ts: float | None = None,
 ) -> tuple[str, ...]:
-    threshold = _resolve_sms_phone_scoped_provider_failure_threshold()
+    threshold = _resolve_sms_rate_limit_provider_failure_threshold()
     if threshold <= 0:
         return ()
     effective_now_ts = float(now_ts or time.time())
@@ -487,6 +488,17 @@ def _resolve_sms_phone_scoped_provider_failure_threshold() -> int:
         return max(0, int(float(raw or DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD)))
     except Exception:
         return DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD
+
+
+def _resolve_sms_rate_limit_provider_failure_threshold() -> int:
+    raw = str(
+        os.environ.get("REGISTER_SMS_RATE_LIMIT_PROVIDER_FAILURE_THRESHOLD")
+        or DEFAULT_SMS_RATE_LIMIT_PROVIDER_FAILURE_THRESHOLD
+    ).strip()
+    try:
+        return max(0, int(float(raw or DEFAULT_SMS_RATE_LIMIT_PROVIDER_FAILURE_THRESHOLD)))
+    except Exception:
+        return DEFAULT_SMS_RATE_LIMIT_PROVIDER_FAILURE_THRESHOLD
 
 
 def _resolve_sms_phone_scoped_provider_failure_window_seconds() -> int:
@@ -727,6 +739,7 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
     non_relaxable_dynamic_blocked_providers = set(
         _non_relaxable_provider_blacklist_from_terminal_outcomes(payload=state_payload)
     )
+    dynamic_blocked_providers |= non_relaxable_dynamic_blocked_providers
     capacity_blocked_providers = set(
         _provider_blacklist_from_capacity_unavailable_state(payload=state_payload)
     )
