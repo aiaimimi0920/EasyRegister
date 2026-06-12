@@ -39,6 +39,9 @@ SOFT_SMS_TERMINAL_CODES = {
 }
 PROVIDER_TERMINAL_OUTCOMES_KEY = "providerTerminalOutcomes"
 BUSINESS_PHONE_OUTCOMES_KEY = "businessPhones"
+NON_RELAXABLE_PROVIDER_TERMINAL_REASONS = {
+    "rate_limit_exceeded",
+}
 SMS_DYNAMIC_PROVIDER_BLACKLIST_RELAXATION_ERRORS = (
     "sms_no_productive_selection_plan_candidates",
     "sms_no_selection_plan_candidates",
@@ -360,6 +363,52 @@ def _provider_blacklist_from_repeated_phone_scoped_state(
     return tuple(sorted(provider_key for provider_key, count in counts.items() if count >= threshold))
 
 
+def _non_relaxable_provider_blacklist_from_terminal_outcomes(
+    *,
+    payload: dict[str, Any],
+    now_ts: float | None = None,
+) -> tuple[str, ...]:
+    threshold = _resolve_sms_phone_scoped_provider_failure_threshold()
+    if threshold <= 0:
+        return ()
+    effective_now_ts = float(now_ts or time.time())
+    min_recorded_at_ts = effective_now_ts - _resolve_sms_phone_scoped_provider_failure_window_seconds()
+    counts: dict[str, int] = {}
+    seen_events: set[tuple[str, str, str, int]] = set()
+    raw_outcomes = (
+        payload.get(PROVIDER_TERMINAL_OUTCOMES_KEY)
+        if isinstance(payload.get(PROVIDER_TERMINAL_OUTCOMES_KEY), dict)
+        else {}
+    )
+    for raw_provider, raw_entries in raw_outcomes.items():
+        provider_key = str(raw_provider or "").strip().lower()
+        if not provider_key or not isinstance(raw_entries, list):
+            continue
+        for raw_entry in raw_entries:
+            if not isinstance(raw_entry, dict):
+                continue
+            reason = str(raw_entry.get("reason") or "").strip()
+            if reason not in NON_RELAXABLE_PROVIDER_TERMINAL_REASONS:
+                continue
+            try:
+                recorded_at_ts = float(raw_entry.get("atTs") or 0.0)
+            except Exception:
+                recorded_at_ts = 0.0
+            if recorded_at_ts < min_recorded_at_ts:
+                continue
+            event_key = (
+                provider_key,
+                str(raw_entry.get("phoneNumber") or "").strip(),
+                reason,
+                int(recorded_at_ts * 1_000_000),
+            )
+            if event_key in seen_events:
+                continue
+            seen_events.add(event_key)
+            counts[provider_key] = counts.get(provider_key, 0) + 1
+    return tuple(sorted(provider_key for provider_key, count in counts.items() if count >= threshold))
+
+
 def _provider_blacklist_from_capacity_unavailable_state(
     *,
     payload: dict[str, Any],
@@ -675,6 +724,9 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
     dynamic_blocked_providers = set(
         _provider_blacklist_from_repeated_phone_scoped_state(payload=state_payload)
     )
+    non_relaxable_dynamic_blocked_providers = set(
+        _non_relaxable_provider_blacklist_from_terminal_outcomes(payload=state_payload)
+    )
     capacity_blocked_providers = set(
         _provider_blacklist_from_capacity_unavailable_state(payload=state_payload)
     )
@@ -720,12 +772,14 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
             if (
                 not relaxed_dynamic_provider_blacklist
                 and dynamic_blocked_providers
+                and (dynamic_blocked_providers - non_relaxable_dynamic_blocked_providers)
                 and dynamic_relaxation_reason
             ):
                 relaxed_dynamic_provider_blacklist = True
                 attempt_provider_blacklist = (
                     static_blocked_providers
                     | hard_blocked_providers
+                    | non_relaxable_dynamic_blocked_providers
                     | current_capacity_unavailable_providers
                 )
                 json_log(
@@ -746,7 +800,9 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
             ):
                 relaxed_capacity_provider_blacklist = True
                 active_dynamic_blocked_providers = (
-                    set() if relaxed_dynamic_provider_blacklist else dynamic_blocked_providers
+                    non_relaxable_dynamic_blocked_providers
+                    if relaxed_dynamic_provider_blacklist
+                    else dynamic_blocked_providers
                 )
                 attempt_provider_blacklist = (
                     static_blocked_providers

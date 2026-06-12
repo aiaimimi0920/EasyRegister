@@ -2653,6 +2653,71 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms_2", session["sessionId"])
         self.assertEqual(("hero_sms", "smstome"), captured_blacklists[0])
 
+    def test_open_phone_session_for_business_keeps_terminal_rate_limit_provider_block_on_exhaustion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "providerTerminalOutcomes": {
+                            "smstome": [
+                                {
+                                    "reason": "rate_limit_exceeded",
+                                    "phoneNumber": f"+1555000000{index}",
+                                    "atTs": float(index),
+                                }
+                                for index in range(1, 4)
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            captured_blacklists: list[tuple[str, ...]] = []
+
+            def _open_sms_session(**kwargs):
+                provider_blacklist = tuple(kwargs["provider_blacklist"])
+                captured_blacklists.append(provider_blacklist)
+                if "smstome" in provider_blacklist:
+                    raise RuntimeError("sms_no_selection_plan_candidates")
+                return easy_sms_client.SmsSession(
+                    session_id="sms_2",
+                    phone_number="+15557654321",
+                    provider_key="smstome",
+                )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_SESSION_LOCAL_RETRY_ATTEMPTS": "2",
+                    "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD": "3",
+                    "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS": "9999999999",
+                    "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"enabled":true,"providerBlacklist":["hero_sms"],'
+                        '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
+                        '"countryCodes":[],"selectionMode":"balanced"}}'
+                    ),
+                },
+                clear=False,
+            ), mock.patch.object(
+                runtime_sms,
+                "open_sms_session",
+                side_effect=_open_sms_session,
+            ), mock.patch.object(runtime_sms, "json_log") as json_log:
+                with self.assertRaisesRegex(RuntimeError, "sms_no_selection_plan_candidates"):
+                    runtime_sms.open_phone_session_for_business(business_key="openai")
+
+        self.assertEqual([("hero_sms", "smstome"), ("hero_sms", "smstome")], captured_blacklists)
+        self.assertFalse(
+            any(
+                call.args
+                and isinstance(call.args[0], dict)
+                and call.args[0].get("event") == "register_sms_dynamic_provider_blacklist_relaxed"
+                for call in json_log.call_args_list
+            )
+        )
+
     def test_open_phone_session_for_business_relaxes_repeated_phone_scoped_provider_block_after_candidate_exhaustion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
