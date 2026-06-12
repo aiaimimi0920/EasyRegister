@@ -286,6 +286,55 @@ def _provider_blacklist_from_repeated_phone_scoped_state(
     effective_now_ts = float(now_ts or time.time())
     min_recorded_at_ts = effective_now_ts - _resolve_sms_phone_scoped_provider_failure_window_seconds()
     counts: dict[str, int] = {}
+    seen_events: set[tuple[str, str, str, int]] = set()
+
+    def _count_event(
+        *,
+        provider_key: str,
+        reason: str,
+        phone_number: str,
+        recorded_at_ts: float,
+    ) -> None:
+        normalized_provider = str(provider_key or "").strip().lower()
+        normalized_reason = str(reason or "").strip()
+        if not normalized_provider or not _is_phone_scoped_terminal_code(normalized_reason):
+            return
+        if recorded_at_ts < min_recorded_at_ts:
+            return
+        event_key = (
+            normalized_provider,
+            str(phone_number or "").strip(),
+            normalized_reason,
+            int(recorded_at_ts * 1_000_000),
+        )
+        if event_key in seen_events:
+            return
+        seen_events.add(event_key)
+        counts[normalized_provider] = counts.get(normalized_provider, 0) + 1
+
+    raw_outcomes = (
+        payload.get(PROVIDER_TERMINAL_OUTCOMES_KEY)
+        if isinstance(payload.get(PROVIDER_TERMINAL_OUTCOMES_KEY), dict)
+        else {}
+    )
+    for raw_provider, raw_entries in raw_outcomes.items():
+        provider_key = str(raw_provider or "").strip().lower()
+        if not provider_key or not isinstance(raw_entries, list):
+            continue
+        for raw_entry in raw_entries:
+            if not isinstance(raw_entry, dict):
+                continue
+            try:
+                recorded_at_ts = float(raw_entry.get("atTs") or 0.0)
+            except Exception:
+                recorded_at_ts = 0.0
+            _count_event(
+                provider_key=provider_key,
+                reason=str(raw_entry.get("reason") or "").strip(),
+                phone_number=str(raw_entry.get("phoneNumber") or "").strip(),
+                recorded_at_ts=recorded_at_ts,
+            )
+
     phones = payload.get("phones") if isinstance(payload.get("phones"), dict) else {}
     for raw_value in phones.values():
         if not isinstance(raw_value, dict):
@@ -302,9 +351,12 @@ def _provider_blacklist_from_repeated_phone_scoped_state(
                 recorded_at_ts = float(raw_value.get("blockedUntilTs") or 0.0) - _resolve_sms_terminal_phone_blacklist_seconds_for_reason(reason)
             except Exception:
                 recorded_at_ts = 0.0
-        if recorded_at_ts < min_recorded_at_ts:
-            continue
-        counts[provider_key] = counts.get(provider_key, 0) + 1
+        _count_event(
+            provider_key=provider_key,
+            reason=reason,
+            phone_number=str(raw_value.get("phoneNumber") or "").strip(),
+            recorded_at_ts=recorded_at_ts,
+        )
     return tuple(sorted(provider_key for provider_key, count in counts.items() if count >= threshold))
 
 
