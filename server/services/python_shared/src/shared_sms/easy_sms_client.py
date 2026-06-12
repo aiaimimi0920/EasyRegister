@@ -355,6 +355,11 @@ def _is_transient_selection_plan_error(exc: Exception) -> bool:
     )
 
 
+def _is_missing_sms_session_report_error(exc: Exception) -> bool:
+    normalized = str(exc or "").strip().lower()
+    return "http 404" in normalized and "sms session not found" in normalized
+
+
 def _query_provider_selection_candidates_with_seen(
     *,
     provider_blacklist: tuple[str, ...],
@@ -800,8 +805,17 @@ def report_sms_outcome(*, session_id: str, outcome: str, detail: str = "") -> di
     }
     if not success:
         payload["failureReason"] = normalized_outcome or "failure"
-    response = _post_json(
-        "/sms/sessions/report-outcome",
-        payload,
-    )
+    try:
+        response = _post_json(
+            "/sms/sessions/report-outcome",
+            payload,
+        )
+    except Exception as exc:
+        if _is_missing_sms_session_report_error(exc):
+            return {
+                "accepted": False,
+                "ignored": True,
+                "reason": "sms_session_not_found",
+            }
+        raise
     return dict(response.get("result") or {})

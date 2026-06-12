@@ -334,6 +334,50 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
         self.assertEqual(30, request.call_args.kwargs.get("timeout_seconds"))
 
+    def test_easy_sms_client_ignores_missing_session_when_reporting_outcome(self) -> None:
+        def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            self.assertEqual("/sms/sessions/report-outcome", path)
+            self.assertEqual("sms_session_000042", payload["sessionId"])
+            raise RuntimeError(
+                "sms service POST /sms/sessions/report-outcome failed: "
+                "HTTP 404 [code=SMS session not found: sms_session_000042]: "
+                '{"error":"SMS session not found: sms_session_000042"}'
+            )
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=_post,
+        ):
+            result = easy_sms_client.report_sms_outcome(
+                session_id="sms_session_000042",
+                outcome="invalid_phone_number",
+                detail="openai rejected phone",
+            )
+
+        self.assertEqual(
+            {
+                "accepted": False,
+                "ignored": True,
+                "reason": "sms_session_not_found",
+            },
+            result,
+        )
+
+    def test_easy_sms_client_keeps_non_missing_session_report_errors_fatal(self) -> None:
+        with mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=RuntimeError(
+                "sms service POST /sms/sessions/report-outcome failed: HTTP 500: boom"
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 500"):
+                easy_sms_client.report_sms_outcome(
+                    session_id="sms_session_000042",
+                    outcome="invalid_phone_number",
+                )
+
     def test_easy_sms_client_catalog_fallback_when_productive_selection_candidates_fail(self) -> None:
         post_payloads: list[dict[str, object]] = []
 
