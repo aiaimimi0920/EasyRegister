@@ -18,6 +18,7 @@ from shared_sms.easy_sms_client import open_sms_session, report_sms_outcome, wai
 
 DEFAULT_EASY_SMS_BASE_URL = "http://localhost:18083"
 DEFAULT_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS = 24 * 60 * 60
+DEFAULT_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS = 6 * 60 * 60
 DEFAULT_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS = 2 * 60 * 60
 DEFAULT_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS = 30 * 60
 DEFAULT_SMS_PROVIDER_CAPACITY_BLACKLIST_SECONDS = 5 * 60
@@ -470,9 +471,23 @@ def _resolve_sms_terminal_rate_limit_phone_blacklist_seconds() -> int:
         return DEFAULT_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS
 
 
+def _resolve_sms_terminal_invalid_phone_blacklist_seconds() -> int:
+    raw = str(
+        os.environ.get("REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS")
+        or DEFAULT_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS
+    ).strip()
+    try:
+        return max(0, int(float(raw or DEFAULT_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS)))
+    except Exception:
+        return DEFAULT_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS
+
+
 def _resolve_sms_terminal_phone_blacklist_seconds_for_reason(terminal_code: str) -> int:
-    if str(terminal_code or "").strip().lower() == "rate_limit_exceeded":
+    normalized_code = str(terminal_code or "").strip().lower()
+    if normalized_code == "rate_limit_exceeded":
         return _resolve_sms_terminal_rate_limit_phone_blacklist_seconds()
+    if normalized_code == "invalid_phone_number":
+        return _resolve_sms_terminal_invalid_phone_blacklist_seconds()
     return _resolve_sms_terminal_phone_blacklist_seconds()
 
 

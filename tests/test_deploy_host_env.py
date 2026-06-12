@@ -104,6 +104,7 @@ class DeployHostEnvTests(unittest.TestCase):
             self.assertEqual("false", env_values.get("REGISTER_SMS_ALLOW_REUSE"))
             self.assertEqual("1", env_values.get("REGISTER_SMS_MAX_BINDINGS_PER_PHONE"))
             self.assertEqual("balanced", env_values.get("REGISTER_SMS_SELECTION_MODE"))
+            self.assertEqual("21600", env_values.get("REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS"))
 
             policies = env_values.get("REGISTER_SMS_BUSINESS_POLICIES_JSON", "")
             self.assertIn('"openai":{"enabled":true', policies)

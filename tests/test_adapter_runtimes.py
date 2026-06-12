@@ -3480,6 +3480,35 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         blocked_at_ts = datetime.fromisoformat(record["blockedAt"].replace("Z", "+00:00")).timestamp()
         self.assertLessEqual(record["blockedUntilTs"] - blocked_at_ts, 7205)
 
+    def test_record_terminal_phone_outcome_uses_invalid_phone_ttl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "86400",
+                    "REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS": "21600",
+                    "REGISTER_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS": "7200",
+                    "REGISTER_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS": "3600",
+                },
+                clear=False,
+            ):
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number="+15550000009",
+                    provider_key="freepool",
+                    terminal_code="invalid_phone_number",
+                    terminal_message="Invalid phone number.",
+                    business_key="openai",
+                )
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+        record = payload["businessPhones"]["openai"]["freepool|+15550000009"]
+        blocked_at_ts = datetime.fromisoformat(record["blockedAt"].replace("Z", "+00:00")).timestamp()
+        self.assertLessEqual(record["blockedUntilTs"] - blocked_at_ts, 21605)
+
     def test_record_terminal_phone_outcome_uses_capacity_provider_ttl(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
@@ -3621,6 +3650,47 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
         self.assertNotIn("+15550000007", payload["phones"])
         self.assertIn("+15550000008", payload["phones"])
+
+    def test_prune_sms_state_caps_legacy_business_invalid_phone_blocks_to_reason_ttl(self) -> None:
+        now_ts = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc).timestamp()
+        stale_invalid_at = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
+        recent_in_use_at = datetime(2026, 1, 1, 7, 0, tzinfo=timezone.utc)
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS": "86400",
+                "REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS": "21600",
+            },
+            clear=False,
+        ):
+            payload = runtime_sms._prune_sms_state(
+                payload={
+                    "businessPhones": {
+                        "openai": {
+                            "freepool|+15550000009": {
+                                "providerKey": "freepool",
+                                "phoneNumber": "+15550000009",
+                                "blockedAt": stale_invalid_at.isoformat().replace("+00:00", "Z"),
+                                "blockedUntilTs": now_ts + 86400,
+                                "reason": "invalid_phone_number",
+                            },
+                            "freepool|+15550000010": {
+                                "providerKey": "freepool",
+                                "phoneNumber": "+15550000010",
+                                "blockedAt": recent_in_use_at.isoformat().replace("+00:00", "Z"),
+                                "blockedUntilTs": now_ts + 86400,
+                                "reason": "phone_number_in_use",
+                            },
+                        }
+                    }
+                },
+                now_ts=now_ts,
+            )
+
+        business_phones = payload["businessPhones"]["openai"]
+        self.assertNotIn("freepool|+15550000009", business_phones)
+        self.assertIn("freepool|+15550000010", business_phones)
 
     def test_prune_sms_state_caps_legacy_capacity_provider_blocks_to_reason_ttl(self) -> None:
         now_ts = datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc).timestamp()

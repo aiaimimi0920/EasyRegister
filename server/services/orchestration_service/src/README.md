@@ -49,6 +49,7 @@
 - `REGISTER_SMS_COUNTRY_CODES`
 - `REGISTER_SMS_SELECTION_MODE`
 - `REGISTER_SMS_BUSINESS_POLICIES_JSON`
+- `REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS`
 - `REGISTER_ENABLE_EASY_PROXY`
 - `REGISTER_REQUIRE_EASY_PROXY`
 - `REGISTER_PROXY_HOST_ID`
@@ -88,6 +89,7 @@ provider 的具体能力差异都由 `EasyEmail` 内部处理。对调度层来�
 - `obtain_codex_oauth` 现在默认仍先走无手机号路径；只有当 `EasyProtocol` 返回 `phoneVerificationRequired=true` 时，调度层才会调用 `EasySms`
 - 当前开发默认通过 `REGISTER_SMS_PROVIDER_BLACKLIST=hero_sms` 禁用付费 `hero_sms`
 - `REGISTER_SMS_SELECTION_MODE` 仅在后续显式走 `hero_sms` 这类付费短信 provider 时才有意义；当前默认值使用 `balanced` 以保持与 `EasySms` 原生 API 的合法枚举一致
+- `REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS` 只影响 OpenAI 明确拒绝某个免费短信号码为 `invalid_phone_number` 后的 provider-phone 黑名单 TTL；默认 `21600` 秒。它不会开启付费短信，也不会放开号码复用。
 
 协议执行能力已经迁出本目录，当前通过下面的服务边界完成：
 

@@ -34,6 +34,7 @@ param(
     [string]$SmsCountryCodes = "",
     [string]$SmsSelectionMode = "",
     [string]$SmsBusinessPoliciesJson = "",
+    [string]$SmsTerminalInvalidPhoneBlacklistSeconds = "",
     [string]$EasyProxyBaseUrl = "http://easy-proxy:29888",
     [string]$EasyProxyApiKey = "YP9l2DecuS_MRhARQu5v829VFOWKar7S",
     [string]$TeamAuthDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
@@ -129,6 +130,7 @@ $defaultSmsMaxBindingsPerPhone = "1"
 $defaultSmsCountryCodes = ""
 $defaultSmsSelectionMode = "balanced"
 $defaultSmsBusinessPoliciesJson = '{"default":{"enabled":false,"providerBlacklist":["hero_sms"],"allowPaid":false},"openai":{"enabled":true,"providerBlacklist":["hero_sms"],"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,"countryCodes":[],"selectionMode":"balanced"}}'
+$defaultSmsTerminalInvalidPhoneBlacklistSeconds = "21600"
 
 function Resolve-AbsolutePath {
     param(
@@ -726,6 +728,7 @@ $resolvedSmsMaxBindingsPerPhone = Resolve-EnvValue -ParameterName 'SmsMaxBinding
 $resolvedSmsCountryCodes = Resolve-EnvValue -ParameterName 'SmsCountryCodes' -RuntimeKey 'REGISTER_SMS_COUNTRY_CODES' -Fallback $defaultSmsCountryCodes
 $resolvedSmsSelectionMode = Resolve-EnvValue -ParameterName 'SmsSelectionMode' -RuntimeKey 'REGISTER_SMS_SELECTION_MODE' -Fallback $defaultSmsSelectionMode -UseFallbackWhenBlank
 $resolvedSmsBusinessPoliciesJson = Resolve-EnvValue -ParameterName 'SmsBusinessPoliciesJson' -RuntimeKey 'REGISTER_SMS_BUSINESS_POLICIES_JSON' -Fallback $defaultSmsBusinessPoliciesJson -UseFallbackWhenBlank
+$resolvedSmsTerminalInvalidPhoneBlacklistSeconds = Resolve-EnvValue -ParameterName 'SmsTerminalInvalidPhoneBlacklistSeconds' -RuntimeKey 'REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS' -Fallback $defaultSmsTerminalInvalidPhoneBlacklistSeconds -UseFallbackWhenBlank
 $resolvedEasyProxyBaseUrl = Resolve-EnvValue -ParameterName 'EasyProxyBaseUrl' -RuntimeKey 'EASY_PROXY_BASE_URL' -Fallback 'http://easy-proxy:29888'
 $resolvedEasyProxyApiKey = Resolve-EnvValue -ParameterName 'EasyProxyApiKey' -RuntimeKey 'EASY_PROXY_API_KEY' -Fallback 'YP9l2DecuS_MRhARQu5v829VFOWKar7S'
 $resolvedWorkerCount = Resolve-EnvValue -ParameterName 'WorkerCount' -RuntimeKey 'REGISTER_WORKER_COUNT' -Fallback '10'
@@ -826,6 +829,7 @@ $env:REGISTER_SMS_MAX_BINDINGS_PER_PHONE = $resolvedSmsMaxBindingsPerPhone
 $env:REGISTER_SMS_COUNTRY_CODES = $resolvedSmsCountryCodes
 $env:REGISTER_SMS_SELECTION_MODE = $resolvedSmsSelectionMode
 $env:REGISTER_SMS_BUSINESS_POLICIES_JSON = $resolvedSmsBusinessPoliciesJson
+$env:REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS = $resolvedSmsTerminalInvalidPhoneBlacklistSeconds
 $env:EASY_PROXY_BASE_URL = $resolvedEasyProxyBaseUrl
 $env:EASY_PROXY_API_KEY = $resolvedEasyProxyApiKey
 
@@ -938,6 +942,7 @@ foreach ($entry in @{
     REGISTER_SMS_COUNTRY_CODES                = $env:REGISTER_SMS_COUNTRY_CODES
     REGISTER_SMS_SELECTION_MODE               = $env:REGISTER_SMS_SELECTION_MODE
     REGISTER_SMS_BUSINESS_POLICIES_JSON       = $env:REGISTER_SMS_BUSINESS_POLICIES_JSON
+    REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS = $env:REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS
     EASY_PROXY_BASE_URL                       = $env:EASY_PROXY_BASE_URL
     EASY_PROXY_API_KEY                        = $env:EASY_PROXY_API_KEY
     REGISTER_OPENAI_UPLOAD_PERCENT            = $env:REGISTER_OPENAI_UPLOAD_PERCENT
