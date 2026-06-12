@@ -20,6 +20,7 @@ DEFAULT_EASY_SMS_BASE_URL = "http://localhost:18083"
 DEFAULT_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS = 24 * 60 * 60
 DEFAULT_SMS_TERMINAL_RATE_LIMIT_PHONE_BLACKLIST_SECONDS = 2 * 60 * 60
 DEFAULT_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS = 30 * 60
+DEFAULT_SMS_PROVIDER_CAPACITY_BLACKLIST_SECONDS = 5 * 60
 DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD = 5
 DEFAULT_SMS_RATE_LIMIT_PROVIDER_FAILURE_THRESHOLD = 2
 DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS = 60 * 60
@@ -158,6 +159,13 @@ def _prune_sms_state(*, payload: dict[str, Any], now_ts: float | None = None) ->
                     effective_blocked_until_ts = min(
                         blocked_until_ts,
                         blocked_at_ts + max_phone_ttl,
+                    )
+            elif bucket_key == "providers" and reason == "provider_capacity_unavailable":
+                blocked_at_ts = _parse_iso_timestamp(raw_value.get("blockedAt"))
+                if blocked_at_ts is not None:
+                    effective_blocked_until_ts = min(
+                        blocked_until_ts,
+                        blocked_at_ts + _resolve_sms_provider_capacity_blacklist_seconds(),
                     )
             if effective_blocked_until_ts > effective_now_ts:
                 normalized_value = dict(raw_value)
@@ -479,6 +487,17 @@ def _resolve_sms_terminal_provider_blacklist_seconds() -> int:
         return DEFAULT_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS
 
 
+def _resolve_sms_provider_capacity_blacklist_seconds() -> int:
+    raw = str(
+        os.environ.get("REGISTER_SMS_PROVIDER_CAPACITY_BLACKLIST_SECONDS")
+        or DEFAULT_SMS_PROVIDER_CAPACITY_BLACKLIST_SECONDS
+    ).strip()
+    try:
+        return max(0, int(float(raw or DEFAULT_SMS_PROVIDER_CAPACITY_BLACKLIST_SECONDS)))
+    except Exception:
+        return DEFAULT_SMS_PROVIDER_CAPACITY_BLACKLIST_SECONDS
+
+
 def _resolve_sms_phone_scoped_provider_failure_threshold() -> int:
     raw = str(
         os.environ.get("REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD")
@@ -670,7 +689,12 @@ def record_terminal_phone_outcome(
         and not _is_phone_scoped_terminal_code(normalized_code)
         and not _is_soft_sms_terminal_code(normalized_code)
     ):
-        provider_until = now + timedelta(seconds=_resolve_sms_terminal_provider_blacklist_seconds())
+        provider_blacklist_seconds = (
+            _resolve_sms_provider_capacity_blacklist_seconds()
+            if normalized_code == "provider_capacity_unavailable"
+            else _resolve_sms_terminal_provider_blacklist_seconds()
+        )
+        provider_until = now + timedelta(seconds=provider_blacklist_seconds)
         payload.setdefault("providers", {})[normalized_provider] = {
             "reason": normalized_code,
             "detail": normalized_message,

@@ -3480,6 +3480,33 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         blocked_at_ts = datetime.fromisoformat(record["blockedAt"].replace("Z", "+00:00")).timestamp()
         self.assertLessEqual(record["blockedUntilTs"] - blocked_at_ts, 7205)
 
+    def test_record_terminal_phone_outcome_uses_capacity_provider_ttl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS": "3600",
+                    "REGISTER_SMS_PROVIDER_CAPACITY_BLACKLIST_SECONDS": "120",
+                },
+                clear=False,
+            ):
+                runtime_sms.record_terminal_phone_outcome(
+                    phone_number="",
+                    provider_key="smstome",
+                    terminal_code="provider_capacity_unavailable",
+                    terminal_message="No eligible public numbers.",
+                )
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+        record = payload["providers"]["smstome"]
+        blocked_at_ts = datetime.fromisoformat(record["blockedAt"].replace("Z", "+00:00")).timestamp()
+        self.assertEqual("provider_capacity_unavailable", record["reason"])
+        self.assertLessEqual(record["blockedUntilTs"] - blocked_at_ts, 125)
+
     def test_record_terminal_phone_outcome_keeps_invalid_and_wrong_code_phone_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
@@ -3594,6 +3621,39 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
         self.assertNotIn("+15550000007", payload["phones"])
         self.assertIn("+15550000008", payload["phones"])
+
+    def test_prune_sms_state_caps_legacy_capacity_provider_blocks_to_reason_ttl(self) -> None:
+        now_ts = datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc).timestamp()
+        stale_capacity_at = datetime(2026, 1, 1, 1, 50, tzinfo=timezone.utc)
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_SMS_TERMINAL_PROVIDER_BLACKLIST_SECONDS": "3600",
+                "REGISTER_SMS_PROVIDER_CAPACITY_BLACKLIST_SECONDS": "300",
+            },
+            clear=False,
+        ):
+            payload = runtime_sms._prune_sms_state(
+                payload={
+                    "providers": {
+                        "smstome": {
+                            "blockedAt": stale_capacity_at.isoformat().replace("+00:00", "Z"),
+                            "blockedUntilTs": now_ts + 3600,
+                            "reason": "provider_capacity_unavailable",
+                        },
+                        "hard_provider": {
+                            "blockedAt": stale_capacity_at.isoformat().replace("+00:00", "Z"),
+                            "blockedUntilTs": now_ts + 3600,
+                            "reason": "provider_terminal",
+                        },
+                    }
+                },
+                now_ts=now_ts,
+            )
+
+        self.assertNotIn("smstome", payload["providers"])
+        self.assertIn("hard_provider", payload["providers"])
 
     def test_record_terminal_phone_outcome_emits_sanitized_summary_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
