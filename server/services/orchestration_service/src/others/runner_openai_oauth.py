@@ -115,6 +115,52 @@ def _small_openai_oauth_artifact_name_from_output(
     return f"small-{timestamp}-{email}-{uuid.uuid4().hex[:6]}.json"
 
 
+def _recovery_data_credential_from_outputs(*outputs: dict[str, Any]) -> dict[str, Any]:
+    for output in outputs:
+        if not isinstance(output, dict):
+            continue
+        value = (
+            output.get("recovery_data_credential")
+            or output.get("recoveryDataCredential")
+            or output.get("mailbox_recovery_data_credential")
+            or output.get("mailboxRecoveryDataCredential")
+        )
+        if isinstance(value, dict):
+            return {str(key): item for key, item in value.items() if str(key).strip()}
+    return {}
+
+
+def _recovery_data_credential_from_result(result_or_payload: Any | None) -> dict[str, Any]:
+    if result_or_payload is None:
+        return {}
+    direct_payload = result_payload(result_or_payload)
+    direct_value = _recovery_data_credential_from_outputs(direct_payload)
+    if direct_value:
+        return direct_value
+    return _recovery_data_credential_from_outputs(
+        output_dict(result_or_payload, "create-openai-account"),
+        output_dict(result_or_payload, "create_openai_account"),
+        output_dict(result_or_payload, "initialize-chatgpt-login-session"),
+        output_dict(result_or_payload, "obtain-codex-oauth"),
+        output_dict(result_or_payload, "obtain_codex_oauth"),
+    )
+
+
+def _enrich_openai_oauth_payload_recovery_data(
+    *,
+    payload: dict[str, Any],
+    result_or_payload: Any | None,
+) -> tuple[dict[str, Any], bool]:
+    if _recovery_data_credential_from_outputs(payload):
+        return payload, False
+    recovery_data_credential = _recovery_data_credential_from_result(result_or_payload)
+    if not recovery_data_credential:
+        return payload, False
+    enriched_payload = dict(payload)
+    enriched_payload["recoveryDataCredential"] = recovery_data_credential
+    return enriched_payload, True
+
+
 def _is_materialized_openai_oauth_artifact_name(value: str) -> bool:
     name = _safe_artifact_filename(value).lower()
     return name.startswith("materialized-") or "-materialized-" in name
@@ -335,6 +381,7 @@ def _materialize_openai_oauth_artifact_from_output(
         "mailboxAccessKey": str(create_output.get("mailbox_access_key") or "").strip(),
         "mailboxRef": mailbox_ref,
         "mailboxSessionId": mailbox_session_id,
+        "recoveryDataCredential": _recovery_data_credential_from_outputs(create_output, login_output),
         "firstName": str(create_output.get("first_name") or "").strip(),
         "lastName": str(create_output.get("last_name") or "").strip(),
         "birthdate": str(create_output.get("birthdate") or "").strip(),
@@ -401,14 +448,23 @@ def copy_openai_oauth_artifacts_to_pool(
             discarded_paths.append({"source_path": str(resolved_source), "reason": reason})
             _delete_protocol_bridge_source_quiet(resolved_source)
             continue
+        payload, payload_enriched = _enrich_openai_oauth_payload_recovery_data(
+            payload=payload,
+            result_or_payload=result_or_payload,
+        )
         artifact_name = _normalize_openai_oauth_artifact_name(payload=payload, preferred_name=resolved_source.name)
         destination = (pool_dir / artifact_name).resolve()
         if resolved_source == destination:
+            if payload_enriched:
+                write_json_atomic(resolved_source, payload, include_pid=True, cleanup_temp=True)
             copied_paths.append(str(resolved_source))
             continue
         if destination.exists():
             destination = pool_dir / f"{Path(artifact_name).stem}-{uuid.uuid4().hex[:6]}{Path(artifact_name).suffix}"
-        shutil.copy2(resolved_source, destination)
+        if payload_enriched:
+            write_json_atomic(destination, payload, include_pid=True, cleanup_temp=True)
+        else:
+            shutil.copy2(resolved_source, destination)
         copied_paths.append(str(destination))
         _delete_protocol_bridge_source_quiet(resolved_source)
     json_log(

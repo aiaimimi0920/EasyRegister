@@ -74,6 +74,7 @@
           "preallocated_email": "{{openai_oauth_artifact.email}}",
           "preallocated_session_id": "{{openai_oauth_artifact.mailboxSessionId}}",
           "preallocated_mailbox_ref": "{{openai_oauth_artifact.mailboxRef}}",
+          "preallocated_recovery_data_credential": "{{openai_oauth_artifact.recoveryDataCredential}}",
           "recover_preallocated_email": true,
           "business_key": "{{task.mailbox_business_key}}"
         },
@@ -114,7 +115,8 @@
           "source_path": "{{openai_oauth_artifact.source_path}}",
           "proxy_url": "{{proxy_chain.proxy_url}}",
           "mailbox_ref": "{{mailbox.mailbox_ref}}",
-          "mailbox_session_id": "{{mailbox.session_id}}"
+          "mailbox_session_id": "{{mailbox.session_id}}",
+          "recovery_data_credential": "{{mailbox.recovery_data_credential}}"
         },
         "saveAs": "initialize_chatgpt_login_session",
         "metadata": {
@@ -194,7 +196,8 @@
           "workspace_selector": "{{task.free_workspace_selector}}",
           "login_session": "{{initialize_chatgpt_login_session}}",
           "mailbox_ref": "{{mailbox.mailbox_ref}}",
-          "mailbox_session_id": "{{mailbox.session_id}}"
+          "mailbox_session_id": "{{mailbox.session_id}}",
+          "recovery_data_credential": "{{mailbox.recovery_data_credential}}"
         },
         "saveAs": "obtain_codex_oauth",
         "metadata": {
@@ -265,7 +268,8 @@
           "email_address": "{{mailbox.email}}",
           "provider": "{{mailbox.provider}}",
           "mailbox_ref": "{{mailbox.mailbox_ref}}",
-          "mailbox_session_id": "{{mailbox.session_id}}"
+          "mailbox_session_id": "{{mailbox.session_id}}",
+          "recovery_data_credential": "{{mailbox.recovery_data_credential}}"
         },
         "saveAs": "release_mailbox",
         "metadata": {

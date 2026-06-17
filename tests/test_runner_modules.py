@@ -20,10 +20,61 @@ for candidate in (SRC_ROOT, PYTHON_SHARED_ROOT):
 
 from errors import ErrorCodes, classify_error_code  # noqa: E402
 from others.config import RunnerFlowSpec  # noqa: E402
-from others import runner_artifacts, runner_credential_sync, runner_failures, runner_flow_scheduler, runner_mailbox, runner_process_supervisor, runner_team_artifacts, runner_team_auth, runner_team_auth_pool, runner_team_cleanup, runner_worker_loop, runner_worker_maintenance, runner_worker_results  # noqa: E402
+from others import runner_artifacts, runner_credential_sync, runner_failures, runner_flow_scheduler, runner_mailbox, runner_process_supervisor, runner_team_artifacts, runner_team_auth, runner_team_auth_pool, runner_team_cleanup, runner_worker_loop, runner_worker_maintenance, runner_worker_results, storage  # noqa: E402
 
 
 class RunnerArtifactsTests(unittest.TestCase):
+    def test_legacy_storage_writers_preserve_recovery_data_credential(self) -> None:
+        recovery_data = {
+            "emailAddress": "seed@example.com",
+            "providerTypeKey": "cloudflare_temp_email",
+            "providerInstanceId": "cloudflare_temp_email_shared_default",
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            first_phone_path = Path(
+                storage.persist_first_phone_record(
+                    output_dir=tmp_dir,
+                    email="seed@example.com",
+                    password="secret",
+                    mailbox_provider="cloudflare_temp_email",
+                    mailbox_access_key="",
+                    mailbox_ref="cloudflare_temp_email:old-ref",
+                    mailbox_session_id="old-session",
+                    first_name="Seed",
+                    last_name="User",
+                    birthdate="1990-01-01",
+                    page_type="phone_wall",
+                    final_url="https://platform.openai.com/",
+                    recovery_data_credential=recovery_data,
+                )
+            )
+            oauth_path = Path(
+                storage.persist_openai_oauth_record(
+                    output_dir=tmp_dir,
+                    email="seed@example.com",
+                    password="secret",
+                    mailbox_provider="cloudflare_temp_email",
+                    mailbox_access_key="",
+                    mailbox_ref="cloudflare_temp_email:old-ref",
+                    mailbox_session_id="old-session",
+                    first_name="Seed",
+                    last_name="User",
+                    birthdate="1990-01-01",
+                    page_type="oauth",
+                    final_url="https://platform.openai.com/",
+                    recovery_data_credential=recovery_data,
+                )
+            )
+
+            self.assertEqual(
+                recovery_data,
+                json.loads(first_phone_path.read_text(encoding="utf-8"))["recoveryDataCredential"],
+            )
+            self.assertEqual(
+                recovery_data,
+                json.loads(oauth_path.read_text(encoding="utf-8"))["recoveryDataCredential"],
+            )
+
     def test_select_local_split_obeys_percentage(self) -> None:
         with mock.patch("others.runner_artifacts.random.random", return_value=0.20):
             self.assertTrue(runner_artifacts.select_local_split(percent=50.0))
@@ -755,6 +806,61 @@ class RunnerArtifactsTests(unittest.TestCase):
             self.assertEqual([str(existing_path.resolve())], copied_paths)
             self.assertEqual(["small-existing.json"], sorted(path.name for path in pool_dir.glob("small-existing*.json")))
 
+    def test_copy_openai_oauth_artifacts_to_pool_enriches_existing_source_with_recovery_data(self) -> None:
+        recovery_data = {
+            "emailAddress": "seed@example.com",
+            "providerTypeKey": "cloudflare_temp_email",
+            "providerInstanceId": "cloudflare_temp_email_shared_default",
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_output_dir = Path(tmp_dir) / "run-1"
+            pool_dir = Path(tmp_dir) / "openai" / "failed-twice"
+            source_dir = run_output_dir / "openai_oauth"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            source_path = source_dir / "small-existing-source.json"
+            source_path.write_text(
+                json.dumps(
+                    {
+                        "email": "seed@example.com",
+                        "mailboxRef": "cloudflare_temp_email:old-ref",
+                        "mailboxSessionId": "old-session",
+                        "createdAt": "2026-05-30T00:00:00Z",
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result_payload = {
+                "outputs": {
+                    "create-openai-account": {
+                        "recovery_data_credential": recovery_data,
+                    }
+                }
+            }
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0",
+                },
+                clear=False,
+            ):
+                copied_paths = runner_artifacts.copy_openai_oauth_artifacts_to_pool(
+                    run_output_dir=run_output_dir,
+                    pool_dir=pool_dir,
+                    worker_label="worker-01",
+                    task_index=1,
+                    result_or_payload=result_payload,
+                )
+
+            self.assertEqual(1, len(copied_paths))
+            copied_payload = json.loads(Path(copied_paths[0]).read_text(encoding="utf-8"))
+            self.assertEqual(recovery_data, copied_payload["recoveryDataCredential"])
+
     def test_copy_openai_oauth_artifacts_to_pool_materializes_from_step_outputs_when_source_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_output_dir = Path(tmp_dir) / "run-1"
@@ -768,6 +874,11 @@ class RunnerArtifactsTests(unittest.TestCase):
                         "mailbox_access_key": "mailbox-key",
                         "mailbox_ref": "mailbox-ref",
                         "mailbox_session_id": "session-id",
+                        "recovery_data_credential": {
+                            "emailAddress": "agnese18417@ke.for4u.net",
+                            "providerTypeKey": "moemail",
+                            "providerInstanceId": "moemail_shared_default",
+                        },
                         "first_name": "John",
                         "last_name": "Doe",
                         "birthdate": "1990-01-01",
@@ -814,6 +925,14 @@ class RunnerArtifactsTests(unittest.TestCase):
             self.assertEqual("small-20260530-000254-agnese18417@ke.for4u.net-dcd88f.json", copied_path.name)
             payload = json.loads(copied_path.read_text(encoding="utf-8"))
             self.assertEqual("agnese18417@ke.for4u.net", payload["email"])
+            self.assertEqual(
+                {
+                    "emailAddress": "agnese18417@ke.for4u.net",
+                    "providerTypeKey": "moemail",
+                    "providerInstanceId": "moemail_shared_default",
+                },
+                payload["recoveryDataCredential"],
+            )
             self.assertEqual("completed", payload["platformOrganization"]["status"])
             self.assertEqual("completed", payload["chatgptLogin"]["status"])
 

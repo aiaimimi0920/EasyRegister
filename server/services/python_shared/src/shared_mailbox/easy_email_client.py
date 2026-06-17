@@ -34,6 +34,7 @@ class Mailbox:
     email: str
     ref: str
     session_id: str
+    recovery_data_credential: dict[str, Any] | None = None
 
 
 def _mail_service_base_url() -> str:
@@ -41,6 +42,12 @@ def _mail_service_base_url() -> str:
     if not value:
         raise RuntimeError("MAILBOX_SERVICE_BASE_URL is required")
     return value
+
+
+def _normalize_recovery_data_credential(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {str(key): item for key, item in value.items() if str(key).strip()}
 
 
 def _mail_service_headers() -> dict[str, str]:
@@ -900,6 +907,7 @@ def create_mailbox(
     email = str(session.get("emailAddress") or "").strip()
     mailbox_ref = str(session.get("mailboxRef") or "").strip()
     resolved_provider = str(session.get("providerTypeKey") or provider_key or _normalize_provider("")).strip()
+    recovery_data_credential = _normalize_recovery_data_credential(result.get("recoveryDataCredential"))
     if not session_id or not email:
         raise RuntimeError("mail service returned invalid mailbox session")
     if normalized_requested_email and email.strip().lower() != normalized_requested_email:
@@ -910,7 +918,13 @@ def create_mailbox(
     ref = mailbox_ref or _encode_ref(resolved_provider, session_id)
     if resolved_provider == "self-hosted" and prefer_raw_self_hosted_ref and mailbox_ref:
         ref = mailbox_ref
-    return Mailbox(provider=resolved_provider, email=email, ref=ref, session_id=session_id)
+    return Mailbox(
+        provider=resolved_provider,
+        email=email,
+        ref=ref,
+        session_id=session_id,
+        recovery_data_credential=recovery_data_credential,
+    )
 
 
 def wait_openai_code(
@@ -1162,6 +1176,7 @@ def recover_mailbox_by_email(
     email_address: str,
     provider_type_key: str = "",
     host_id: str = "",
+    recovery_data_credential: dict[str, Any] | None = None,
 ) -> dict:
     normalized_email = _normalize_requested_email_address(email_address)
     if not normalized_email:
@@ -1176,6 +1191,9 @@ def recover_mailbox_by_email(
         payload["providerTypeKey"] = normalized_provider_type_key
     if normalized_host_id:
         payload["hostId"] = normalized_host_id
+    normalized_recovery_data = _normalize_recovery_data_credential(recovery_data_credential)
+    if normalized_recovery_data:
+        payload["recoveryDataCredential"] = normalized_recovery_data
     return _post_json("/mail/mailboxes/recover-by-email", payload).get("result") or {
         "recovered": False,
         "strategy": "not_supported",

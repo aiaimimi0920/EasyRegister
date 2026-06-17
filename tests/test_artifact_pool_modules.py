@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -228,6 +229,51 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
 
             self.assertEqual("old@example.com", artifact["email"])
             self.assertFalse(seed_path.exists())
+
+    def test_claim_openai_oauth_artifact_returns_recovery_data_credential(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260502-task000001"
+            source_pool_dir = output_root / "openai" / "failed-once"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            seed_path = source_pool_dir / "seed.json"
+            seed_path.write_text(
+                json.dumps(
+                    {
+                        "email": "seed@example.com",
+                        "mailboxRef": "cloudflare_temp_email:old-ref",
+                        "mailboxSessionId": "old-session",
+                        "recoveryDataCredential": {
+                            "emailAddress": "seed@example.com",
+                            "providerTypeKey": "cloudflare_temp_email",
+                        },
+                        "createdAt": "2026-05-01T00:00:00Z",
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"}
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(os.environ, {"REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0"}, clear=False):
+                artifact = artifact_pool_claims.claim_openai_oauth_artifact(
+                    step_input={
+                        "output_dir": str(run_output_dir),
+                        "pool_dir": str(source_pool_dir),
+                        "worker_label": "worker-01",
+                    }
+                )
+
+        self.assertEqual(
+            {
+                "emailAddress": "seed@example.com",
+                "providerTypeKey": "cloudflare_temp_email",
+            },
+            artifact["recoveryDataCredential"],
+        )
 
     def test_claim_openai_oauth_artifact_prefers_newer_seed_when_multiple_valid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -4543,6 +4543,53 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("slow-mailbox.test", payload["attribution"]["domain"])
         self.assertEqual("user@slow-mailbox.test", payload["attribution"]["emailAddress"])
 
+    def test_easy_email_client_create_mailbox_preserves_recovery_data_credential(self) -> None:
+        recovery_data = {
+            "emailAddress": "seed@example.com",
+            "providerTypeKey": "cloudflare_temp_email",
+            "providerInstanceId": "cloudflare_temp_email_shared_default",
+            "hostId": "python-register-orchestration",
+        }
+        with mock.patch.object(
+            easy_email_client,
+            "_post_json",
+            return_value={
+                "result": {
+                    "session": {
+                        "id": "mailbox_123",
+                        "providerTypeKey": "cloudflare_temp_email",
+                        "emailAddress": "seed@example.com",
+                        "mailboxRef": "cloudflare_temp_email:mailbox_123",
+                    },
+                    "recoveryDataCredential": recovery_data,
+                }
+            },
+        ), mock.patch.object(easy_email_client, "_wait_mail_service_ready"):
+            mailbox = easy_email_client.create_mailbox(provider="cloudflare_temp_email")
+
+        self.assertEqual(recovery_data, mailbox.recovery_data_credential)
+
+    def test_easy_email_client_recover_mailbox_posts_recovery_data_credential(self) -> None:
+        recovery_data = {
+            "emailAddress": "seed@example.com",
+            "providerTypeKey": "cloudflare_temp_email",
+        }
+        with mock.patch.object(
+            easy_email_client,
+            "_post_json",
+            return_value={"result": {"recovered": True}},
+        ) as post_json:
+            easy_email_client.recover_mailbox_by_email(
+                email_address="seed@example.com",
+                provider_type_key="cloudflare_temp_email",
+                host_id="python-register-orchestration",
+                recovery_data_credential=recovery_data,
+            )
+
+        path, payload = post_json.call_args.args
+        self.assertEqual("/mail/mailboxes/recover-by-email", path)
+        self.assertEqual(recovery_data, payload["recoveryDataCredential"])
+
     def test_wait_openai_code_uses_snapshot_after_transient_code_endpoint_error(self) -> None:
         with mock.patch.object(
             easy_email_client,
@@ -4810,6 +4857,10 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("create_account_user_register_400", captured_kwargs["avoid_reason"])
 
     def test_resolve_mailbox_recovers_preallocated_email_by_email(self) -> None:
+        recovery_data = {
+            "emailAddress": "seed@example.com",
+            "providerTypeKey": "cloudflare_temp_email",
+        }
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
             runtime_mailbox,
             "recover_mailbox_by_email",
@@ -4822,12 +4873,14 @@ class RuntimeMailboxTests(unittest.TestCase):
                     "mailboxRef": "cloudflare_temp_email:recovered-ref",
                     "id": "mailbox_recovered",
                 },
+                "recoveryDataCredential": recovery_data,
             },
         ) as recover_mailbox_by_email:
             mailbox = runtime_mailbox.resolve_mailbox(
                 preallocated_email="seed@example.com",
                 preallocated_session_id="old-session",
                 preallocated_mailbox_ref="cloudflare_temp_email:old-ref",
+                preallocated_recovery_data_credential=recovery_data,
                 recover_preallocated_email=True,
                 business_key="openai",
             )
@@ -4836,10 +4889,12 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual("seed@example.com", mailbox.email)
         self.assertEqual("cloudflare_temp_email:recovered-ref", mailbox.ref)
         self.assertEqual("mailbox_recovered", mailbox.session_id)
+        self.assertEqual(recovery_data, mailbox.recovery_data_credential)
         recover_mailbox_by_email.assert_called_once_with(
             email_address="seed@example.com",
             provider_type_key="cloudflare_temp_email",
             host_id=runtime_mailbox.DEFAULT_ORCHESTRATION_HOST_ID,
+            recovery_data_credential=recovery_data,
         )
 
     def test_easyemail_acquire_mailbox_passes_preallocated_recovery_flag(self) -> None:
@@ -4849,6 +4904,7 @@ class RuntimeMailboxTests(unittest.TestCase):
             email="seed@example.com",
             ref="cloudflare_temp_email:recovered-ref",
             session_id="mailbox_recovered",
+            recovery_data_credential={"emailAddress": "seed@example.com"},
         )
 
         def _resolve_mailbox(**kwargs: object) -> runtime_mailbox.Mailbox:
@@ -4867,12 +4923,15 @@ class RuntimeMailboxTests(unittest.TestCase):
                     "preallocated_email": "seed@example.com",
                     "preallocated_mailbox_ref": "cloudflare_temp_email:old-ref",
                     "preallocated_session_id": "old-session",
+                    "preallocated_recovery_data_credential": {"emailAddress": "seed@example.com"},
                     "recover_preallocated_email": True,
                 },
             )
 
         self.assertEqual("seed@example.com", result["email"])
+        self.assertEqual({"emailAddress": "seed@example.com"}, result["recovery_data_credential"])
         self.assertTrue(captured_kwargs["recover_preallocated_email"])
+        self.assertEqual({"emailAddress": "seed@example.com"}, captured_kwargs["preallocated_recovery_data_credential"])
 
     def test_mailbox_domain_policy_violation_applies_business_blacklist_to_m2u(self) -> None:
         mailbox = runtime_mailbox.Mailbox(

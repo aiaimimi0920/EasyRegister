@@ -17,6 +17,12 @@ def load_json_payload(path: str | Path) -> dict[str, Any]:
     return payload
 
 
+def _normalize_recovery_data_credential(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items() if str(key).strip()}
+
+
 def persist_first_phone_record(
     *,
     output_dir: str | None,
@@ -32,6 +38,7 @@ def persist_first_phone_record(
     birthdate: str,
     page_type: str,
     final_url: str,
+    recovery_data_credential: dict[str, Any] | None = None,
 ) -> str:
     target_dir = resolve_first_phone_dir(output_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -47,6 +54,7 @@ def persist_first_phone_record(
         "mailboxAccessKey": str(mailbox_access_key or ""),
         "mailboxRef": str(mailbox_ref or ""),
         "mailboxSessionId": str(mailbox_session_id or ""),
+        "recoveryDataCredential": _normalize_recovery_data_credential(recovery_data_credential),
         "firstName": str(first_name or ""),
         "lastName": str(last_name or ""),
         "birthdate": str(birthdate or ""),
@@ -90,6 +98,7 @@ def persist_openai_oauth_record(
     browser_backend: str = "",
     source: str = "browser_flow",
     registration_mode: str = "browser-platform-first",
+    recovery_data_credential: dict[str, Any] | None = None,
 ) -> str:
     target_dir = resolve_openai_oauth_dir(output_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -106,6 +115,7 @@ def persist_openai_oauth_record(
         "mailboxAccessKey": str(mailbox_access_key or ""),
         "mailboxRef": str(mailbox_ref or ""),
         "mailboxSessionId": str(mailbox_session_id or ""),
+        "recoveryDataCredential": _normalize_recovery_data_credential(recovery_data_credential),
         "firstName": str(first_name or ""),
         "lastName": str(last_name or ""),
         "birthdate": str(birthdate or ""),

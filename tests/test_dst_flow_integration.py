@@ -212,7 +212,34 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual("{{openai_oauth_artifact.email}}", acquire_input.get("preallocated_email"))
         self.assertEqual("{{openai_oauth_artifact.mailboxRef}}", acquire_input.get("preallocated_mailbox_ref"))
         self.assertEqual("{{openai_oauth_artifact.mailboxSessionId}}", acquire_input.get("preallocated_session_id"))
+        self.assertEqual(
+            "{{openai_oauth_artifact.recoveryDataCredential}}",
+            acquire_input.get("preallocated_recovery_data_credential"),
+        )
         self.assertTrue(acquire_input.get("recover_preallocated_email"))
+
+    def test_canonical_main_flow_passes_mailbox_recovery_data_to_downstream_steps(self) -> None:
+        flows_dir = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
+        plan = load_dst_flow(flows_dir / "codex-openai-account-v1.semantic-flow.json")
+
+        expected_ref = "{{mailbox.recovery_data_credential}}"
+        inputs_by_id = {statement.step_id: statement.input for statement in plan.steps}
+        self.assertEqual(
+            expected_ref,
+            inputs_by_id["create-openai-account"].get("recovery_data_credential"),
+        )
+        self.assertEqual(
+            expected_ref,
+            inputs_by_id["initialize-chatgpt-login-session"].get("recovery_data_credential"),
+        )
+        self.assertEqual(
+            expected_ref,
+            inputs_by_id["obtain-codex-oauth"].get("recovery_data_credential"),
+        )
+        self.assertEqual(
+            expected_ref,
+            inputs_by_id["release-mailbox"].get("recovery_data_credential"),
+        )
 
     def test_continue_flow_uses_claimed_artifact_email_mailbox_for_chatgpt_login(self) -> None:
         flows_dir = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
@@ -229,6 +256,10 @@ class DstFlowIntegrationTests(unittest.TestCase):
                         "email": "seed@example.com",
                         "mailboxRef": "cloudflare_temp_email:old-ref",
                         "mailboxSessionId": "old-session",
+                        "recoveryDataCredential": {
+                            "emailAddress": "seed@example.com",
+                            "providerTypeKey": "cloudflare_temp_email",
+                        },
                         "createdAt": "2026-05-01T00:00:00Z",
                         "platformOrganization": {"status": "completed"},
                         "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
@@ -251,6 +282,13 @@ class DstFlowIntegrationTests(unittest.TestCase):
                     self.assertEqual("seed@example.com", step_input.get("preallocated_email"))
                     self.assertEqual("cloudflare_temp_email:old-ref", step_input.get("preallocated_mailbox_ref"))
                     self.assertEqual("old-session", step_input.get("preallocated_session_id"))
+                    self.assertEqual(
+                        {
+                            "emailAddress": "seed@example.com",
+                            "providerTypeKey": "cloudflare_temp_email",
+                        },
+                        step_input.get("preallocated_recovery_data_credential"),
+                    )
                     self.assertTrue(step_input.get("recover_preallocated_email"))
                     return {
                         "ok": True,
@@ -258,6 +296,11 @@ class DstFlowIntegrationTests(unittest.TestCase):
                         "email": "seed@example.com",
                         "mailbox_ref": "cloudflare_temp_email:recovered-ref",
                         "session_id": "mailbox_recovered",
+                        "recovery_data_credential": {
+                            "emailAddress": "seed@example.com",
+                            "providerTypeKey": "cloudflare_temp_email",
+                            "providerInstanceId": "cloudflare_temp_email_shared_default",
+                        },
                     }
                 if step_type == "release_mailbox":
                     return {"released": True, "detail": "deleted"}

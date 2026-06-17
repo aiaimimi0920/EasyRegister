@@ -162,6 +162,11 @@ def dispatch_easyemail_step(*, step_type: str, step_input: dict[str, Any]) -> di
             preallocated_email=str(step_input.get("preallocated_email") or "").strip() or None,
             preallocated_session_id=str(step_input.get("preallocated_session_id") or "").strip() or None,
             preallocated_mailbox_ref=str(step_input.get("preallocated_mailbox_ref") or "").strip() or None,
+            preallocated_recovery_data_credential=(
+                step_input.get("preallocated_recovery_data_credential")
+                or step_input.get("preallocatedRecoveryDataCredential")
+                or step_input.get("recoveryDataCredential")
+            ),
             business_key=requested_business_key,
             recreate_preallocated_email=is_truthy(
                 step_input.get("recreate_preallocated_email")
@@ -181,6 +186,11 @@ def dispatch_easyemail_step(*, step_type: str, step_input: dict[str, Any]) -> di
             "email": str(getattr(mailbox, "email", "") or "").strip(),
             "mailbox_ref": str(getattr(mailbox, "ref", "") or "").strip(),
             "session_id": str(getattr(mailbox, "session_id", "") or "").strip(),
+            "recovery_data_credential": (
+                dict(getattr(mailbox, "recovery_data_credential"))
+                if isinstance(getattr(mailbox, "recovery_data_credential", None), dict)
+                else {}
+            ),
             "business_key": resolve_mailbox_business_key(business_key=requested_business_key),
         }
 

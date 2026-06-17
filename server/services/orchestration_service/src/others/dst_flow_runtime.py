@@ -362,6 +362,24 @@ def cleanup_failure_is_nonfatal(*, statement: DstStatement, flow_failed: bool) -
     }
 
 
+def _copy_recovery_data_credential_to_output(*, step_input: Any, step_output: Any) -> Any:
+    if not isinstance(step_input, dict) or not isinstance(step_output, dict):
+        return step_output
+    value = (
+        step_input.get("recovery_data_credential")
+        or step_input.get("recoveryDataCredential")
+        or step_input.get("preallocated_recovery_data_credential")
+        or step_input.get("preallocatedRecoveryDataCredential")
+    )
+    if not isinstance(value, dict):
+        return step_output
+    if "recovery_data_credential" not in step_output:
+        step_output["recovery_data_credential"] = dict(value)
+    if "recoveryDataCredential" not in step_output:
+        step_output["recoveryDataCredential"] = dict(value)
+    return step_output
+
+
 def run_statement_once(
     *,
     statement: DstStatement,
@@ -375,10 +393,12 @@ def run_statement_once(
     if dispatcher is None:
         raise RuntimeError(f"dst_step_owner_unsupported:{owner}")
     resolved_input = resolve_value(statement.input, state)
+    step_input = resolved_input if isinstance(resolved_input, dict) else {}
     step_output = dispatcher(
         step_type=statement.step_type,
-        step_input=resolved_input if isinstance(resolved_input, dict) else {},
+        step_input=step_input,
     )
+    step_output = _copy_recovery_data_credential_to_output(step_input=step_input, step_output=step_output)
     step_ok, step_error = step_output_ok(step_type=statement.step_type, step_output=step_output)
     if not step_ok:
         raise RuntimeError(step_error or f"{statement.step_type}_failed")

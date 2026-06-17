@@ -97,6 +97,18 @@ def _resolve_configured_input_claims_dir(*, step_input: dict[str, Any], source_d
     return (source_dir / "_claims").resolve()
 
 
+def _recovery_data_credential_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    value = (
+        payload.get("recoveryDataCredential")
+        or payload.get("recovery_data_credential")
+        or payload.get("mailboxRecoveryDataCredential")
+        or payload.get("mailbox_recovery_data_credential")
+    )
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items() if str(key).strip()}
+
+
 def _extract_configured_input_email(payload: dict[str, Any]) -> str:
     direct_email = str(payload.get("email") or "").strip()
     if direct_email:
@@ -262,6 +274,7 @@ def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]
                 or payload.get("providerTypeKey")
                 or ""
             ).strip(),
+            "recoveryDataCredential": _recovery_data_credential_from_payload(payload),
             "conversion_claim": conversion_claim or {},
         }
 

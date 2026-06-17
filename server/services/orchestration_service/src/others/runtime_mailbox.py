@@ -928,6 +928,7 @@ def resolve_mailbox(
     preallocated_email: str | None,
     preallocated_session_id: str | None,
     preallocated_mailbox_ref: str | None,
+    preallocated_recovery_data_credential: Any = None,
     recreate_preallocated_email: bool = False,
     recover_preallocated_email: bool = False,
     business_key: str | None = None,
@@ -985,6 +986,9 @@ def resolve_mailbox(
                 email_address=normalized_preallocated_email,
                 provider_type_key=preferred_provider,
                 host_id=DEFAULT_ORCHESTRATION_HOST_ID,
+                recovery_data_credential=preallocated_recovery_data_credential
+                if isinstance(preallocated_recovery_data_credential, dict)
+                else None,
             )
         except Exception as exc:
             if not preallocated_mailbox_ref and not preallocated_session_id:
@@ -1009,6 +1013,13 @@ def resolve_mailbox(
                     email=session_email,
                     ref=mailbox_ref or f"{provider or 'moemail'}:{session_id}",
                     session_id=session_id,
+                    recovery_data_credential=recovered.get("recoveryDataCredential")
+                    if isinstance(recovered.get("recoveryDataCredential"), dict)
+                    else (
+                        preallocated_recovery_data_credential
+                        if isinstance(preallocated_recovery_data_credential, dict)
+                        else None
+                    ),
                 )
         if not preallocated_mailbox_ref and not preallocated_session_id:
             raise ensure_protocol_runtime_error(
@@ -1033,6 +1044,9 @@ def resolve_mailbox(
             email=str(preallocated_email).strip(),
             ref=ref,
             session_id=session_id,
+            recovery_data_credential=preallocated_recovery_data_credential
+            if isinstance(preallocated_recovery_data_credential, dict)
+            else None,
         )
     if preallocated_email and preallocated_session_id:
         session_id = str(preallocated_session_id).strip()
@@ -1041,6 +1055,9 @@ def resolve_mailbox(
             email=str(preallocated_email).strip(),
             ref=f"moemail:{session_id}",
             session_id=session_id,
+            recovery_data_credential=preallocated_recovery_data_credential
+            if isinstance(preallocated_recovery_data_credential, dict)
+            else None,
         )
     ttl_seconds = mailbox_config.ttl_seconds
     strategy_kwargs = _resolve_mailbox_strategy_kwargs()
