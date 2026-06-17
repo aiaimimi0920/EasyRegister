@@ -4390,6 +4390,46 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertNotIn("providerStrategyModeId", payload)
         self.assertNotIn("providerGroupSelections", payload)
 
+    def test_mailbox_request_payload_defaults_to_recoverable_provider_levels(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_MAILBOX_RECOVERABILITY_LEVELS": "",
+                "MAILBOX_RECOVERABILITY_LEVELS": "",
+            },
+            clear=True,
+        ):
+            with mock.patch.object(easy_email_client, "_wait_mail_service_ready"):
+                payload, provider_key, requested_email = easy_email_client._build_mailbox_request_payload(
+                    provider="auto",
+                    default_host_id="python-register-orchestration",
+                    ttl_seconds=90,
+                )
+
+        self.assertEqual("", provider_key)
+        self.assertEqual("", requested_email)
+        self.assertEqual(["recoverable", "key_recoverable"], payload["recoverabilityLevels"])
+
+    def test_mailbox_request_payload_allows_recoverability_level_env_override(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_MAILBOX_RECOVERABILITY_LEVELS": "recoverable, key_recoverable, unrecoverable, bad, recoverable",
+                "MAILBOX_RECOVERABILITY_LEVELS": "",
+            },
+            clear=True,
+        ):
+            with mock.patch.object(easy_email_client, "_wait_mail_service_ready"):
+                payload, provider_key, requested_email = easy_email_client._build_mailbox_request_payload(
+                    provider="auto",
+                    default_host_id="python-register-orchestration",
+                    ttl_seconds=90,
+                )
+
+        self.assertEqual("", provider_key)
+        self.assertEqual("", requested_email)
+        self.assertEqual(["recoverable", "key_recoverable", "unrecoverable"], payload["recoverabilityLevels"])
+
     def test_mailbox_request_payload_passes_excluded_provider_type_keys_to_easyemail(self) -> None:
         self.assertIn(
             "excluded_provider_type_keys",

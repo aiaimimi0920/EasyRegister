@@ -17,6 +17,8 @@ DEFAULT_OTP_POLL_INTERVAL_SECONDS = 4
 DEFAULT_MAIL_SERVICE_READY_TIMEOUT_SECONDS = 90
 DEFAULT_MAIL_SERVICE_READY_PROBE_INTERVAL_SECONDS = 2
 DEFAULT_MAIL_SERVICE_REQUEST_ATTEMPTS = 3
+DEFAULT_MAILBOX_RECOVERABILITY_LEVELS = ("recoverable", "key_recoverable")
+VALID_MAILBOX_RECOVERABILITY_LEVELS = {"unrecoverable", "key_recoverable", "recoverable"}
 OPENAI_OTP_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 OPENAI_OTP_CONTEXT_RE = re.compile(
     r"(?:verification\s*code|verify\s*code|security\s*code|one[-\s]*time\s*(?:pass)?code|login\s*code|sign[\s-]*in\s*code|confirmation\s*code|email\s*code|otp|passcode|验证码|校验码|动态码|动态密码|口令|代码为|代码是|enter\s+this\s+temporary\s+verification\s+code)[^0-9]{0,80}(\d{6})(?!\d)",
@@ -490,6 +492,36 @@ def _normalize_email_address_list(value: list[str] | tuple[str, ...] | set[str] 
     return normalized
 
 
+def _normalize_recoverability_level_list(value: str | list[str] | tuple[str, ...] | set[str] | None) -> list[str]:
+    if isinstance(value, str):
+        raw_items = re.split(r"[,;\s]+", value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = [str(item or "") for item in value]
+    else:
+        raw_items = []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        level = str(item or "").strip().lower().replace("-", "_")
+        if level not in VALID_MAILBOX_RECOVERABILITY_LEVELS or level in seen:
+            continue
+        normalized.append(level)
+        seen.add(level)
+    return normalized
+
+
+def _resolve_mailbox_recoverability_levels() -> list[str]:
+    raw = str(
+        os.environ.get("REGISTER_MAILBOX_RECOVERABILITY_LEVELS")
+        or os.environ.get("MAILBOX_RECOVERABILITY_LEVELS")
+        or ""
+    ).strip()
+    configured = _normalize_recoverability_level_list(raw)
+    if configured:
+        return configured
+    return list(DEFAULT_MAILBOX_RECOVERABILITY_LEVELS)
+
+
 def _append_unique_strings(target: list[str], values: list[str]) -> None:
     for value in values:
         if value and value not in target:
@@ -728,6 +760,7 @@ def _build_mailbox_request_payload(
         "provisionMode": provision_mode,
         "bindingMode": binding_mode,
         "ttlMinutes": ttl_payload_value,
+        "recoverabilityLevels": _resolve_mailbox_recoverability_levels(),
         "metadata": {
             "source": _mailbox_source(default_host_id),
             "expiryTimeMs": str(resolved_expiry_time_ms),
