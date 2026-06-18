@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -17,11 +18,247 @@ for candidate in (SRC_ROOT, PYTHON_SHARED_ROOT):
 
 import dst_flow  # noqa: E402
 from errors import ErrorCodes, ProtocolRuntimeError  # noqa: E402
+from others import account_availability_audit  # noqa: E402
 from others import easyemail_runtime  # noqa: E402
 from others.dst_flow_loader import load_dst_flow  # noqa: E402
 
 
 class DstFlowIntegrationTests(unittest.TestCase):
+    def test_account_availability_audit_production_selection_scans_pools_and_skips_future_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            failed_twice = output_root / "openai" / "failed-twice"
+            codex_free = output_root / "codex" / "free"
+            for directory in (converted, failed_twice, codex_free):
+                directory.mkdir(parents=True, exist_ok=True)
+            future = "2999-01-01T00:00:00Z"
+            (converted / "a-ready.json").write_text(
+                json.dumps({"email": "ready@example.com"}),
+                encoding="utf-8",
+            )
+            (failed_twice / "b-future.json").write_text(
+                json.dumps(
+                    {
+                        "email": "future@example.com",
+                        "accountAvailabilityAudit": {"nextCheckAt": future},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (codex_free / "c-ready.json").write_text(
+                json.dumps({"email": "codex-ready@example.com"}),
+                encoding="utf-8",
+            )
+
+            result = account_availability_audit.select_account_audit_targets(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "max_targets": 1,
+                }
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("production-pools", result["mode"])
+        self.assertEqual(1, result["target_count"])
+        self.assertEqual("ready@example.com", result["targets"][0]["email"])
+        skipped_by_email = {item["email"]: item["reason"] for item in result["skipped"]}
+        self.assertEqual("next_check_in_future", skipped_by_email["future@example.com"])
+
+    def test_account_availability_audit_production_deleted_removes_same_email_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            failed_twice = output_root / "openai" / "failed-twice"
+            codex_free = output_root / "codex" / "free"
+            for directory in (converted, failed_twice, codex_free):
+                directory.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-deleted@example.com.json"
+            related_openai = failed_twice / "small-deleted-related.json"
+            related_codex = codex_free / "codex-deleted-related.json"
+            unrelated = codex_free / "codex-other.json"
+            for path in (source, related_openai, related_codex):
+                path.write_text(json.dumps({"email": "deleted@example.com"}), encoding="utf-8")
+            unrelated.write_text(json.dumps({"email": "other@example.com"}), encoding="utf-8")
+
+            result = account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "targets": [
+                        {
+                            "source_path": str(source),
+                            "original_path": str(source),
+                            "original_name": source.name,
+                            "email": "deleted@example.com",
+                        }
+                    ],
+                    "audit_result": {
+                        "results": [
+                            {
+                                "source_path": str(source),
+                                "email": "deleted@example.com",
+                                "status": "deleted_confirmed",
+                            }
+                        ]
+                    },
+                }
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertFalse(source.exists())
+            self.assertFalse(related_openai.exists())
+            self.assertFalse(related_codex.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertEqual(3, result["counts"]["deleted_files_removed"])
+
+    def test_account_availability_audit_production_login_updates_recovery_data_and_daily_schedule(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            codex_free = output_root / "codex" / "free"
+            for directory in (converted, codex_free):
+                directory.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-usable.json"
+            related = codex_free / "codex-usable.json"
+            old_recovery = {"emailAddress": "usable@example.com", "providerTypeKey": "old"}
+            for path in (source, related):
+                path.write_text(
+                    json.dumps(
+                        {
+                            "email": "usable@example.com",
+                            "recoveryDataCredential": old_recovery,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            new_recovery = {
+                "emailAddress": "usable@example.com",
+                "providerTypeKey": "cloudflare_temp_email",
+                "providerInstanceId": "shared-default",
+            }
+
+            result = account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "targets": [
+                        {
+                            "source_path": str(source),
+                            "original_path": str(source),
+                            "original_name": source.name,
+                            "email": "usable@example.com",
+                        }
+                    ],
+                    "audit_result": {
+                        "results": [
+                            {
+                                "source_path": str(source),
+                                "email": "usable@example.com",
+                                "status": "login_succeeded",
+                                "recoveryDataCredential": new_recovery,
+                            }
+                        ]
+                    },
+                }
+            )
+
+            source_payload = json.loads(source.read_text(encoding="utf-8"))
+            related_payload = json.loads(related.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ok"])
+        for payload in (source_payload, related_payload):
+            self.assertEqual(new_recovery, payload["recoveryDataCredential"])
+            audit_state = payload["accountAvailabilityAudit"]
+            self.assertEqual("login_succeeded", audit_state["status"])
+            next_check = datetime.fromisoformat(audit_state["nextCheckAt"].replace("Z", "+00:00"))
+            last_checked = datetime.fromisoformat(audit_state["lastCheckedAt"].replace("Z", "+00:00"))
+            self.assertGreater((next_check - last_checked).total_seconds(), 23 * 3600)
+            self.assertLess((next_check - last_checked).total_seconds(), 25 * 3600)
+
+    def test_account_availability_audit_production_inconclusive_keeps_file_and_schedules_half_day_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-unknown.json"
+            source.write_text(json.dumps({"email": "unknown@example.com"}), encoding="utf-8")
+
+            result = account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "targets": [
+                        {
+                            "source_path": str(source),
+                            "original_path": str(source),
+                            "original_name": source.name,
+                            "email": "unknown@example.com",
+                        }
+                    ],
+                    "audit_result": {
+                        "results": [
+                            {
+                                "source_path": str(source),
+                                "email": "unknown@example.com",
+                                "status": "inconclusive",
+                                "detail": "mailbox_recovery_failed",
+                            }
+                        ]
+                    },
+                }
+            )
+
+            payload = json.loads(source.read_text(encoding="utf-8"))
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(source.exists())
+            audit_state = payload["accountAvailabilityAudit"]
+            self.assertEqual("inconclusive", audit_state["status"])
+            next_check = datetime.fromisoformat(audit_state["nextCheckAt"].replace("Z", "+00:00"))
+            last_checked = datetime.fromisoformat(audit_state["lastCheckedAt"].replace("Z", "+00:00"))
+            self.assertGreater((next_check - last_checked).total_seconds(), 11 * 3600)
+            self.assertLess((next_check - last_checked).total_seconds(), 13 * 3600)
+
+    def test_account_availability_audit_production_mailbox_disabled_is_inconclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            codex_free = output_root / "codex" / "free"
+            for directory in (converted, codex_free):
+                directory.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-mailbox-disabled.json"
+            codex_related = codex_free / "codex-mailbox-disabled.json"
+            source.write_text(json.dumps({"email": "mailbox-disabled@example.com"}), encoding="utf-8")
+            codex_related.write_text(json.dumps({"email": "mailbox-disabled@example.com"}), encoding="utf-8")
+
+            result = account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "targets": [
+                        {
+                            "source_path": str(source),
+                            "original_path": str(source),
+                            "email": "mailbox-disabled@example.com",
+                        }
+                    ],
+                    "audit_result": {
+                        "email": "mailbox-disabled@example.com",
+                        "status": "mailbox_disabled",
+                        "detail": "mailbox cannot be recovered",
+                    },
+                }
+            )
+
+            self.assertTrue(source.is_file())
+            self.assertTrue(codex_related.is_file())
+            self.assertEqual(0, result["counts"]["deleted_files_removed"])
+            self.assertEqual(1, result["counts"]["inconclusive"])
+            payload = json.loads(source.read_text(encoding="utf-8"))
+            self.assertEqual("inconclusive", payload["accountAvailabilityAudit"]["status"])
+
     def test_main_and_continue_flows_use_personal_organization_name(self) -> None:
         flow_root = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
 
@@ -598,6 +835,537 @@ class DstFlowIntegrationTests(unittest.TestCase):
         )
         self.assertEqual("released_sessions", result.outputs["release-mailbox-sessions-by-email"]["status"])
         self.assertEqual(1, result.outputs["release-mailbox-sessions-by-email"]["released_count"])
+
+    def test_openai_community_login_flow_uses_claimed_small_success_artifact(self) -> None:
+        flow_path = (
+            Path(__file__).resolve().parents[1]
+            / "server"
+            / "services"
+            / "orchestration_service"
+            / "flows"
+            / "openai-community-login-v1.semantic-flow.json"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_dir = Path(tmp_dir) / "input"
+            claims_dir = Path(tmp_dir) / "claims"
+            input_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            source_path = input_dir / "small-success.json"
+            source_path.write_text(
+                json.dumps(
+                    {
+                        "email": "community-user@example.com",
+                        "password": "test-password",
+                        "mailboxRef": "cloudflare_temp_email:community-user@example.com",
+                        "mailboxSessionId": "mailbox-session-1",
+                        "session_id": "mailbox-session-1",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            calls: list[tuple[str, dict[str, object]]] = []
+
+            def _easyproxy_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                calls.append((step_type, dict(step_input)))
+                if step_type == "acquire_proxy_chain":
+                    return {
+                        "proxy_url": "http://easy-proxy.local:25001",
+                        "lease_id": "lease-community-1",
+                    }
+                if step_type == "release_proxy_chain":
+                    return {
+                        "released": True,
+                        "proxy_url": "http://easy-proxy.local:25001",
+                        "lease_id": "lease-community-1",
+                    }
+                raise AssertionError(step_type)
+
+            def _easyprotocol_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                calls.append((step_type, dict(step_input)))
+                self.assertEqual("login_openai_community", step_type)
+                claimed_path = Path(str(step_input.get("source_path") or ""))
+                self.assertTrue(claimed_path.is_file())
+                self.assertEqual("http://easy-proxy.local:25001", step_input.get("proxy_url"))
+                self.assertEqual("https://community.openai.com/", step_input.get("startup_url"))
+                self.assertEqual(
+                    "cloudflare_temp_email:community-user@example.com",
+                    step_input.get("mailbox_ref"),
+                )
+                self.assertEqual("mailbox-session-1", step_input.get("mailbox_session_id"))
+                return {
+                    "ok": True,
+                    "status": "community_login_completed",
+                    "email": "community-user@example.com",
+                    "targetUrl": "https://community.openai.com/",
+                }
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "easyproxy": _easyproxy_dispatcher,
+                    "easyprotocol": _easyprotocol_dispatcher,
+                },
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    input_source_dir=str(input_dir),
+                    input_claims_dir=str(claims_dir),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            [
+                "claim-small-success-artifact",
+                "acquire-proxy-chain",
+                "login-openai-community",
+                "release-proxy-chain",
+            ],
+            list(result.steps.keys()),
+        )
+        self.assertEqual("claimed", result.outputs["claim-small-success-artifact"]["status"])
+        self.assertEqual("community_login_completed", result.outputs["login-openai-community"]["status"])
+        self.assertEqual(
+            [
+                "acquire_proxy_chain",
+                "login_openai_community",
+                "release_proxy_chain",
+            ],
+            [step_type for step_type, _ in calls],
+        )
+
+    def test_account_availability_audit_single_file_moves_loginable_account(self) -> None:
+        flow_path = (
+            Path(__file__).resolve().parents[1]
+            / "server"
+            / "services"
+            / "orchestration_service"
+            / "flows"
+            / "openai-account-availability-audit-v1.semantic-flow.json"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            account_file = Path(tmp_dir) / "single-account.json"
+            loginable_dir = Path(tmp_dir) / "loginable"
+            deleted_dir = Path(tmp_dir) / "deleted"
+            audit_path = Path(tmp_dir) / "audit-state.jsonl"
+            account_file.write_text(
+                json.dumps(
+                    {
+                        "email": "loginable@example.com",
+                        "password": "not-for-audit-records",
+                        "mailboxRef": "cloudflare_temp_email:loginable@example.com",
+                        "mailboxSessionId": "mailbox-session-loginable",
+                        "recoveryDataCredential": {
+                            "emailAddress": "loginable@example.com",
+                            "providerTypeKey": "cloudflare_temp_email",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            calls: list[tuple[str, dict[str, object]]] = []
+
+            def _orchestration_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                from artifact_pool_flow import dispatch_orchestration_step
+
+                calls.append((step_type, dict(step_input)))
+                return dispatch_orchestration_step(step_type=step_type, step_input=step_input)
+
+            def _easyprotocol_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                calls.append((step_type, dict(step_input)))
+                self.assertEqual("audit_openai_account_availability", step_type)
+                self.assertEqual("http://easy-proxy.local:25001", step_input.get("proxy_url"))
+                targets = step_input.get("targets")
+                self.assertIsInstance(targets, list)
+                self.assertEqual(1, len(targets))
+                target = targets[0]
+                self.assertIsInstance(target, dict)
+                self.assertEqual(str(account_file.resolve()), target.get("source_path"))
+                self.assertEqual("loginable@example.com", target.get("email"))
+                self.assertNotIn("password", target)
+                self.assertEqual(
+                    {
+                        "emailAddress": "loginable@example.com",
+                        "providerTypeKey": "cloudflare_temp_email",
+                    },
+                    target.get("recovery_data_credential"),
+                )
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "results": [
+                        {
+                            "source_path": str(account_file.resolve()),
+                            "email": "loginable@example.com",
+                            "status": "login_succeeded",
+                            "final_url": "https://chatgpt.com/",
+                        }
+                    ],
+                }
+
+            def _easyproxy_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                calls.append((step_type, dict(step_input)))
+                if step_type == "acquire_proxy_chain":
+                    return {
+                        "ok": True,
+                        "proxy_url": "http://easy-proxy.local:25001",
+                        "lease_id": "lease-account-audit-1",
+                    }
+                if step_type == "release_proxy_chain":
+                    return {"released": True, "lease_id": "lease-account-audit-1"}
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "orchestration": _orchestration_dispatcher,
+                    "easyprotocol": _easyprotocol_dispatcher,
+                    "easyproxy": _easyproxy_dispatcher,
+                },
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                    account_file=str(account_file),
+                    loginable_dir=str(loginable_dir),
+                    deleted_dir=str(deleted_dir),
+                    audit_path=str(audit_path),
+                )
+
+            self.assertTrue(result.ok)
+            self.assertFalse(account_file.exists())
+            moved_file = loginable_dir / account_file.name
+            self.assertTrue(moved_file.is_file())
+            self.assertFalse((deleted_dir / account_file.name).exists())
+            audit_records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(1, len(audit_records))
+            self.assertEqual("login_succeeded", audit_records[0]["status"])
+            self.assertEqual("moved_to_loginable", audit_records[0]["action"])
+            self.assertNotIn("not-for-audit-records", audit_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [
+                    "select_account_audit_targets",
+                    "acquire_proxy_chain",
+                    "audit_openai_account_availability",
+                    "release_proxy_chain",
+                    "finalize_account_audit_result",
+                ],
+                [step_type for step_type, _ in calls],
+            )
+
+    def test_account_availability_audit_directory_mode_moves_terminal_results_and_keeps_inconclusive(self) -> None:
+        flow_path = (
+            Path(__file__).resolve().parents[1]
+            / "server"
+            / "services"
+            / "orchestration_service"
+            / "flows"
+            / "openai-account-availability-audit-v1.semantic-flow.json"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            account_dir = Path(tmp_dir) / "accounts"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            fixtures = {
+                "a-login.json": "ok@example.com",
+                "b-deleted.json": "deleted@example.com",
+                "c-inconclusive.json": "retry@example.com",
+            }
+            for filename, email in fixtures.items():
+                (account_dir / filename).write_text(
+                    json.dumps(
+                        {
+                            "email": email,
+                            "password": f"password-for-{email}",
+                            "mailboxRef": f"cloudflare_temp_email:{email}",
+                            "mailboxSessionId": f"session-{email}",
+                            "recoveryDataCredential": {
+                                "emailAddress": email,
+                                "providerTypeKey": "cloudflare_temp_email",
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            def _orchestration_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                from artifact_pool_flow import dispatch_orchestration_step
+
+                return dispatch_orchestration_step(step_type=step_type, step_input=step_input)
+
+            def _easyprotocol_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                self.assertEqual("audit_openai_account_availability", step_type)
+                self.assertEqual("http://easy-proxy.local:25001", step_input.get("proxy_url"))
+                targets = step_input.get("targets")
+                self.assertIsInstance(targets, list)
+                self.assertEqual(3, len(targets))
+                results = []
+                for target in targets:
+                    self.assertIsInstance(target, dict)
+                    email = str(target.get("email") or "")
+                    if email == "ok@example.com":
+                        status = "login_succeeded"
+                    elif email == "deleted@example.com":
+                        status = "deleted_confirmed"
+                    else:
+                        status = "inconclusive"
+                    results.append(
+                        {
+                            "source_path": target.get("source_path"),
+                            "email": email,
+                            "status": status,
+                            "detail": "standard_login_completed" if status != "inconclusive" else "auth_error",
+                        }
+                    )
+                return {"ok": True, "status": "completed", "results": results}
+
+            def _easyproxy_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "acquire_proxy_chain":
+                    return {
+                        "ok": True,
+                        "proxy_url": "http://easy-proxy.local:25001",
+                        "lease_id": "lease-account-audit-1",
+                    }
+                if step_type == "release_proxy_chain":
+                    return {"released": True, "lease_id": "lease-account-audit-1"}
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "orchestration": _orchestration_dispatcher,
+                    "easyprotocol": _easyprotocol_dispatcher,
+                    "easyproxy": _easyproxy_dispatcher,
+                },
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                    account_dir=str(account_dir),
+                )
+
+            self.assertTrue(result.ok)
+            self.assertTrue((account_dir / "可登录账号" / "a-login.json").is_file())
+            self.assertTrue((account_dir / "deleted-confirmed" / "b-deleted.json").is_file())
+            self.assertTrue((account_dir / "c-inconclusive.json").is_file())
+            audit_path = account_dir / "account-availability-audit.jsonl"
+            audit_records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(3, len(audit_records))
+            records_by_email = {record["email"]: record for record in audit_records}
+            self.assertEqual("moved_to_loginable", records_by_email["ok@example.com"]["action"])
+            self.assertEqual("moved_to_deleted", records_by_email["deleted@example.com"]["action"])
+            self.assertEqual("left_in_place", records_by_email["retry@example.com"]["action"])
+
+    def test_account_availability_audit_input_claims_dir_claims_and_restores_inconclusive_account(self) -> None:
+        flow_path = (
+            Path(__file__).resolve().parents[1]
+            / "server"
+            / "services"
+            / "orchestration_service"
+            / "flows"
+            / "openai-account-availability-audit-v1.semantic-flow.json"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            account_dir = Path(tmp_dir) / "accounts"
+            claims_dir = Path(tmp_dir) / "claims"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            account_file = account_dir / "retry.json"
+            account_file.write_text(
+                json.dumps(
+                    {
+                        "email": "retry@example.com",
+                        "password": "password-for-retry@example.com",
+                        "mailboxRef": "cloudflare_temp_email:retry@example.com",
+                        "mailboxSessionId": "session-retry@example.com",
+                        "recoveryDataCredential": {
+                            "emailAddress": "retry@example.com",
+                            "providerTypeKey": "cloudflare_temp_email",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def _orchestration_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                from artifact_pool_flow import dispatch_orchestration_step
+
+                return dispatch_orchestration_step(step_type=step_type, step_input=step_input)
+
+            def _easyprotocol_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                self.assertEqual("audit_openai_account_availability", step_type)
+                targets = step_input.get("targets")
+                self.assertIsInstance(targets, list)
+                self.assertEqual(1, len(targets))
+                target = targets[0]
+                self.assertIsInstance(target, dict)
+                claimed_source_path = Path(str(target.get("source_path") or ""))
+                self.assertEqual(claims_dir.resolve(), claimed_source_path.parent.resolve())
+                self.assertEqual(str(account_file.resolve()), target.get("original_path"))
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "results": [
+                        {
+                            "source_path": str(claimed_source_path),
+                            "email": "retry@example.com",
+                            "status": "inconclusive",
+                            "detail": "auth_error",
+                        }
+                    ],
+                }
+
+            def _easyproxy_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "acquire_proxy_chain":
+                    return {
+                        "ok": True,
+                        "proxy_url": "http://easy-proxy.local:25001",
+                        "lease_id": "lease-account-audit-1",
+                    }
+                if step_type == "release_proxy_chain":
+                    return {"released": True, "lease_id": "lease-account-audit-1"}
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "orchestration": _orchestration_dispatcher,
+                    "easyprotocol": _easyprotocol_dispatcher,
+                    "easyproxy": _easyproxy_dispatcher,
+                },
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                    input_source_dir=str(account_dir),
+                    input_claims_dir=str(claims_dir),
+                )
+
+            self.assertTrue(result.ok)
+            self.assertTrue(account_file.is_file())
+            self.assertEqual([], sorted(claims_dir.glob("*.json")))
+            audit_path = account_dir / "account-availability-audit.jsonl"
+            audit_records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(1, len(audit_records))
+            self.assertEqual("restored_to_source", audit_records[0]["action"])
+            self.assertEqual(str(account_file.resolve()), audit_records[0]["final_path"])
+
+    def test_account_availability_audit_restores_claimed_account_when_protocol_step_fails(self) -> None:
+        flow_path = (
+            Path(__file__).resolve().parents[1]
+            / "server"
+            / "services"
+            / "orchestration_service"
+            / "flows"
+            / "openai-account-availability-audit-v1.semantic-flow.json"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            account_dir = Path(tmp_dir) / "accounts"
+            claims_dir = Path(tmp_dir) / "claims"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            account_file = account_dir / "retry.json"
+            account_file.write_text(
+                json.dumps(
+                    {
+                        "email": "retry@example.com",
+                        "password": "password-for-retry@example.com",
+                        "recoveryDataCredential": {
+                            "emailAddress": "retry@example.com",
+                            "providerTypeKey": "cloudflare_temp_email",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def _orchestration_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                from artifact_pool_flow import dispatch_orchestration_step
+
+                return dispatch_orchestration_step(step_type=step_type, step_input=step_input)
+
+            def _easyprotocol_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                self.assertEqual("audit_openai_account_availability", step_type)
+                raise RuntimeError("easyprotocol_unavailable")
+
+            def _easyproxy_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "acquire_proxy_chain":
+                    return {
+                        "ok": True,
+                        "proxy_url": "http://easy-proxy.local:25001",
+                        "lease_id": "lease-account-audit-1",
+                    }
+                if step_type == "release_proxy_chain":
+                    return {"released": True, "lease_id": "lease-account-audit-1"}
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "orchestration": _orchestration_dispatcher,
+                    "easyprotocol": _easyprotocol_dispatcher,
+                    "easyproxy": _easyproxy_dispatcher,
+                },
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                    input_source_dir=str(account_dir),
+                    input_claims_dir=str(claims_dir),
+                )
+
+            self.assertFalse(result.ok)
+            self.assertEqual("audit-openai-account-availability", result.error_step)
+            self.assertEqual("ok", result.steps["finalize-account-audit-result"])
+            self.assertTrue(account_file.is_file())
+            self.assertEqual([], sorted(claims_dir.glob("*.json")))
+            audit_path = account_dir / "account-availability-audit.jsonl"
+            audit_records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(1, len(audit_records))
+            self.assertEqual("inconclusive", audit_records[0]["status"])
+            self.assertEqual("restored_to_source", audit_records[0]["action"])
+
+    def test_account_availability_audit_restores_invalid_claim_candidate_to_source_dir(self) -> None:
+        flow_path = (
+            Path(__file__).resolve().parents[1]
+            / "server"
+            / "services"
+            / "orchestration_service"
+            / "flows"
+            / "openai-account-availability-audit-v1.semantic-flow.json"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            account_dir = Path(tmp_dir) / "accounts"
+            claims_dir = Path(tmp_dir) / "claims"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            account_file = account_dir / "missing-email.json"
+            account_file.write_text(
+                json.dumps(
+                    {
+                        "password": "password-without-email",
+                        "recoveryDataCredential": {
+                            "providerTypeKey": "cloudflare_temp_email",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = dst_flow.run_dst_flow_once(
+                output_dir=str(Path(tmp_dir) / "out"),
+                flow_path=flow_path,
+                input_source_dir=str(account_dir),
+                input_claims_dir=str(claims_dir),
+            )
+
+            self.assertFalse(result.ok)
+            self.assertEqual("select-account-audit-targets", result.error_step)
+            self.assertTrue(account_file.is_file())
+            self.assertEqual([], sorted(claims_dir.glob("*.json")))
 
     def test_run_dst_flow_once_executes_temp_flow_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

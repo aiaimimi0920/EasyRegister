@@ -1,0 +1,119 @@
+{
+  "definition": {
+    "version": "1",
+    "id": "openai-account-availability-audit-v1",
+    "name": "OpenAI Account Availability Audit Flow",
+    "platform": "openai-account-availability-audit",
+    "kind": "semantic-flow",
+    "description": "Audit owned OpenAI account credential artifacts by restoring mailbox access, running standard email-code login, and moving only terminal account results.",
+    "metadata": {
+      "taskRetry": {
+        "maxAttempts": 1,
+        "backoffSeconds": 0,
+        "retryProfile": "task-openai-account-availability-audit"
+      }
+    },
+    "steps": [
+      {
+        "id": "select-account-audit-targets",
+        "type": "select_account_audit_targets",
+        "metadata": {
+          "owner": "orchestration",
+          "stage": "input-select"
+        },
+        "input": {
+          "account_file": "{{task.account_file}}",
+          "account_dir": "{{task.account_dir}}",
+          "account_claims_dir": "{{task.account_claims_dir}}",
+          "claim_mode": "{{task.account_claim_mode}}",
+          "max_targets": "{{task.account_max_targets}}",
+          "input_source_dir": "{{task.input_source_dir}}",
+          "input_claims_dir": "{{task.input_claims_dir}}",
+          "production_mode": "{{task.account_audit_production_mode}}",
+          "output_root": "{{task.input_source_dir}}"
+        },
+        "saveAs": "account_audit_targets"
+      },
+      {
+        "id": "acquire-proxy-chain",
+        "type": "acquire_proxy_chain",
+        "metadata": {
+          "owner": "easyproxy",
+          "stage": "proxy-acquire"
+        },
+        "input": {
+          "flow_name": "openai_account_availability_audit",
+          "metadata": {
+            "taskAttempt": "{{task.taskAttempt}}",
+            "flowId": "{{task.flow_id}}"
+          },
+          "probe_url": "https://chatgpt.com/",
+          "probe_urls": [
+            "https://chatgpt.com/",
+            "https://auth.openai.com/log-in-or-create-account"
+          ],
+          "probe_expected_statuses": [
+            200
+          ],
+          "avoid_proxy_urls": "{{task.avoidProxyUrls}}",
+          "required": true,
+          "max_acquire_attempts": 4
+        },
+        "saveAs": "proxy_chain"
+      },
+      {
+        "id": "audit-openai-account-availability",
+        "type": "audit_openai_account_availability",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "standard-login-audit"
+        },
+        "input": {
+          "targets": "{{account_audit_targets.targets}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}",
+          "login_entry_url": "{{task.login_entry_url}}",
+          "output_dir": "{{task.output_dir}}",
+          "recover_mailbox": true,
+          "standard_email_code_login": true,
+          "allowed_usage": "owned_or_sandbox_accounts_only"
+        },
+        "saveAs": "account_audit"
+      },
+      {
+        "id": "release-proxy-chain",
+        "type": "release_proxy_chain",
+        "metadata": {
+          "owner": "easyproxy",
+          "stage": "cleanup",
+          "alwaysRun": true
+        },
+        "input": {
+          "proxy_chain": "{{proxy_chain}}",
+          "error_code": "{{task.errorCode}}"
+        },
+        "saveAs": "release_proxy_chain"
+      },
+      {
+        "id": "finalize-account-audit-result",
+        "type": "finalize_account_audit_result",
+        "metadata": {
+          "owner": "orchestration",
+          "stage": "finalize",
+          "alwaysRun": true,
+          "enabledWhen": "{{account_audit_targets.targets}}"
+        },
+        "input": {
+          "targets": "{{account_audit_targets.targets}}",
+          "audit_result": "{{account_audit}}",
+          "account_dir": "{{task.account_dir}}",
+          "loginable_dir": "{{task.loginable_dir}}",
+          "deleted_dir": "{{task.deleted_dir}}",
+          "audit_path": "{{task.audit_path}}",
+          "production_mode": "{{task.account_audit_production_mode}}",
+          "output_root": "{{task.input_source_dir}}"
+        },
+        "saveAs": "account_audit_finalization"
+      }
+    ]
+  }
+}

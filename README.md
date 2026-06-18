@@ -472,7 +472,7 @@ GHCR 登录也支持和参考仓同样的双路径：
 - `easy-register`
   - 主调度容器
   - 默认以 `REGISTER_INSTANCE_ROLE=mixed` 运行
-  - 通过 `REGISTER_FLOW_SPECS_JSON` 同时挂载 `main`、`continue`、`team` 三条 flow
+  - 通过 `REGISTER_FLOW_SPECS_JSON` 同时挂载 `main`、`continue`、`account-audit`、`team` 四条 flow
   - 暴露运行态面板
   - 默认 `10` 个 worker
 
@@ -520,6 +520,14 @@ GHCR 登录也支持和参考仓同样的双路径：
     "weight": 2
   },
   {
+    "name": "openai-account-availability-audit",
+    "path": "server/services/orchestration_service/flows/openai-account-availability-audit-v1.semantic-flow.json",
+    "role": "account-audit",
+    "weight": 1,
+    "inputSourceDir": "/shared/register-output",
+    "concurrencyLimit": 1
+  },
+  {
     "name": "codex-team-expand",
     "path": "server/services/orchestration_service/flows/codex-team-expand-v1.semantic-flow.json",
     "role": "team",
@@ -532,6 +540,7 @@ GHCR 登录也支持和参考仓同样的双路径：
 
 - `main` flow 默认消费 `openai/pending`
 - `continue` flow 默认消费 `openai/failed-once`
+- `account-audit` flow 默认以 1 并发巡检 `openai/converted`、`openai/failed-twice`、`codex/**` 下到期的凭证；只有明确 deleted/deactivated/disabled 才删除同邮箱关联文件，可用账号会同步 `recoveryDataCredential` 并延后 1 天再检，不确定状态会保留文件并延后 12 小时再检
 - `team` flow 默认从 `openai/pending` 和 `openai/failed-twice` 补 `team-pre-pool`，并等待 `codex/team-mother-input` 有可用 mother 后再被调度
 - `REGISTER_TEAM_PRE_FILL_COUNT`
   - 每轮最多从 `openai/pending` 和 `openai/failed-twice` 随机移动到 `others/team-pre-pool` 的文件数，默认 `1`

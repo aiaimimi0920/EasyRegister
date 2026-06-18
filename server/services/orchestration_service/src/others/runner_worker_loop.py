@@ -148,6 +148,7 @@ def worker_loop(
     free_oauth_pool_dir_text: str,
     active_flow_counts: Any | None = None,
     active_flow_lock: Any | None = None,
+    active_flow_owners: Any | None = None,
 ) -> None:
     output_root = Path(output_root_text).resolve()
     shared_root = _shared_root_from_output_root(output_root)
@@ -232,6 +233,8 @@ def worker_loop(
             spec=selected_flow_spec,
             active_flow_counts=active_flow_counts,
             active_flow_lock=active_flow_lock,
+            active_flow_owners=active_flow_owners,
+            owner_id=worker_label,
         )
         if not reserved_flow_slot:
             _json_log(
@@ -259,6 +262,8 @@ def worker_loop(
                     spec=selected_flow_spec,
                     active_flow_counts=active_flow_counts,
                     active_flow_lock=active_flow_lock,
+                    active_flow_owners=active_flow_owners,
+                    owner_id=worker_label,
                 )
                 sleep_seconds = max(float(delay_seconds or 0.0), 1.0)
                 _json_log(
@@ -280,33 +285,52 @@ def worker_loop(
                 spec=selected_flow_spec,
                 active_flow_counts=active_flow_counts,
                 active_flow_lock=active_flow_lock,
+                active_flow_owners=active_flow_owners,
+                owner_id=worker_label,
             )
             break
 
-        openai_oauth_pool_dir = Path(selected_flow_spec.openai_oauth_pool_dir).resolve()
-        _ensure_directory(openai_oauth_pool_dir)
-        input_source_dir = str(selected_flow_spec.input_source_dir or "").strip()
-        input_claims_dir = str(selected_flow_spec.input_claims_dir or "").strip()
-        free_local_selected = False
-        if normalized_role in {"main", "continue"}:
-            artifact_config = _artifact_routing_config(output_root=output_root)
-            free_local_selected = _select_local_split(
-                percent=artifact_config.free_local_split_percent
-            )
+        try:
+            openai_oauth_pool_dir = Path(selected_flow_spec.openai_oauth_pool_dir).resolve()
+            _ensure_directory(openai_oauth_pool_dir)
+            input_source_dir = str(selected_flow_spec.input_source_dir or "").strip()
+            input_claims_dir = str(selected_flow_spec.input_claims_dir or "").strip()
+            free_local_selected = False
+            if normalized_role in {"main", "continue"}:
+                artifact_config = _artifact_routing_config(output_root=output_root)
+                free_local_selected = _select_local_split(
+                    percent=artifact_config.free_local_split_percent
+                )
 
-        team_auth_selection = _resolve_worker_team_auth(
-            normalized_role=normalized_role,
-            shared_root=shared_root,
-            output_root=output_root,
-            worker_label=worker_label,
-            task_index=task_index,
-            pinned_team_auth_path=str(selected_flow_spec.team_auth_path or "").strip(),
-        )
+            team_auth_selection = _resolve_worker_team_auth(
+                normalized_role=normalized_role,
+                shared_root=shared_root,
+                output_root=output_root,
+                worker_label=worker_label,
+                task_index=task_index,
+                pinned_team_auth_path=str(selected_flow_spec.team_auth_path or "").strip(),
+            )
+        except Exception:
+            _release_flow_slot(
+                spec=selected_flow_spec,
+                active_flow_counts=active_flow_counts,
+                active_flow_lock=active_flow_lock,
+                active_flow_owners=active_flow_owners,
+                owner_id=worker_label,
+            )
+            raise
         team_auth_pool = team_auth_selection.team_auth_pool
         selected_team_auth_path = team_auth_selection.selected_team_auth_path
         seat_reservation = team_auth_selection.seat_reservation
 
         if normalized_role == "team" and team_auth_pool and not selected_team_auth_path:
+            _release_flow_slot(
+                spec=selected_flow_spec,
+                active_flow_counts=active_flow_counts,
+                active_flow_lock=active_flow_lock,
+                active_flow_owners=active_flow_owners,
+                owner_id=worker_label,
+            )
             _json_log(
                 {
                     "event": "register_team_auth_pool_filtered_empty",
@@ -326,7 +350,17 @@ def worker_loop(
             worker_output_root=worker_output_root,
             task_index=task_index,
         )
-        _ensure_directory(run_output_dir)
+        try:
+            _ensure_directory(run_output_dir)
+        except Exception:
+            _release_flow_slot(
+                spec=selected_flow_spec,
+                active_flow_counts=active_flow_counts,
+                active_flow_lock=active_flow_lock,
+                active_flow_owners=active_flow_owners,
+                owner_id=worker_label,
+            )
+            raise
         started_at = datetime.now(timezone.utc).isoformat()
         _json_log(
             {
@@ -373,6 +407,7 @@ def worker_loop(
                 flow_path=str(selected_flow_spec.flow_path or "").strip() or None,
                 task_max_attempts=selected_flow_spec.task_max_attempts or task_max_attempts or None,
                 mailbox_business_key=str(selected_flow_spec.mailbox_business_key or "").strip() or None,
+                account_audit_production_mode=normalized_role == "account-audit",
                 r2_upload_enabled=(not free_local_selected)
                 if normalized_role in {"main", "continue"}
                 else None,
@@ -410,6 +445,8 @@ def worker_loop(
                 spec=selected_flow_spec,
                 active_flow_counts=active_flow_counts,
                 active_flow_lock=active_flow_lock,
+                active_flow_owners=active_flow_owners,
+                owner_id=worker_label,
             )
             reservation_summary = _team_auth_release_seat_reservations(
                 shared_root=shared_root,

@@ -43,6 +43,8 @@ def step_output_ok(*, step_type: str, step_output: Any) -> tuple[bool, str]:
         "invite_codex_member",
         "revoke_codex_member",
         "invite_team_members",
+        "login_openai_community",
+        "audit_openai_account_availability",
         "obtain_team_member_oauth_batch",
         "revoke_team_members",
     }:
@@ -136,6 +138,8 @@ def step_output_ok(*, step_type: str, step_output: Any) -> tuple[bool, str]:
         "acquire_openai_oauth_artifact",
         "finalize_openai_oauth_artifact",
         "validate_free_personal_oauth",
+        "select_account_audit_targets",
+        "finalize_account_audit_result",
         "sleep_seconds",
     }:
         if isinstance(step_output, dict) and bool(step_output.get("ok")):

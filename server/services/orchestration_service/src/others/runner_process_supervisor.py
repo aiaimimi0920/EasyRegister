@@ -12,6 +12,7 @@ from others.common import ensure_directory as _ensure_directory
 from others.common import json_log as _json_log
 from others.config import RunnerMainConfig
 from others.runner_flow_scheduler import flow_spec_summary
+from others.runner_flow_scheduler import release_flow_slot_for_owner
 from others.preflight import validate_runtime_preflight as _validate_runtime_preflight
 from others.runner_worker_loop import worker_loop
 
@@ -59,6 +60,7 @@ def start_worker(
     free_oauth_pool_dir_text: str,
     active_flow_counts: Any,
     active_flow_lock: Any,
+    active_flow_owners: Any,
 ) -> Any:
     process = ctx.Process(
         target=worker_loop,
@@ -76,6 +78,7 @@ def start_worker(
             "free_oauth_pool_dir_text": free_oauth_pool_dir_text,
             "active_flow_counts": active_flow_counts,
             "active_flow_lock": active_flow_lock,
+            "active_flow_owners": active_flow_owners,
         },
         name=f"register-worker-{worker_id:02d}",
     )
@@ -161,6 +164,7 @@ def main() -> int:
     stop_event = ctx.Event()
     task_counter = ctx.Value("i", 0)
     active_flow_counts = manager.dict()
+    active_flow_owners = manager.dict()
     active_flow_lock = ctx.Lock()
     processes: dict[int, Any] = {}
     dashboard_server = None
@@ -224,6 +228,7 @@ def main() -> int:
                 free_oauth_pool_dir_text=str(config.free_oauth_pool_dir),
                 active_flow_counts=active_flow_counts,
                 active_flow_lock=active_flow_lock,
+                active_flow_owners=active_flow_owners,
             )
             if config.worker_stagger_seconds > 0 and worker_id < config.worker_count:
                 time.sleep(config.worker_stagger_seconds)
@@ -246,6 +251,22 @@ def main() -> int:
                         "exitCode": exit_code,
                     }
                 )
+                recovered_slot_key = release_flow_slot_for_owner(
+                    owner_id=f"worker-{worker_id:02d}",
+                    active_flow_counts=active_flow_counts,
+                    active_flow_owners=active_flow_owners,
+                    active_flow_lock=active_flow_lock,
+                )
+                if recovered_slot_key:
+                    _json_log(
+                        {
+                            "event": "register_worker_flow_slot_recovered",
+                            "workerId": f"worker-{worker_id:02d}",
+                            "pid": process.pid,
+                            "exitCode": exit_code,
+                            "slotKey": recovered_slot_key,
+                        }
+                    )
                 cleanup_process_handle(process=process, join_timeout=0.0)
                 if should_stop_supervisor_after_worker_stop(
                     processes=processes,
@@ -287,6 +308,7 @@ def main() -> int:
                     free_oauth_pool_dir_text=str(config.free_oauth_pool_dir),
                     active_flow_counts=active_flow_counts,
                     active_flow_lock=active_flow_lock,
+                    active_flow_owners=active_flow_owners,
                 )
                 if config.worker_stagger_seconds > 0:
                     time.sleep(config.worker_stagger_seconds)

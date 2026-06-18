@@ -127,6 +127,8 @@ def _default_flow_concurrency_limit_for_role(instance_role: str) -> int:
         return max(0, env_int("REGISTER_MAIN_CONCURRENCY_LIMIT", 5))
     if normalized_role == "continue":
         return max(0, env_int("REGISTER_CONTINUE_CONCURRENCY_LIMIT", 2))
+    if normalized_role == "account-audit":
+        return max(0, env_int("REGISTER_ACCOUNT_AUDIT_CONCURRENCY_LIMIT", 1))
     if normalized_role == "team":
         return max(0, env_int("REGISTER_TEAM_CONCURRENCY_LIMIT", 1))
     return max(0, env_int("REGISTER_DEFAULT_FLOW_CONCURRENCY_LIMIT", 0))
@@ -154,6 +156,12 @@ def _default_mixed_flow_specs(
             2.0,
         ),
         (
+            "openai-account-availability-audit",
+            "server/services/orchestration_service/flows/openai-account-availability-audit-v1.semantic-flow.json",
+            "account-audit",
+            1.0,
+        ),
+        (
             "codex-team-expand",
             "server/services/orchestration_service/flows/codex-team-expand-v1.semantic-flow.json",
             "team",
@@ -174,7 +182,7 @@ def _default_mixed_flow_specs(
                     instance_role=instance_role,
                 ),
                 mailbox_business_key="",
-                input_source_dir="",
+                input_source_dir=str(shared_root.resolve()) if instance_role == "account-audit" else "",
                 input_claims_dir="",
                 concurrency_limit=_default_flow_concurrency_limit_for_role(instance_role),
             )

@@ -35,6 +35,8 @@ runtime/
 openai/
 codex/
 others/
+!server/services/orchestration_service/src/others/
+!server/services/orchestration_service/src/others/account_availability_audit.py
 
 # Local environment files
 .env

@@ -543,6 +543,15 @@ def run_dst_flow_once(
     r2_public_base_url: str | None = None,
     r2_upload_enabled: bool | None = None,
     openai_oauth_pool_dir: str | None = None,
+    account_file: str | None = None,
+    account_dir: str | None = None,
+    account_claims_dir: str | None = None,
+    account_claim_mode: bool | None = None,
+    account_max_targets: int | None = None,
+    account_audit_production_mode: bool | None = None,
+    loginable_dir: str | None = None,
+    deleted_dir: str | None = None,
+    audit_path: str | None = None,
     flow_path: str | Path | None = None,
     task_max_attempts: int | None = None,
     mailbox_business_key: str | None = None,
@@ -565,6 +574,19 @@ def run_dst_flow_once(
         "inputSourceDir": str(input_source_dir or env_config.input_source_dir or "").strip(),
         "inputClaimsDir": str(input_claims_dir or env_config.input_claims_dir or "").strip(),
         "loginEntryUrl": str(login_entry_url or env_config.login_entry_url or "").strip(),
+        "accountFile": str(account_file or "").strip(),
+        "accountDir": str(account_dir or "").strip(),
+        "accountClaimsDir": str(account_claims_dir or input_claims_dir or env_config.input_claims_dir or "").strip(),
+        "accountClaimMode": (
+            bool(account_claim_mode)
+            if account_claim_mode is not None
+            else bool(str(account_claims_dir or input_claims_dir or env_config.input_claims_dir or "").strip())
+        ),
+        "accountMaxTargets": int(account_max_targets or 0) if account_max_targets is not None else 0,
+        "accountAuditProductionMode": bool(account_audit_production_mode) if account_audit_production_mode is not None else False,
+        "loginableDir": str(loginable_dir or "").strip(),
+        "deletedDir": str(deleted_dir or "").strip(),
+        "auditPath": str(audit_path or "").strip(),
     }
     last_result = DstExecutionResult(
         ok=False,
@@ -603,6 +625,23 @@ def run_dst_flow_once(
                 "r2_public_base_url": str(r2_public_base_url or "").strip(),
                 "r2_upload_enabled": bool(r2_upload_enabled) if r2_upload_enabled is not None else False,
                 "openai_oauth_pool_dir": str(openai_oauth_pool_dir or "").strip(),
+                "account_file": str(account_file or "").strip(),
+                "account_dir": str(account_dir or "").strip(),
+                "account_claims_dir": str(account_claims_dir or input_claims_dir or env_config.input_claims_dir or "").strip(),
+                "account_claim_mode": (
+                    bool(account_claim_mode)
+                    if account_claim_mode is not None
+                    else bool(str(account_claims_dir or input_claims_dir or env_config.input_claims_dir or "").strip())
+                ),
+                "account_max_targets": int(account_max_targets or 0) if account_max_targets is not None else 0,
+                "account_audit_production_mode": (
+                    bool(account_audit_production_mode)
+                    if account_audit_production_mode is not None
+                    else False
+                ),
+                "loginable_dir": str(loginable_dir or "").strip(),
+                "deleted_dir": str(deleted_dir or "").strip(),
+                "audit_path": str(audit_path or "").strip(),
                 "mailbox_ttl_seconds": env_config.mailbox_ttl_seconds,
                 "mailbox_recreate_preallocated": bool(env_config.mailbox_recreate_preallocated),
                 "team_pre_fill_count": env_config.team_pre_fill_count,

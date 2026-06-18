@@ -95,6 +95,7 @@ services:
       REGISTER_WORKER_COUNT: ${REGISTER_WORKER_COUNT:-10}
       REGISTER_MAIN_CONCURRENCY_LIMIT: ${REGISTER_MAIN_CONCURRENCY_LIMIT:-5}
       REGISTER_CONTINUE_CONCURRENCY_LIMIT: ${REGISTER_CONTINUE_CONCURRENCY_LIMIT:-2}
+      REGISTER_ACCOUNT_AUDIT_CONCURRENCY_LIMIT: ${REGISTER_ACCOUNT_AUDIT_CONCURRENCY_LIMIT:-1}
       REGISTER_TEAM_CONCURRENCY_LIMIT: ${REGISTER_TEAM_CONCURRENCY_LIMIT:-1}
       REGISTER_WORKER_STAGGER_SECONDS: ${REGISTER_WORKER_STAGGER_SECONDS:-10}
       REGISTER_CREATE_ACCOUNT_COOLDOWN_SECONDS: ${REGISTER_CREATE_ACCOUNT_COOLDOWN_SECONDS:-120}
@@ -111,6 +112,7 @@ services:
         [
           {"name":"openai-main","path":"server/services/orchestration_service/flows/codex-openai-account-v1.semantic-flow.json","role":"main","weight":5},
           {"name":"openai-continue","path":"server/services/orchestration_service/flows/codex-openai-oauth-continue-v1.semantic-flow.json","role":"continue","weight":2},
+          {"name":"openai-account-availability-audit","path":"server/services/orchestration_service/flows/openai-account-availability-audit-v1.semantic-flow.json","role":"account-audit","weight":1,"inputSourceDir":"/shared/register-output","concurrencyLimit":1},
           {"name":"codex-team-expand","path":"server/services/orchestration_service/flows/codex-team-expand-v1.semantic-flow.json","role":"team","weight":1}
         ]
       REGISTER_DASHBOARD_ENABLED: ${REGISTER_DASHBOARD_ENABLED:-true}

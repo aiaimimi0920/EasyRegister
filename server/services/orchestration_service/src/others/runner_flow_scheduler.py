@@ -5,6 +5,7 @@ import random
 from pathlib import Path
 from typing import Any
 
+from others.account_availability_audit import production_audit_has_due_targets
 from others.config import RunnerFlowSpec, TeamAuthRuntimeConfig
 
 
@@ -53,6 +54,8 @@ def reserve_flow_slot(
     spec: RunnerFlowSpec,
     active_flow_counts: Any,
     active_flow_lock: Any,
+    active_flow_owners: Any | None = None,
+    owner_id: str = "",
 ) -> bool:
     if active_flow_counts is None:
         return True
@@ -66,7 +69,22 @@ def reserve_flow_slot(
         if limit > 0 and current >= limit:
             return False
         active_flow_counts[key] = current + 1
+        normalized_owner_id = str(owner_id or "").strip()
+        if active_flow_owners is not None and normalized_owner_id:
+            active_flow_owners[normalized_owner_id] = key
         return True
+
+
+def _decrement_flow_slot_by_key(*, key: str, active_flow_counts: Any) -> None:
+    current = int(active_flow_counts.get(key, 0) or 0)
+    next_value = max(0, current - 1)
+    if next_value <= 0:
+        try:
+            del active_flow_counts[key]
+        except Exception:
+            active_flow_counts[key] = 0
+    else:
+        active_flow_counts[key] = next_value
 
 
 def release_flow_slot(
@@ -74,6 +92,8 @@ def release_flow_slot(
     spec: RunnerFlowSpec,
     active_flow_counts: Any,
     active_flow_lock: Any,
+    active_flow_owners: Any | None = None,
+    owner_id: str = "",
 ) -> None:
     if active_flow_counts is None:
         return
@@ -82,15 +102,45 @@ def release_flow_slot(
         return
     lock = active_flow_lock if active_flow_lock is not None else nullcontext()
     with lock:
-        current = int(active_flow_counts.get(key, 0) or 0)
-        next_value = max(0, current - 1)
-        if next_value <= 0:
+        normalized_owner_id = str(owner_id or "").strip()
+        if active_flow_owners is not None and normalized_owner_id:
             try:
-                del active_flow_counts[key]
+                owned_key = str(active_flow_owners.get(normalized_owner_id, "") or "").strip()
             except Exception:
-                active_flow_counts[key] = 0
-        else:
-            active_flow_counts[key] = next_value
+                owned_key = ""
+            if owned_key:
+                key = owned_key
+            try:
+                del active_flow_owners[normalized_owner_id]
+            except Exception:
+                pass
+        _decrement_flow_slot_by_key(key=key, active_flow_counts=active_flow_counts)
+
+
+def release_flow_slot_for_owner(
+    *,
+    owner_id: str,
+    active_flow_counts: Any,
+    active_flow_owners: Any,
+    active_flow_lock: Any,
+) -> str | None:
+    normalized_owner_id = str(owner_id or "").strip()
+    if not normalized_owner_id or active_flow_counts is None or active_flow_owners is None:
+        return None
+    lock = active_flow_lock if active_flow_lock is not None else nullcontext()
+    with lock:
+        try:
+            key = str(active_flow_owners.get(normalized_owner_id, "") or "").strip()
+        except Exception:
+            key = ""
+        if not key:
+            return None
+        try:
+            del active_flow_owners[normalized_owner_id]
+        except Exception:
+            pass
+        _decrement_flow_slot_by_key(key=key, active_flow_counts=active_flow_counts)
+        return key
 
 
 def snapshot_active_flow_counts(
@@ -137,6 +187,24 @@ def flow_spec_runnable_state(
             **summary,
             "ready": False,
             "reason": "concurrency_limit_reached",
+        }
+    if normalized_role == "account-audit":
+        configured_root = str(spec.input_source_dir or "").strip()
+        output_root_for_audit = Path(configured_root).expanduser().resolve() if configured_root else output_root
+        production_ready = production_audit_has_due_targets(output_root=output_root_for_audit)
+        configured_input_ready = bool(configured_root) and _path_has_json_files(output_root_for_audit)
+        ready = production_ready or configured_input_ready
+        return {
+            **summary,
+            "ready": ready,
+            "reason": (
+                "production_pool_ready"
+                if production_ready
+                else "input_source_dir_ready"
+                if configured_input_ready
+                else "production_pool_empty_or_not_due"
+            ),
+            "productionOutputRoot": str(output_root_for_audit),
         }
     configured_input_source_dir = str(spec.input_source_dir or "").strip()
     if configured_input_source_dir:

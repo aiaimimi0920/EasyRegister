@@ -225,3 +225,59 @@ control-plane stats。面板会展示：
 - `openai/pending` 当前积压数量
 - `others/team-pre-pool` / `codex/team-mother-input` / `codex/team` 这些目录不会进入主注册面板聚合统计
 - 最近成功上传到 R2 的 auth JSON
+
+### OpenAI 账号可用性审计 DST
+
+当前新增了一条独立审计流，用来批量检阅已有账号文件是否仍可完成邮箱恢复 + 标准 OpenAI 网页登录。
+
+流文件：
+
+- `server/services/orchestration_service/flows/openai-account-availability-audit-v1.semantic-flow.json`
+
+入口参数支持两种模式：
+
+- 单文件模式：`--account-file`
+- 目录批处理模式：`--account-dir`
+
+目录批处理是推荐方式。runner 只要把某个 flow spec 的 `inputSourceDir` 指到账号目录，就会把该目录视为可运行输入，不需要额外改 scheduler 语义。审计流会优先读取目录下的 `*.json` 账号文件，并支持把已尝试账号移动到单独目录。
+
+推荐 CLI 形式：
+
+```powershell
+python -m dst_flow `
+  --flow-path server/services/orchestration_service/flows/openai-account-availability-audit-v1.semantic-flow.json `
+  --account-dir C:\path\to\accounts
+```
+
+也可以显式指定输出归档目录：
+
+- `--loginable-dir`：登录成功后移动到这里，默认源目录下 `可登录账号`
+- `--deleted-dir`：判定为已删除/已停用后移动到这里，默认源目录下 `deleted-confirmed`
+- `--audit-path`：JSONL 审计文件，默认源目录下 `account-availability-audit.jsonl`
+
+如果账号文件里已经包含 `recoveryDataCredential` / `recovery_data_credential`，调度层会原样保留并透传给 EasyProtocol / EasyEmail 恢复链路；这也是后续继续恢复邮箱所必需的字段。
+
+runner 接入方式：
+
+- 在 `RunnerFlowSpec` 里把 `instance_role` 设成 `account-audit`
+- 把 `input_source_dir` 设成账号目录
+- 可选设置 `input_claims_dir` 用于 claim 模式
+
+最小 flow spec 示例：
+
+```json
+[
+  {
+    "name": "openai-account-availability-audit",
+    "flowPath": "server/services/orchestration_service/flows/openai-account-availability-audit-v1.semantic-flow.json",
+    "instanceRole": "account-audit",
+    "weight": 1,
+    "taskMaxAttempts": 1,
+    "inputSourceDir": "C:/account-audit/input",
+    "inputClaimsDir": "C:/account-audit/input/_claims",
+    "concurrencyLimit": 1
+  }
+]
+```
+
+这样 worker 会把该目录作为输入源传入 `run_dst_flow_once(...)`，由新审计流完成“选择账号 -> 恢复邮箱 -> 登录校验 -> 归档”的完整步骤。

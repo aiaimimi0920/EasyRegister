@@ -19,7 +19,7 @@ for candidate in (SRC_ROOT, PYTHON_SHARED_ROOT):
         sys.path.insert(0, str(candidate))
 
 from errors import ErrorCodes, classify_error_code  # noqa: E402
-from others.config import RunnerFlowSpec  # noqa: E402
+from others.config import RunnerFlowSpec, RunnerMainConfig  # noqa: E402
 from others import runner_artifacts, runner_credential_sync, runner_failures, runner_flow_scheduler, runner_mailbox, runner_process_supervisor, runner_team_artifacts, runner_team_auth, runner_team_auth_pool, runner_team_cleanup, runner_worker_loop, runner_worker_maintenance, runner_worker_results, storage  # noqa: E402
 
 
@@ -1065,6 +1065,49 @@ class RunnerTeamArtifactsTests(unittest.TestCase):
 
 
 class RunnerFlowSchedulerTests(unittest.TestCase):
+    def test_runner_main_config_accepts_account_audit_input_source_dir_flow_spec(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            shared_root = output_root / "shared"
+            account_dir = Path(tmp_dir) / "account-audit-input"
+            claims_dir = account_dir / "_claims"
+            raw = json.dumps(
+                [
+                    {
+                        "name": "openai-account-availability-audit",
+                        "flowPath": (
+                            "server/services/orchestration_service/flows/"
+                            "openai-account-availability-audit-v1.semantic-flow.json"
+                        ),
+                        "instanceRole": "account-audit",
+                        "weight": 1,
+                        "taskMaxAttempts": 1,
+                        "inputSourceDir": str(account_dir),
+                        "inputClaimsDir": str(claims_dir),
+                        "concurrencyLimit": 1,
+                    }
+                ]
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_SHARED_ROOT": str(shared_root),
+                    "REGISTER_INSTANCE_ID": "mixed",
+                    "REGISTER_INSTANCE_ROLE": "mixed",
+                    "REGISTER_FLOW_SPECS_JSON": raw,
+                },
+                clear=True,
+            ):
+                specs = RunnerMainConfig.from_env().flow_specs
+
+        self.assertEqual(1, len(specs))
+        self.assertEqual("openai-account-availability-audit", specs[0].name)
+        self.assertEqual("account-audit", specs[0].instance_role)
+        self.assertEqual(str(account_dir), specs[0].input_source_dir)
+        self.assertEqual(str(claims_dir), specs[0].input_claims_dir)
+        self.assertEqual(1, specs[0].concurrency_limit)
+
     def test_choose_runnable_flow_spec_skips_empty_continue_pool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"
@@ -1191,6 +1234,39 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
         self.assertIsNone(selected)
         self.assertEqual("concurrency_limit_reached", selection["skipped"][0]["reason"])
 
+    def test_choose_runnable_flow_spec_selects_account_audit_input_source_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            shared_root = output_root / "shared"
+            account_dir = Path(tmp_dir) / "account-audit-input"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            (account_dir / "seed.json").write_text(
+                json.dumps({"email": "seed@example.com"}),
+                encoding="utf-8",
+            )
+            spec = RunnerFlowSpec(
+                name="openai-account-availability-audit",
+                flow_path="server/services/orchestration_service/flows/openai-account-availability-audit-v1.semantic-flow.json",
+                instance_role="account-audit",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=1,
+                openai_oauth_pool_dir=output_root / "openai" / "unused",
+                mailbox_business_key="openai-account-audit",
+                input_source_dir=str(account_dir),
+                input_claims_dir="",
+            )
+            selected, selection = runner_flow_scheduler.choose_runnable_flow_spec(
+                flow_specs=(spec,),
+                output_root=output_root,
+                shared_root=shared_root,
+            )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual("openai-account-availability-audit", selected.name)
+        self.assertEqual("input_source_dir_ready", selection["selected"]["reason"])
+        self.assertEqual(str(account_dir.resolve()), selection["selected"]["inputSourceDir"])
+
     def test_flow_slot_reserve_and_release_roundtrip(self) -> None:
         spec = RunnerFlowSpec(
             name="continue-openai",
@@ -1235,6 +1311,21 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
             active_flow_lock=None,
         )
         self.assertEqual({"continue-openai": 1}, counts)
+
+    def test_release_flow_slot_for_owner_decrements_stale_worker_slot(self) -> None:
+        counts: dict[str, int] = {"continue-openai": 2}
+        owners: dict[str, str] = {"worker-01": "continue-openai"}
+
+        released = runner_flow_scheduler.release_flow_slot_for_owner(
+            owner_id="worker-01",
+            active_flow_counts=counts,
+            active_flow_owners=owners,
+            active_flow_lock=None,
+        )
+
+        self.assertEqual("continue-openai", released)
+        self.assertEqual({"continue-openai": 1}, counts)
+        self.assertEqual({}, owners)
 
 
 class RunnerProcessSupervisorTests(unittest.TestCase):
@@ -1289,10 +1380,16 @@ class RunnerProcessSupervisorTests(unittest.TestCase):
         stop_event = mock.Mock()
         stop_event.is_set.return_value = False
         task_counter = SimpleNamespace(get_obj=lambda: SimpleNamespace(value=1))
+        active_flow_counts: dict[str, int] = {}
+        active_flow_owners: dict[str, str] = {}
         ctx = SimpleNamespace(
             Event=mock.Mock(return_value=stop_event),
             Value=mock.Mock(return_value=task_counter),
-            Manager=mock.Mock(return_value=SimpleNamespace(dict=lambda: {})),
+            Manager=mock.Mock(
+                return_value=SimpleNamespace(
+                    dict=mock.Mock(side_effect=[active_flow_counts, active_flow_owners])
+                )
+            ),
             Lock=mock.Mock(return_value=nullcontext()),
         )
         config = SimpleNamespace(
@@ -1335,6 +1432,74 @@ class RunnerProcessSupervisorTests(unittest.TestCase):
         events = [call.args[0]["event"] for call in json_log.call_args_list if call.args and isinstance(call.args[0], dict) and "event" in call.args[0]]
         self.assertIn("register_supervisor_finally_entered", events)
         self.assertIn("register_supervisor_stopped", events)
+
+    def test_main_releases_worker_owned_flow_slot_when_worker_crashes(self) -> None:
+        fake_process = mock.Mock()
+        fake_process.pid = 321
+        fake_process.exitcode = 1
+        fake_process.is_alive.return_value = False
+
+        stop_event = mock.Mock()
+        stop_event.is_set.side_effect = [False, False, False, False, True, True, True]
+        task_counter = SimpleNamespace(get_obj=lambda: SimpleNamespace(value=0))
+        active_flow_counts: dict[str, int] = {"openai-continue": 2}
+        active_flow_owners: dict[str, str] = {"worker-01": "openai-continue"}
+        manager = SimpleNamespace(
+            dict=mock.Mock(side_effect=[active_flow_counts, active_flow_owners]),
+            shutdown=mock.Mock(),
+        )
+        ctx = SimpleNamespace(
+            Event=mock.Mock(return_value=stop_event),
+            Value=mock.Mock(return_value=task_counter),
+            Manager=mock.Mock(return_value=manager),
+            Lock=mock.Mock(return_value=nullcontext()),
+        )
+        config = SimpleNamespace(
+            output_root=Path("C:/tmp/register-output"),
+            shared_root=Path("C:/tmp/register-output"),
+            openai_oauth_pool_dir=Path("C:/tmp/register-output/openai/pending"),
+            free_oauth_pool_dir=Path("C:/tmp/register-output/codex/free"),
+            flow_path="team-flow.json",
+            instance_id="mixed-test",
+            instance_role="mixed",
+            worker_count=1,
+            delay_seconds=0.0,
+            worker_stagger_seconds=0.0,
+            max_runs=0,
+            task_max_attempts=1,
+            flow_specs=(),
+            easy_protocol_base_url="http://easy-protocol:9788",
+            easy_protocol_control_token="secure-token",
+            easy_protocol_control_actor="register-dashboard",
+        )
+        service_state = mock.Mock()
+        with mock.patch.object(runner_process_supervisor, "_validate_runtime_preflight", return_value={}):
+            with mock.patch.object(runner_process_supervisor, "RunnerMainConfig") as config_cls:
+                config_cls.from_env.return_value = config
+                with mock.patch.object(runner_process_supervisor, "_ensure_directory"):
+                    with mock.patch.object(runner_process_supervisor, "cleanup_dashboard_worker_state_files"):
+                        with mock.patch.object(runner_process_supervisor, "ServiceRuntimeState", return_value=service_state):
+                            with mock.patch.object(runner_process_supervisor, "install_signal_handlers"):
+                                with mock.patch.object(runner_process_supervisor, "start_dashboard_server_if_enabled", return_value=None):
+                                    with mock.patch.object(runner_process_supervisor.mp, "get_context", return_value=ctx):
+                                        with mock.patch.object(runner_process_supervisor, "start_worker", return_value=fake_process):
+                                            with mock.patch.object(runner_process_supervisor, "_json_log") as json_log:
+                                                runner_process_supervisor.main()
+
+        self.assertEqual({"openai-continue": 1}, active_flow_counts)
+        self.assertEqual({}, active_flow_owners)
+        events = [
+            call.args[0]
+            for call in json_log.call_args_list
+            if call.args and isinstance(call.args[0], dict) and "event" in call.args[0]
+        ]
+        self.assertTrue(
+            any(
+                event.get("event") == "register_worker_flow_slot_recovered"
+                and event.get("slotKey") == "openai-continue"
+                for event in events
+            )
+        )
 
 
 class RunnerFailuresTests(unittest.TestCase):
@@ -3224,6 +3389,141 @@ class RunnerWorkerLoopTests(unittest.TestCase):
         self.assertEqual(str(flow_pool_dir.resolve()), run_once.call_args.kwargs["openai_oauth_pool_dir"])
         self.assertEqual(3, run_once.call_args.kwargs["task_max_attempts"])
         self.assertEqual("openai", run_once.call_args.kwargs["mailbox_business_key"])
+        self.assertFalse(run_once.call_args.kwargs["team_invite_enabled"])
+
+    def test_worker_loop_releases_reserved_slot_when_run_setup_crashes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            free_oauth_pool_dir = output_root / "codex" / "free"
+            flow_pool_dir = output_root / "openai" / "pending"
+            spec = RunnerFlowSpec(
+                name="main-openai",
+                flow_path="main-flow.json",
+                instance_role="main",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=2,
+                openai_oauth_pool_dir=flow_pool_dir,
+                mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
+            )
+            worker_state = mock.Mock()
+            active_counts: dict[str, int] = {}
+
+            def ensure_directory(path: Path) -> None:
+                if "run-" in str(path):
+                    raise OSError("simulated setup crash")
+                path.mkdir(parents=True, exist_ok=True)
+
+            with mock.patch.object(runner_worker_loop, "WorkerRuntimeState", return_value=worker_state):
+                with mock.patch.object(runner_worker_loop, "_ensure_directory", side_effect=ensure_directory):
+                    with mock.patch.object(runner_worker_loop, "_process_worker_maintenance"):
+                        with mock.patch.object(
+                            runner_worker_loop,
+                            "_choose_runnable_flow_spec",
+                            return_value=(spec, {"selected": {"name": "main-openai"}}),
+                        ):
+                            with mock.patch.object(runner_worker_loop, "claim_task_index", return_value=1):
+                                with mock.patch.object(
+                                    runner_worker_loop,
+                                    "_resolve_worker_team_auth",
+                                    return_value=SimpleNamespace(
+                                        team_auth_pool=[],
+                                        selected_team_auth_path="",
+                                        seat_reservation=None,
+                                    ),
+                                ):
+                                    with self.assertRaises(OSError):
+                                        runner_worker_loop.worker_loop(
+                                            worker_id=1,
+                                            instance_id="mixed",
+                                            instance_role="mixed",
+                                            output_root_text=str(output_root),
+                                            delay_seconds=0.0,
+                                            max_runs=1,
+                                            task_max_attempts=0,
+                                            flow_specs=(spec,),
+                                            stop_event=SimpleNamespace(is_set=lambda: False),
+                                            task_counter=SimpleNamespace(value=0),
+                                            free_oauth_pool_dir_text=str(free_oauth_pool_dir),
+                                            active_flow_counts=active_counts,
+                                        )
+
+        self.assertEqual({}, active_counts)
+
+    def test_worker_loop_runs_account_audit_flow_with_input_source_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            free_oauth_pool_dir = output_root / "codex" / "free"
+            account_dir = Path(tmp_dir) / "account-audit-input"
+            claims_dir = Path(tmp_dir) / "account-audit-claims"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            (account_dir / "seed.json").write_text(
+                json.dumps({"email": "seed@example.com"}),
+                encoding="utf-8",
+            )
+            flow_path = (
+                "server/services/orchestration_service/flows/"
+                "openai-account-availability-audit-v1.semantic-flow.json"
+            )
+            spec = RunnerFlowSpec(
+                name="openai-account-availability-audit",
+                flow_path=flow_path,
+                instance_role="account-audit",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=1,
+                openai_oauth_pool_dir=output_root / "openai" / "unused",
+                mailbox_business_key="openai-account-audit",
+                input_source_dir=str(account_dir),
+                input_claims_dir=str(claims_dir),
+            )
+            dummy_result = SimpleNamespace(
+                ok=True,
+                to_dict=lambda: {"ok": True, "steps": {}, "outputs": {}},
+            )
+            worker_state = mock.Mock()
+            with mock.patch.object(runner_worker_loop, "WorkerRuntimeState", return_value=worker_state):
+                with mock.patch.object(runner_worker_loop, "_process_worker_maintenance"):
+                    with mock.patch.object(
+                        runner_worker_loop,
+                        "_choose_runnable_flow_spec",
+                        return_value=(spec, {"selected": {"name": "openai-account-availability-audit"}}),
+                    ):
+                        with mock.patch.object(runner_worker_loop, "claim_task_index", side_effect=[1, None]):
+                            with mock.patch.object(
+                                runner_worker_loop,
+                                "_resolve_worker_team_auth",
+                                return_value=SimpleNamespace(
+                                    team_auth_pool=[],
+                                    selected_team_auth_path="",
+                                    seat_reservation=None,
+                                ),
+                            ):
+                                with mock.patch.object(runner_worker_loop, "run_dst_flow_once", return_value=dummy_result) as run_once:
+                                    with mock.patch.object(runner_worker_loop, "_process_worker_run_result", return_value=0.0):
+                                        with mock.patch("others.runner_worker_loop.time.sleep"):
+                                            runner_worker_loop.worker_loop(
+                                                worker_id=1,
+                                                instance_id="mixed",
+                                                instance_role="mixed",
+                                                output_root_text=str(output_root),
+                                                delay_seconds=0.0,
+                                                max_runs=1,
+                                                task_max_attempts=0,
+                                                flow_specs=(spec,),
+                                                stop_event=SimpleNamespace(is_set=lambda: False),
+                                                task_counter=SimpleNamespace(value=0),
+                                                free_oauth_pool_dir_text=str(free_oauth_pool_dir),
+                                            )
+
+        run_once.assert_called_once()
+        self.assertEqual(flow_path, run_once.call_args.kwargs["flow_path"])
+        self.assertEqual(str(account_dir), run_once.call_args.kwargs["input_source_dir"])
+        self.assertEqual(str(claims_dir), run_once.call_args.kwargs["input_claims_dir"])
+        self.assertEqual(1, run_once.call_args.kwargs["task_max_attempts"])
+        self.assertEqual("openai-account-audit", run_once.call_args.kwargs["mailbox_business_key"])
         self.assertFalse(run_once.call_args.kwargs["team_invite_enabled"])
 
     def test_worker_loop_releases_continue_slot_when_pool_empties_after_selection(self) -> None:

@@ -16,6 +16,10 @@ from others.artifact_pool_team_batch import (
     collect_team_pool_artifacts,
     finalize_team_batch,
 )
+from others.account_availability_audit import (
+    finalize_account_audit_result,
+    select_account_audit_targets,
+)
 
 
 def dispatch_orchestration_step(*, step_type: str, step_input: dict[str, Any]) -> dict[str, Any]:
@@ -40,4 +44,8 @@ def dispatch_orchestration_step(*, step_type: str, step_input: dict[str, Any]) -
         return collect_team_pool_artifacts(step_input=step_input)
     if normalized_step_type == "finalize_team_batch":
         return finalize_team_batch(step_input=step_input)
+    if normalized_step_type == "select_account_audit_targets":
+        return select_account_audit_targets(step_input=step_input)
+    if normalized_step_type == "finalize_account_audit_result":
+        return finalize_account_audit_result(step_input=step_input)
     raise RuntimeError(f"unsupported_orchestration_step:{normalized_step_type}")

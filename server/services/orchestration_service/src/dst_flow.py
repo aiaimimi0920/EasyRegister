@@ -47,6 +47,19 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--r2-region", default="", help="Optional R2 region override.")
     parser.add_argument("--r2-public-base-url", default="", help="Optional R2 public base url override.")
     parser.add_argument("--openai-oauth-pool-dir", default="", help="Optional pooled openai-oauth artifact directory.")
+    parser.add_argument("--account-file", default="", help="Optional single account credential JSON to audit.")
+    parser.add_argument("--account-dir", default="", help="Optional directory of account credential JSON files to audit.")
+    parser.add_argument("--account-claims-dir", default="", help="Optional account audit claims directory.")
+    parser.add_argument(
+        "--account-claim-mode",
+        action="store_true",
+        default=None,
+        help="Move directory-mode candidates into a claims directory before auditing.",
+    )
+    parser.add_argument("--account-max-targets", default="", help="Optional maximum account targets to select from a directory.")
+    parser.add_argument("--loginable-dir", default="", help="Optional destination for accounts that can log in.")
+    parser.add_argument("--deleted-dir", default="", help="Optional destination for accounts confirmed deleted or disabled.")
+    parser.add_argument("--audit-path", default="", help="Optional account availability audit JSONL path.")
     parser.add_argument("--flow-path", default="", help="Optional semantic flow json path.")
     parser.add_argument("--task-max-attempts", default="", help="Optional task-level retry attempts override.")
     parser.add_argument("--mailbox-business-key", default="", help="Optional mailbox business key override for this task.")
@@ -74,6 +87,14 @@ def main() -> int:
         r2_region=str(args.r2_region or "").strip() or None,
         r2_public_base_url=str(args.r2_public_base_url or "").strip() or None,
         openai_oauth_pool_dir=str(args.openai_oauth_pool_dir or "").strip() or None,
+        account_file=str(args.account_file or "").strip() or None,
+        account_dir=str(args.account_dir or "").strip() or None,
+        account_claims_dir=str(args.account_claims_dir or "").strip() or None,
+        account_claim_mode=args.account_claim_mode,
+        account_max_targets=int(str(args.account_max_targets or "").strip()) if str(args.account_max_targets or "").strip() else None,
+        loginable_dir=str(args.loginable_dir or "").strip() or None,
+        deleted_dir=str(args.deleted_dir or "").strip() or None,
+        audit_path=str(args.audit_path or "").strip() or None,
         flow_path=str(args.flow_path or "").strip() or None,
         task_max_attempts=int(str(args.task_max_attempts or "").strip()) if str(args.task_max_attempts or "").strip() else None,
         mailbox_business_key=str(args.mailbox_business_key or "").strip() or None,

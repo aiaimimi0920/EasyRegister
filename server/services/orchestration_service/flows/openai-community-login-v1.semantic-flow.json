@@ -1,0 +1,103 @@
+{
+  "definition": {
+    "version": "1",
+    "id": "openai-community-login-v1",
+    "name": "OpenAI Community Login Flow",
+    "platform": "openai-community-login",
+    "kind": "semantic-flow",
+    "description": "Claim a small-success OpenAI account artifact and verify that it can log in to community.openai.com through browser-backed OpenAI web login.",
+    "metadata": {
+      "taskRetry": {
+        "maxAttempts": 2,
+        "backoffSeconds": 3,
+        "retryProfile": "task-openai-community-login",
+        "retryOnSteps": [
+          "acquire-proxy-chain",
+          "login-openai-community"
+        ]
+      }
+    },
+    "steps": [
+      {
+        "id": "claim-small-success-artifact",
+        "type": "acquire_configured_input_file",
+        "metadata": {
+          "owner": "orchestration",
+          "stage": "input-claim"
+        },
+        "input": {
+          "input_source_dir": "{{task.input_source_dir}}",
+          "input_claims_dir": "{{task.input_claims_dir}}"
+        },
+        "saveAs": "input_artifact"
+      },
+      {
+        "id": "acquire-proxy-chain",
+        "type": "acquire_proxy_chain",
+        "input": {
+          "flow_name": "openai_community_login_task",
+          "metadata": {
+            "taskAttempt": "{{task.taskAttempt}}",
+            "flowId": "{{task.flow_id}}"
+          },
+          "probe_url": "https://community.openai.com/",
+          "probe_urls": [
+            "https://community.openai.com/",
+            "https://auth.openai.com/log-in-or-create-account",
+            "https://auth.openai.com/api/accounts/authorize"
+          ],
+          "probe_expected_statuses": [
+            200
+          ],
+          "avoid_proxy_urls": "{{task.avoidProxyUrls}}",
+          "required": true,
+          "max_acquire_attempts": 4
+        },
+        "saveAs": "proxy_chain",
+        "metadata": {
+          "owner": "easyproxy",
+          "stage": "proxy-acquire"
+        }
+      },
+      {
+        "id": "login-openai-community",
+        "type": "login_openai_community",
+        "input": {
+          "source_path": "{{input_artifact.claimed_path}}",
+          "proxy_url": "{{proxy_chain.proxy_url}}",
+          "startup_url": "https://community.openai.com/",
+          "success_url_prefix": "https://community.openai.com/",
+          "mailbox_ref": "{{input_artifact.mailbox_ref}}",
+          "mailbox_session_id": "{{input_artifact.session_id}}"
+        },
+        "saveAs": "community_login",
+        "metadata": {
+          "owner": "easyprotocol",
+          "stage": "community-login",
+          "retry": {
+            "maxAttempts": 2,
+            "backoffSeconds": 2,
+            "retryProfile": "step-community-login-recover",
+            "refreshSavedStates": [
+              "proxy_chain"
+            ]
+          }
+        }
+      },
+      {
+        "id": "release-proxy-chain",
+        "type": "release_proxy_chain",
+        "input": {
+          "proxy_chain": "{{proxy_chain}}",
+          "error_code": "{{task.errorCode}}"
+        },
+        "saveAs": "release_proxy_chain",
+        "metadata": {
+          "owner": "easyproxy",
+          "stage": "cleanup",
+          "alwaysRun": true
+        }
+      }
+    ]
+  }
+}

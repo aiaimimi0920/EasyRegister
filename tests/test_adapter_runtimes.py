@@ -4701,7 +4701,7 @@ class RuntimeMailboxTests(unittest.TestCase):
         ), mock.patch.object(
             easy_email_client.time,
             "time",
-            side_effect=[0, 0, 0, 11],
+            side_effect=[0, 0, 3, 3],
         ), mock.patch.object(
             easy_email_client.time,
             "sleep",
@@ -4718,6 +4718,49 @@ class RuntimeMailboxTests(unittest.TestCase):
             )
 
         self.assertEqual("654321", code)
+
+    def test_wait_openai_code_accepts_snapshot_code_when_marker_is_zero(self) -> None:
+        with mock.patch.object(
+            easy_email_client,
+            "_resolve_openai_code_floor",
+            return_value=123,
+        ), mock.patch.object(
+            easy_email_client,
+            "_get_json",
+            return_value={"code": {}},
+        ), mock.patch.object(
+            easy_email_client,
+            "_snapshot_session_openai_code",
+            return_value=("220207", 0),
+        ) as snapshot_code, mock.patch.object(
+            easy_email_client,
+            "_mail_service_base_url",
+            return_value="http://easy-email:8080",
+        ), mock.patch.object(
+            easy_email_client,
+            "_probe_mail_service",
+            return_value="ok:200",
+        ), mock.patch.object(
+            easy_email_client.time,
+            "time",
+            side_effect=[0, 0, 3, 3],
+        ), mock.patch.object(
+            easy_email_client.time,
+            "sleep",
+            return_value=None,
+        ), mock.patch.dict(
+            os.environ,
+            {"MAILBOX_POLL_INTERVAL_SECONDS": "1"},
+            clear=False,
+        ):
+            code = easy_email_client.wait_openai_code(
+                mailbox_ref="moemail:mailbox_123",
+                session_id="mailbox_123",
+                timeout_seconds=10,
+            )
+
+        self.assertEqual("220207", code)
+        snapshot_code.assert_called_once_with(session_id="mailbox_123", min_mail_id=123, allow_min_mail_id_equal=True)
 
     def test_release_mailbox_client_treats_missing_session_as_not_found(self) -> None:
         with mock.patch.object(

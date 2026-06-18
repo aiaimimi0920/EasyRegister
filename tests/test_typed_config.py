@@ -322,11 +322,11 @@ class TypedConfigTests(unittest.TestCase):
                 config = RunnerMainConfig.from_env()
 
         self.assertEqual(
-            ["openai-main", "openai-continue", "codex-team-expand"],
+            ["openai-main", "openai-continue", "openai-account-availability-audit", "codex-team-expand"],
             [spec.name for spec in config.flow_specs],
         )
         self.assertEqual(
-            ["main", "continue", "team"],
+            ["main", "continue", "account-audit", "team"],
             [spec.instance_role for spec in config.flow_specs],
         )
         self.assertEqual(
@@ -336,10 +336,36 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual(5, config.flow_specs[0].concurrency_limit)
         self.assertEqual(2, config.flow_specs[1].concurrency_limit)
         self.assertEqual(1, config.flow_specs[2].concurrency_limit)
+        self.assertEqual(1, config.flow_specs[3].concurrency_limit)
+        self.assertEqual(
+            "openai-account-availability-audit-v1.semantic-flow.json",
+            Path(config.flow_specs[2].flow_path).name,
+        )
+        self.assertEqual(str(output_root.resolve()), config.flow_specs[2].input_source_dir)
         self.assertEqual(
             "codex-openai-account-v1.semantic-flow.json",
             Path(config.flow_specs[0].flow_path).name,
         )
+
+    def test_runner_main_config_mixed_account_audit_scans_shared_root_when_output_root_is_runs_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "register-output"
+            output_root = shared_root / "others" / "mixed-runs"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_INSTANCE_ID": "easy-register",
+                    "REGISTER_INSTANCE_ROLE": "mixed",
+                    "REGISTER_FLOW_PATH": "",
+                    "REGISTER_FLOW_SPECS_JSON": "[",
+                },
+                clear=True,
+            ):
+                config = RunnerMainConfig.from_env()
+
+        self.assertEqual("account-audit", config.flow_specs[2].instance_role)
+        self.assertEqual(str(shared_root.resolve()), config.flow_specs[2].input_source_dir)
 
     def test_proxy_runtime_config_normalizes_mode_and_fallbacks(self) -> None:
         with mock.patch.dict(

@@ -295,6 +295,7 @@ def _parse_mail_timestamp(value: str) -> int:
     if not text:
         return 0
     normalized = text.replace("Z", "+00:00")
+    normalized = re.sub(r"(\.\d{6})\d+([+-]\d{2}:\d{2})$", r"\1\2", normalized)
     try:
         dt = datetime.fromisoformat(normalized)
     except Exception:
@@ -1057,7 +1058,12 @@ def wait_openai_code(
                 if allow_auto_floor_equal:
                     snapshot_kwargs["allow_min_mail_id_equal"] = True
                 snapshot_code, snapshot_marker = _snapshot_session_openai_code(**snapshot_kwargs)
-                if snapshot_code:
+                if snapshot_code and (
+                    snapshot_marker <= 0
+                    or code_floor <= 0
+                    or snapshot_marker > code_floor
+                    or (allow_auto_floor_equal and snapshot_marker == code_floor)
+                ):
                     print(
                         "[mailbox] wait_openai_code snapshot_fallback "
                         f"session_id={effective_session_id} code_len={len(snapshot_code)} code_marker={snapshot_marker}"
