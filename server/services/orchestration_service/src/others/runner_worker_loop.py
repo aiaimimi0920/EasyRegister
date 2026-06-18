@@ -100,6 +100,7 @@ def _flow_spec_post_reserve_runnable_state(
         output_root=output_root,
         shared_root=shared_root,
         active_flow_counts=None,
+        check_account_audit_due_targets=True,
     )
     normalized_role = str(selected_flow_spec.instance_role or "").strip().lower()
     if normalized_role != "continue" or not bool(state.get("ready")):
@@ -249,7 +250,7 @@ def worker_loop(
             time.sleep(1.0)
             continue
         normalized_role = str(selected_flow_spec.instance_role or "").strip().lower()
-        if normalized_role == "continue":
+        if normalized_role in {"continue", "account-audit"}:
             post_reserve_state = _flow_spec_post_reserve_runnable_state(
                 selected_flow_spec=selected_flow_spec,
                 output_root=output_root,

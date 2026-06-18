@@ -1267,6 +1267,37 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
         self.assertEqual("input_source_dir_ready", selection["selected"]["reason"])
         self.assertEqual(str(account_dir.resolve()), selection["selected"]["inputSourceDir"])
 
+    def test_choose_runnable_flow_spec_does_not_deep_scan_account_audit_production_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            output_root.mkdir(parents=True, exist_ok=True)
+            spec = RunnerFlowSpec(
+                name="openai-account-availability-audit",
+                flow_path="server/services/orchestration_service/flows/openai-account-availability-audit-v1.semantic-flow.json",
+                instance_role="account-audit",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=1,
+                openai_oauth_pool_dir=output_root / "openai" / "unused",
+                mailbox_business_key="openai-account-audit",
+                input_source_dir=str(output_root),
+                input_claims_dir="",
+            )
+            with mock.patch.object(
+                runner_flow_scheduler,
+                "production_audit_has_due_targets",
+                side_effect=AssertionError("scheduler must not deep scan production audit pools"),
+            ):
+                selected, selection = runner_flow_scheduler.choose_runnable_flow_spec(
+                    flow_specs=(spec,),
+                    output_root=output_root,
+                    shared_root=output_root,
+                )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual("openai-account-availability-audit", selected.name)
+        self.assertEqual("production_pool_maybe_ready", selection["selected"]["reason"])
+
     def test_flow_slot_reserve_and_release_roundtrip(self) -> None:
         spec = RunnerFlowSpec(
             name="continue-openai",

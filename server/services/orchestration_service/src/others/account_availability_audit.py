@@ -4,6 +4,7 @@ import json
 import shutil
 import time
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -155,21 +156,19 @@ def _is_excluded_production_path(path: Path) -> bool:
     return any(part in excluded_names or part.startswith(".") for part in path.parts)
 
 
-def _production_candidate_paths(output_root: Path) -> list[Path]:
-    candidates: list[Path] = []
+def _production_candidate_paths(output_root: Path) -> Iterable[Path]:
     seen: set[str] = set()
     for root in _production_pool_roots(output_root):
         if not root.is_dir():
             continue
         iterator = root.rglob("*.json") if root.name == "codex" else root.glob("*.json")
-        for path in sorted(iterator, key=lambda item: str(item).lower()):
+        for path in iterator:
             if path.is_file() and not _is_excluded_production_path(path):
                 resolved = path.resolve()
                 key = str(resolved).lower()
                 if key not in seen:
                     seen.add(key)
-                    candidates.append(resolved)
-    return candidates
+                    yield resolved
 
 
 def _next_check_at(payload: dict[str, Any]) -> datetime | None:
@@ -284,21 +283,14 @@ def select_account_audit_targets(*, step_input: dict[str, Any]) -> dict[str, Any
         production_max_targets = max_targets if max_targets > 0 else 1
         now = _utc_now()
         for candidate in _production_candidate_paths(output_root):
+            if len(targets) >= production_max_targets:
+                break
             target, skipped_item = _production_target_from_file(path=candidate, now=now)
             if skipped_item is not None:
                 skipped.append(skipped_item)
                 continue
             if target is not None:
-                if len(targets) < production_max_targets:
-                    targets.append(target)
-                else:
-                    skipped.append(
-                        {
-                            "source_path": str(candidate),
-                            "email": _as_text(target.get("email")),
-                            "reason": "max_targets_reached",
-                        }
-                    )
+                targets.append(target)
     elif account_file_text:
         account_file = Path(account_file_text).expanduser().resolve()
         if not account_file.is_file():

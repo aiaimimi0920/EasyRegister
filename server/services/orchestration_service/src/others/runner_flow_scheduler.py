@@ -174,6 +174,7 @@ def flow_spec_runnable_state(
     output_root: Path,
     shared_root: Path,
     active_flow_counts: dict[str, int] | None = None,
+    check_account_audit_due_targets: bool = False,
 ) -> dict[str, Any]:
     summary = flow_spec_summary(spec)
     normalized_role = normalize_flow_role(spec.instance_role)
@@ -191,8 +192,22 @@ def flow_spec_runnable_state(
     if normalized_role == "account-audit":
         configured_root = str(spec.input_source_dir or "").strip()
         output_root_for_audit = Path(configured_root).expanduser().resolve() if configured_root else output_root
-        production_ready = production_audit_has_due_targets(output_root=output_root_for_audit)
         configured_input_ready = bool(configured_root) and _path_has_json_files(output_root_for_audit)
+        if not check_account_audit_due_targets:
+            ready = configured_input_ready or bool(configured_root)
+            return {
+                **summary,
+                "ready": ready,
+                "reason": (
+                    "input_source_dir_ready"
+                    if configured_input_ready
+                    else "production_pool_maybe_ready"
+                    if ready
+                    else "production_pool_root_missing"
+                ),
+                "productionOutputRoot": str(output_root_for_audit),
+            }
+        production_ready = production_audit_has_due_targets(output_root=output_root_for_audit)
         ready = production_ready or configured_input_ready
         return {
             **summary,

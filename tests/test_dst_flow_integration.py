@@ -55,16 +55,54 @@ class DstFlowIntegrationTests(unittest.TestCase):
                 step_input={
                     "production_mode": True,
                     "output_root": str(output_root),
-                    "max_targets": 1,
+                    "max_targets": 2,
                 }
             )
 
         self.assertTrue(result["ok"])
         self.assertEqual("production-pools", result["mode"])
-        self.assertEqual(1, result["target_count"])
+        self.assertEqual(2, result["target_count"])
         self.assertEqual("ready@example.com", result["targets"][0]["email"])
+        self.assertEqual("codex-ready@example.com", result["targets"][1]["email"])
         skipped_by_email = {item["email"]: item["reason"] for item in result["skipped"]}
         self.assertEqual("next_check_in_future", skipped_by_email["future@example.com"])
+
+    def test_account_availability_audit_production_selection_stops_after_max_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            failed_twice = output_root / "openai" / "failed-twice"
+            for directory in (converted, failed_twice):
+                directory.mkdir(parents=True, exist_ok=True)
+            ready_path = converted / "a-ready.json"
+            later_path = failed_twice / "z-later.json"
+            ready_path.write_text(json.dumps({"email": "ready@example.com"}), encoding="utf-8")
+            later_path.write_text(json.dumps({"email": "later@example.com"}), encoding="utf-8")
+
+            original_read_json_object = account_availability_audit._read_json_object
+            read_paths: list[Path] = []
+
+            def _tracking_read_json_object(path: Path) -> dict[str, object]:
+                read_paths.append(path)
+                return original_read_json_object(path)
+
+            with mock.patch.object(
+                account_availability_audit,
+                "_read_json_object",
+                side_effect=_tracking_read_json_object,
+            ):
+                result = account_availability_audit.select_account_audit_targets(
+                    step_input={
+                        "production_mode": True,
+                        "output_root": str(output_root),
+                        "max_targets": 1,
+                    }
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(1, result["target_count"])
+        self.assertEqual("ready@example.com", result["targets"][0]["email"])
+        self.assertEqual([ready_path.resolve(), ready_path.resolve()], read_paths)
 
     def test_account_availability_audit_production_deleted_removes_same_email_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
