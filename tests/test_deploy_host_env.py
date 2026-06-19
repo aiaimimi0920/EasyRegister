@@ -111,6 +111,72 @@ class DeployHostEnvTests(unittest.TestCase):
             self.assertIn('"providerBlacklist":["hero_sms"]', policies)
             self.assertIn('"allowPaid":false', policies)
 
+    def test_materialize_only_generates_result_pool_mounts_for_credential_root(self) -> None:
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        if not powershell:
+            self.skipTest("PowerShell not available")
+
+        with tempfile.TemporaryDirectory(prefix="easyregister-deploy-host-") as temp:
+            launcher_root = Path(temp)
+            script_path = launcher_root / "deploy-host.ps1"
+            shutil.copyfile(DEPLOY_HOST, script_path)
+            credential_root = launcher_root / "nas-oauth"
+
+            command = [powershell, "-NoProfile"]
+            if Path(powershell).name.lower().startswith("powershell"):
+                command.extend(["-ExecutionPolicy", "Bypass"])
+            command.extend(
+                [
+                    "-File",
+                    str(script_path),
+                    "-RepoCacheRoot",
+                    str(REPO_ROOT),
+                    "-OutputDirHost",
+                    str(launcher_root / "runtime" / "register-output"),
+                    "-CredentialRootHost",
+                    str(credential_root),
+                    "-MailboxServiceApiKey",
+                    "mailbox-test-key",
+                    "-EasyProxyApiKey",
+                    "proxy-test-key",
+                    "-SmsServiceApiKey",
+                    "sms-test-key",
+                    "-Image",
+                    "ghcr.io/example/easyregister:test",
+                    "-MaterializeOnly",
+                    "-NoBuild",
+                ]
+            )
+
+            result = subprocess.run(
+                command,
+                cwd=launcher_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                0,
+                result.returncode,
+                msg=(result.stderr or result.stdout).strip(),
+            )
+
+            env_values = _read_dotenv(launcher_root / ".deploy-compose.env")
+            self.assertEqual(str(credential_root), env_values.get("REGISTER_CREDENTIAL_ROOT_HOST"))
+            self.assertEqual(str(credential_root / "codex"), env_values.get("REGISTER_CODEX_ROOT_DIR_HOST"))
+            self.assertEqual(str(credential_root / "openai"), env_values.get("REGISTER_OPENAI_ROOT_DIR_HOST"))
+
+            override_payload = (launcher_root / ".deploy-compose.result-pools.generated.yaml").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(str(credential_root / "codex").replace("\\", "/"), override_payload)
+            self.assertIn('target: "/shared/register-output/codex"', override_payload)
+            self.assertIn(str(credential_root / "openai").replace("\\", "/"), override_payload)
+            self.assertIn('target: "/shared/register-output/openai"', override_payload)
+            self.assertTrue((credential_root / "codex" / "free").is_dir())
+            self.assertTrue((credential_root / "openai" / "converted").is_dir())
+            self.assertTrue((launcher_root / "runtime" / "register-output" / "others").is_dir())
+
     def test_materialize_only_autodetects_majority_easyprotocol_provider_output_mount(self) -> None:
         powershell = shutil.which("powershell") or shutil.which("pwsh")
         if not powershell:

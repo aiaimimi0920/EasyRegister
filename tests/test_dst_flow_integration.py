@@ -67,6 +67,35 @@ class DstFlowIntegrationTests(unittest.TestCase):
         skipped_by_email = {item["email"]: item["reason"] for item in result["skipped"]}
         self.assertEqual("next_check_in_future", skipped_by_email["future@example.com"])
 
+    def test_account_availability_audit_production_selection_does_not_rely_on_codex_root_rglob(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            codex_free = output_root / "codex" / "free"
+            codex_free.mkdir(parents=True, exist_ok=True)
+            (codex_free / "codex-ready.json").write_text(
+                json.dumps({"email": "codex-ready@example.com"}),
+                encoding="utf-8",
+            )
+
+            original_rglob = Path.rglob
+
+            def guarded_rglob(path: Path, pattern: str):
+                if path == (output_root / "codex"):
+                    raise AssertionError("codex root rglob would skip linked result pool directories")
+                return original_rglob(path, pattern)
+
+            with mock.patch.object(Path, "rglob", guarded_rglob):
+                result = account_availability_audit.select_account_audit_targets(
+                    step_input={
+                        "production_mode": True,
+                        "output_root": str(output_root),
+                        "max_targets": 1,
+                    }
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("codex-ready@example.com", result["targets"][0]["email"])
+
     def test_account_availability_audit_production_selection_stops_after_max_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"

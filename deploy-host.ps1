@@ -1,5 +1,10 @@
 param(
     [string]$OutputDirHost = "",
+    [string]$CredentialRootHost = "",
+    [string]$CodexRootDirHost = "",
+    [string]$OpenaiRootDirHost = "",
+    [string]$CodexRootDockerSource = "",
+    [string]$OpenaiRootDockerSource = "",
     [string]$ImportCode = "",
     [string]$BootstrapFile = "",
     [string]$ComposeFile = "",
@@ -414,6 +419,100 @@ function New-ProtocolBridgeMountOverrideFile {
     }
 }
 
+function Ensure-ResultPoolDirectories {
+    param(
+        [string]$OutputDirHost,
+        [string]$CodexRootDirHost,
+        [string]$OpenaiRootDirHost
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($OutputDirHost)) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $OutputDirHost "others") | Out-Null
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($CodexRootDirHost)) {
+        foreach ($relative in @(
+            "free",
+            "team",
+            "plus",
+            "team-input",
+            "team-mother-input"
+        )) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $CodexRootDirHost $relative) | Out-Null
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($OpenaiRootDirHost)) {
+        foreach ($relative in @(
+            "pending",
+            "converted",
+            "failed-once",
+            "failed-twice"
+        )) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $OpenaiRootDirHost $relative) | Out-Null
+        }
+    }
+}
+
+function Convert-ResultPoolMountSource {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$HostPath,
+        [string]$DockerSource = ""
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($DockerSource)) {
+        return $DockerSource
+    }
+    return Convert-HostPathToComposeSource -Path $HostPath
+}
+
+function New-ResultPoolMountOverrideFile {
+    param(
+        [string]$CodexRootDirHost,
+        [string]$OpenaiRootDirHost,
+        [string]$CodexRootDockerSource = "",
+        [string]$OpenaiRootDockerSource = "",
+        [Parameter(Mandatory = $true)]
+        [string]$OverridePath
+    )
+
+    $mounts = @()
+    if (-not [string]::IsNullOrWhiteSpace($CodexRootDirHost)) {
+        $mounts += [pscustomobject]@{
+            SourcePath = $CodexRootDirHost
+            Source     = Convert-ResultPoolMountSource -HostPath $CodexRootDirHost -DockerSource $CodexRootDockerSource
+            TargetPath = "/shared/register-output/codex"
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($OpenaiRootDirHost)) {
+        $mounts += [pscustomobject]@{
+            SourcePath = $OpenaiRootDirHost
+            Source     = Convert-ResultPoolMountSource -HostPath $OpenaiRootDirHost -DockerSource $OpenaiRootDockerSource
+            TargetPath = "/shared/register-output/openai"
+        }
+    }
+
+    if ($mounts.Count -eq 0) {
+        if (Test-Path -LiteralPath $OverridePath) {
+            Remove-Item -LiteralPath $OverridePath -Force
+        }
+        return @()
+    }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('services:')
+    $lines.Add('  easy-register:')
+    $lines.Add('    volumes:')
+    foreach ($mount in $mounts) {
+        $lines.Add('      - type: bind')
+        $lines.Add(("        source: ""{0}""" -f $mount.Source))
+        $lines.Add(("        target: ""{0}""" -f $mount.TargetPath))
+    }
+    Set-Content -LiteralPath $OverridePath -Value $lines -Encoding ASCII
+    return $mounts
+}
+
 function New-AliasMountOverrideFile {
     param(
         [Parameter(Mandatory = $true)]
@@ -743,6 +842,24 @@ $resolvedOpenaiUploadPercent = Resolve-EnvValue -ParameterName 'OpenaiUploadPerc
 $resolvedCodexFreeUploadPercent = Resolve-EnvValue -ParameterName 'CodexFreeUploadPercent' -RuntimeKey 'REGISTER_CODEX_FREE_UPLOAD_PERCENT' -Fallback '0'
 $resolvedCodexTeamUploadPercent = Resolve-EnvValue -ParameterName 'CodexTeamUploadPercent' -RuntimeKey 'REGISTER_CODEX_TEAM_UPLOAD_PERCENT' -Fallback '0'
 $resolvedCodexPlusUploadPercent = Resolve-EnvValue -ParameterName 'CodexPlusUploadPercent' -RuntimeKey 'REGISTER_CODEX_PLUS_UPLOAD_PERCENT' -Fallback '0'
+$resolvedCredentialRootHost = Resolve-EnvValue -ParameterName 'CredentialRootHost' -RuntimeKey 'REGISTER_CREDENTIAL_ROOT_HOST' -Fallback ''
+$resolvedCodexRootDirHost = Resolve-EnvValue -ParameterName 'CodexRootDirHost' -RuntimeKey 'REGISTER_CODEX_ROOT_DIR_HOST' -Fallback ''
+$resolvedOpenaiRootDirHost = Resolve-EnvValue -ParameterName 'OpenaiRootDirHost' -RuntimeKey 'REGISTER_OPENAI_ROOT_DIR_HOST' -Fallback ''
+$resolvedCodexRootDockerSource = Resolve-EnvValue -ParameterName 'CodexRootDockerSource' -RuntimeKey 'REGISTER_CODEX_ROOT_DOCKER_SOURCE' -Fallback ''
+$resolvedOpenaiRootDockerSource = Resolve-EnvValue -ParameterName 'OpenaiRootDockerSource' -RuntimeKey 'REGISTER_OPENAI_ROOT_DOCKER_SOURCE' -Fallback ''
+if (-not [string]::IsNullOrWhiteSpace($resolvedCredentialRootHost)) {
+    $resolvedCredentialRootHost = Resolve-AbsolutePath -Path $resolvedCredentialRootHost -BaseDir $launcherRoot
+}
+if (-not [string]::IsNullOrWhiteSpace($resolvedCodexRootDirHost)) {
+    $resolvedCodexRootDirHost = Resolve-AbsolutePath -Path $resolvedCodexRootDirHost -BaseDir $launcherRoot
+} elseif (-not [string]::IsNullOrWhiteSpace($resolvedCredentialRootHost)) {
+    $resolvedCodexRootDirHost = Join-Path $resolvedCredentialRootHost "codex"
+}
+if (-not [string]::IsNullOrWhiteSpace($resolvedOpenaiRootDirHost)) {
+    $resolvedOpenaiRootDirHost = Resolve-AbsolutePath -Path $resolvedOpenaiRootDirHost -BaseDir $launcherRoot
+} elseif (-not [string]::IsNullOrWhiteSpace($resolvedCredentialRootHost)) {
+    $resolvedOpenaiRootDirHost = Join-Path $resolvedCredentialRootHost "openai"
+}
 $resolvedEasyProtocolBaseUrl = if ($importedRuntimeValues.ContainsKey('EASY_PROTOCOL_BASE_URL')) { [string]$importedRuntimeValues['EASY_PROTOCOL_BASE_URL'] } else { [string]$env:EASY_PROTOCOL_BASE_URL }
 $resolvedEasyProtocolControlToken = if ($importedRuntimeValues.ContainsKey('EASY_PROTOCOL_CONTROL_TOKEN')) { [string]$importedRuntimeValues['EASY_PROTOCOL_CONTROL_TOKEN'] } else { [string]$env:EASY_PROTOCOL_CONTROL_TOKEN }
 $resolvedDashboardEnabled = if ($deployBoundParameters.ContainsKey('DashboardEnabled')) {
@@ -795,8 +912,21 @@ if (-not [string]::IsNullOrWhiteSpace($resolvedProtocolRegisterOutputDirHost)) {
     $resolvedProtocolOutputTargetDir = "/shared/register-output"
 }
 
+$usesResultPoolRoot = (-not [string]::IsNullOrWhiteSpace($resolvedCodexRootDirHost)) -or (-not [string]::IsNullOrWhiteSpace($resolvedOpenaiRootDirHost))
+$effectiveTeamAuthDirHost = if ($deployBoundParameters.ContainsKey('TeamAuthDirHost')) {
+    $TeamAuthDirHost
+} elseif ($usesResultPoolRoot -and -not [string]::IsNullOrWhiteSpace($resolvedCodexRootDirHost)) {
+    Join-Path $resolvedCodexRootDirHost "team-input"
+} else {
+    $TeamAuthDirHost
+}
+$effectiveCodexFreeDirHost = if ($deployBoundParameters.ContainsKey('CodexFreeDirHost') -or -not $usesResultPoolRoot) { $CodexFreeDirHost } else { "" }
+$effectiveCodexTeamDirHost = if ($deployBoundParameters.ContainsKey('CodexTeamDirHost') -or -not $usesResultPoolRoot) { $CodexTeamDirHost } else { "" }
+$effectiveCodexTeamInputDirHost = if ($deployBoundParameters.ContainsKey('CodexTeamInputDirHost') -or -not $usesResultPoolRoot) { $CodexTeamInputDirHost } else { "" }
+$effectiveCodexTeamMotherInputDirHost = if ($deployBoundParameters.ContainsKey('CodexTeamMotherInputDirHost') -or -not $usesResultPoolRoot) { $CodexTeamMotherInputDirHost } else { "" }
+
 $env:REGISTER_OUTPUT_DIR_HOST = $resolvedOutputDirHost
-$env:REGISTER_TEAM_AUTH_DIR_HOST = $TeamAuthDirHost
+$env:REGISTER_TEAM_AUTH_DIR_HOST = $effectiveTeamAuthDirHost
 $env:REGISTER_DASHBOARD_PORT_HOST = $DashboardPortHost
 $env:REGISTER_CONTAINER_NAME = $ContainerName
 $env:REGISTER_INSTANCE_ID = $InstanceId
@@ -885,17 +1015,32 @@ if (-not [string]::IsNullOrWhiteSpace($Image)) {
     }
 }
 
-if (-not [string]::IsNullOrWhiteSpace($CodexFreeDirHost)) {
-    $env:REGISTER_CODEX_FREE_DIR_HOST = $CodexFreeDirHost
+if (-not [string]::IsNullOrWhiteSpace($resolvedCredentialRootHost)) {
+    $env:REGISTER_CREDENTIAL_ROOT_HOST = $resolvedCredentialRootHost
 }
-if (-not [string]::IsNullOrWhiteSpace($CodexTeamDirHost)) {
-    $env:REGISTER_CODEX_TEAM_DIR_HOST = $CodexTeamDirHost
+if (-not [string]::IsNullOrWhiteSpace($resolvedCodexRootDirHost)) {
+    $env:REGISTER_CODEX_ROOT_DIR_HOST = $resolvedCodexRootDirHost
 }
-if (-not [string]::IsNullOrWhiteSpace($CodexTeamInputDirHost)) {
-    $env:REGISTER_CODEX_TEAM_INPUT_DIR_HOST = $CodexTeamInputDirHost
+if (-not [string]::IsNullOrWhiteSpace($resolvedOpenaiRootDirHost)) {
+    $env:REGISTER_OPENAI_ROOT_DIR_HOST = $resolvedOpenaiRootDirHost
 }
-if (-not [string]::IsNullOrWhiteSpace($CodexTeamMotherInputDirHost)) {
-    $env:REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST = $CodexTeamMotherInputDirHost
+if (-not [string]::IsNullOrWhiteSpace($resolvedCodexRootDockerSource)) {
+    $env:REGISTER_CODEX_ROOT_DOCKER_SOURCE = $resolvedCodexRootDockerSource
+}
+if (-not [string]::IsNullOrWhiteSpace($resolvedOpenaiRootDockerSource)) {
+    $env:REGISTER_OPENAI_ROOT_DOCKER_SOURCE = $resolvedOpenaiRootDockerSource
+}
+if (-not [string]::IsNullOrWhiteSpace($effectiveCodexFreeDirHost)) {
+    $env:REGISTER_CODEX_FREE_DIR_HOST = $effectiveCodexFreeDirHost
+}
+if (-not [string]::IsNullOrWhiteSpace($effectiveCodexTeamDirHost)) {
+    $env:REGISTER_CODEX_TEAM_DIR_HOST = $effectiveCodexTeamDirHost
+}
+if (-not [string]::IsNullOrWhiteSpace($effectiveCodexTeamInputDirHost)) {
+    $env:REGISTER_CODEX_TEAM_INPUT_DIR_HOST = $effectiveCodexTeamInputDirHost
+}
+if (-not [string]::IsNullOrWhiteSpace($effectiveCodexTeamMotherInputDirHost)) {
+    $env:REGISTER_CODEX_TEAM_MOTHER_INPUT_DIR_HOST = $effectiveCodexTeamMotherInputDirHost
 }
 $env:REGISTER_OPENAI_UPLOAD_PERCENT = [string]$resolvedOpenaiUploadPercent
 $env:REGISTER_CODEX_FREE_UPLOAD_PERCENT = [string]$resolvedCodexFreeUploadPercent
@@ -953,6 +1098,11 @@ foreach ($entry in @{
     REGISTER_CODEX_FREE_UPLOAD_PERCENT        = $env:REGISTER_CODEX_FREE_UPLOAD_PERCENT
     REGISTER_CODEX_TEAM_UPLOAD_PERCENT        = $env:REGISTER_CODEX_TEAM_UPLOAD_PERCENT
     REGISTER_CODEX_PLUS_UPLOAD_PERCENT        = $env:REGISTER_CODEX_PLUS_UPLOAD_PERCENT
+    REGISTER_CREDENTIAL_ROOT_HOST             = $env:REGISTER_CREDENTIAL_ROOT_HOST
+    REGISTER_CODEX_ROOT_DIR_HOST              = $env:REGISTER_CODEX_ROOT_DIR_HOST
+    REGISTER_OPENAI_ROOT_DIR_HOST             = $env:REGISTER_OPENAI_ROOT_DIR_HOST
+    REGISTER_CODEX_ROOT_DOCKER_SOURCE         = $env:REGISTER_CODEX_ROOT_DOCKER_SOURCE
+    REGISTER_OPENAI_ROOT_DOCKER_SOURCE        = $env:REGISTER_OPENAI_ROOT_DOCKER_SOURCE
     REGISTER_CODEX_FREE_DIR_HOST              = $env:REGISTER_CODEX_FREE_DIR_HOST
     REGISTER_CODEX_TEAM_DIR_HOST              = $env:REGISTER_CODEX_TEAM_DIR_HOST
     REGISTER_CODEX_TEAM_INPUT_DIR_HOST        = $env:REGISTER_CODEX_TEAM_INPUT_DIR_HOST
@@ -982,8 +1132,22 @@ if ($ForceLinks) {
     $materializeParams["Force"] = $true
 }
 
+Ensure-ResultPoolDirectories `
+    -OutputDirHost $resolvedOutputDirHost `
+    -CodexRootDirHost $resolvedCodexRootDirHost `
+    -OpenaiRootDirHost $resolvedOpenaiRootDirHost
+
 & $materializeScript @materializeParams
 
+$resultPoolOverridePath = Join-Path $launcherRoot '.deploy-compose.result-pools.generated.yaml'
+$resultPoolMounts = @(
+    New-ResultPoolMountOverrideFile `
+        -CodexRootDirHost $resolvedCodexRootDirHost `
+        -OpenaiRootDirHost $resolvedOpenaiRootDirHost `
+        -CodexRootDockerSource $resolvedCodexRootDockerSource `
+        -OpenaiRootDockerSource $resolvedOpenaiRootDockerSource `
+        -OverridePath $resultPoolOverridePath
+)
 $aliasMountOverridePath = Join-Path $launcherRoot '.deploy-compose.alias-mounts.generated.yaml'
 $aliasMounts = @(
     New-AliasMountOverrideFile `
@@ -997,6 +1161,9 @@ $protocolBridgeMount = New-ProtocolBridgeMountOverrideFile `
     -OverridePath $protocolBridgeOverridePath
 
 if ($MaterializeOnly) {
+    if ($resultPoolMounts.Count -gt 0) {
+        $resultPoolMounts | Format-Table -AutoSize
+    }
     if ($aliasMounts.Count -gt 0) {
         $aliasMounts | Format-Table -AutoSize
     }
@@ -1016,6 +1183,13 @@ $deployComposeParams = @{
 }
 if ($aliasMounts.Count -gt 0) {
     $deployComposeParams["AdditionalComposeFiles"] = @($aliasMountOverridePath)
+}
+if ($resultPoolMounts.Count -gt 0) {
+    if ($deployComposeParams.ContainsKey("AdditionalComposeFiles")) {
+        $deployComposeParams["AdditionalComposeFiles"] = @($deployComposeParams["AdditionalComposeFiles"]) + $resultPoolOverridePath
+    } else {
+        $deployComposeParams["AdditionalComposeFiles"] = @($resultPoolOverridePath)
+    }
 }
 if ($null -ne $protocolBridgeMount) {
     if ($deployComposeParams.ContainsKey("AdditionalComposeFiles")) {

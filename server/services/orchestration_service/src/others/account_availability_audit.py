@@ -146,6 +146,20 @@ def _production_pool_roots(output_root: Path) -> list[Path]:
     ]
 
 
+def _production_codex_candidate_paths(root: Path) -> Iterable[Path]:
+    pool_names = (
+        "free",
+        "team",
+        "plus",
+        "team-input",
+        "team-mother-input",
+    )
+    for name in pool_names:
+        pool = root / name
+        if pool.is_dir():
+            yield from pool.glob("*.json")
+
+
 def _is_excluded_production_path(path: Path) -> bool:
     excluded_names = {
         "_claims",
@@ -162,7 +176,7 @@ def _production_candidate_paths(output_root: Path) -> Iterable[Path]:
     for root in _production_pool_roots(output_root):
         if not root.is_dir():
             continue
-        iterator = root.rglob("*.json") if root.name == "codex" else root.glob("*.json")
+        iterator = _production_codex_candidate_paths(root) if root.name == "codex" else root.glob("*.json")
         for path in iterator:
             if path.is_file() and not _is_excluded_production_path(path):
                 resolved = path.resolve()

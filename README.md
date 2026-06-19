@@ -250,7 +250,7 @@ python -m infinite_runner
 - 把 `main` / `continue` 的 `team` 输入挂到：
   - `C:\Users\vmjcv\.cli-proxy-api\team`
 - 把用户层输出目录默认映射为：
-- `codex/free -> C:\Users\vmjcv\.cli-proxy-api\free`
+  - `codex/free -> C:\Users\vmjcv\.cli-proxy-api\free`
   - `codex/team -> C:\Users\vmjcv\.cli-proxy-api\team`
   - `codex/team-input -> C:\Users\vmjcv\.cli-proxy-api\team`
   - `codex/team-mother-input`
@@ -323,6 +323,22 @@ powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor
   -CodexTeamInputDirHost "D:\vault\cli-proxy-api\team"
 ```
 
+如果只想把面向外部消费的凭证结果池集中到 NAS，同时把实现细节继续留在本机，可以使用 result-pool 根目录映射：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor\EasyRegister\deploy-host.ps1" `
+  -OutputDirHost "C:\Users\Public\nas_home\AI\GameEditor\SelfDocker\EasyRegister\runtime\register-output" `
+  -CredentialRootHost "Z:\oauth"
+```
+
+这会生成额外的 compose 覆盖文件，把：
+
+- `Z:\oauth\codex -> /shared/register-output/codex`
+- `Z:\oauth\openai -> /shared/register-output/openai`
+
+但不会把 `others` 移到 NAS；`/shared/register-output/others` 仍然来自 `-OutputDirHost`，用于 claims、运行目录、审计 JSONL、dashboard/state、team-pre/team-post 等内部状态。
+`-CredentialRootHost` 会自动派生 `-CodexRootDirHost <root>\codex` 和 `-OpenaiRootDirHost <root>\openai`；如果 Docker Desktop 不能直接挂载映射盘路径，可以保留 host 侧路径用于目录创建，再用 `-CodexRootDockerSource` / `-OpenaiRootDockerSource` 显式传入 Docker 能识别的 bind source。
+
 底层通用 compose 包装入口仍然是：
 
 - `scripts/deploy-compose.ps1`
@@ -386,6 +402,8 @@ powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor
 - `REGISTER_OUTPUT_DIR_HOST -> /shared/register-output`
 
 但宿主机会在 `C:\EasyRegister\output` 下看到指向 `D:\EasyRegisterVault\...` 的目录联接。
+
+注意：目录联接适合本机目录整理；NAS result-pool split 应优先走 `deploy-host.ps1 -CredentialRootHost`，这样容器内仍保持 `/shared/register-output` 契约，同时只把 `codex` / `openai` 两个结果池挂到 NAS，`others` 不外露。
 
 ## 隔离测试 compose
 
