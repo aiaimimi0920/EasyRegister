@@ -178,6 +178,31 @@ def _next_check_at(payload: dict[str, Any]) -> datetime | None:
     return _parse_utc(state.get("nextCheckAt") or state.get("next_check_at"))
 
 
+def _target_from_payload(*, source_path: Path, original_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    email = _extract_email(payload)
+    if not email:
+        raise RuntimeError(f"account_audit_email_missing:{source_path}")
+    mailbox_ref = _as_text(payload.get("mailboxRef") or payload.get("mailbox_ref"))
+    mailbox_session_id = _as_text(
+        payload.get("mailboxSessionId")
+        or payload.get("mailbox_session_id")
+        or payload.get("session_id")
+        or payload.get("sessionId")
+    )
+    recovery_data_credential = _extract_recovery_data_credential(payload)
+    return {
+        "target_id": uuid.uuid5(uuid.NAMESPACE_URL, str(original_path.resolve())).hex,
+        "source_path": str(source_path.resolve()),
+        "original_path": str(original_path.resolve()),
+        "original_name": original_path.name,
+        "email": email,
+        "mailbox_ref": mailbox_ref,
+        "mailbox_session_id": mailbox_session_id,
+        "recovery_data_credential": recovery_data_credential,
+        "recoveryDataCredential": recovery_data_credential,
+    }
+
+
 def _production_target_from_file(*, path: Path, now: datetime) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
     try:
         payload = _read_json_object(path)
@@ -192,7 +217,7 @@ def _production_target_from_file(*, path: Path, now: datetime) -> tuple[dict[str
                 "reason": "next_check_in_future",
                 "nextCheckAt": _format_utc(next_check_at),
             }
-        return _target_from_account_file(source_path=path, original_path=path), None
+        return _target_from_payload(source_path=path, original_path=path, payload=payload), None
     except Exception as exc:
         return None, {"source_path": str(path), "email": "", "reason": str(exc)}
 
@@ -208,28 +233,30 @@ def production_audit_has_due_targets(*, output_root: Path) -> bool:
 
 def _target_from_account_file(*, source_path: Path, original_path: Path) -> dict[str, Any]:
     payload = _read_json_object(source_path)
-    email = _extract_email(payload)
-    if not email:
-        raise RuntimeError(f"account_audit_email_missing:{source_path}")
-    mailbox_ref = _as_text(payload.get("mailboxRef") or payload.get("mailbox_ref"))
-    mailbox_session_id = _as_text(
-        payload.get("mailboxSessionId")
-        or payload.get("mailbox_session_id")
-        or payload.get("session_id")
-        or payload.get("sessionId")
+    return _target_from_payload(source_path=source_path, original_path=original_path, payload=payload)
+
+
+def _production_claim_dir(output_root: Path) -> Path:
+    return output_root / "others" / "account-availability-audit" / "claims"
+
+
+def _claim_production_target(*, output_root: Path, target: dict[str, Any]) -> dict[str, Any]:
+    original_path = Path(_as_text(target.get("source_path") or target.get("sourcePath"))).expanduser().resolve()
+    if not original_path.is_file():
+        raise FileNotFoundError(str(original_path))
+    claim_path = _unique_destination_path(
+        _production_claim_dir(output_root),
+        f"{uuid.uuid4().hex[:8]}-{original_path.name}",
     )
-    recovery_data_credential = _extract_recovery_data_credential(payload)
-    return {
-        "target_id": uuid.uuid5(uuid.NAMESPACE_URL, str(source_path.resolve())).hex,
-        "source_path": str(source_path.resolve()),
-        "original_path": str(original_path.resolve()),
-        "original_name": original_path.name,
-        "email": email,
-        "mailbox_ref": mailbox_ref,
-        "mailbox_session_id": mailbox_session_id,
-        "recovery_data_credential": recovery_data_credential,
-        "recoveryDataCredential": recovery_data_credential,
-    }
+    shutil.copy2(original_path, claim_path)
+    claimed = dict(target)
+    claimed.setdefault("original_path", str(original_path))
+    claimed.setdefault("originalPath", str(original_path))
+    claimed["source_path"] = str(claim_path.resolve())
+    claimed["sourcePath"] = str(claim_path.resolve())
+    claimed["production_claim_path"] = str(claim_path.resolve())
+    claimed["productionClaimPath"] = str(claim_path.resolve())
+    return claimed
 
 
 def _unique_destination_path(directory: Path, filename: str) -> Path:
@@ -290,7 +317,17 @@ def select_account_audit_targets(*, step_input: dict[str, Any]) -> dict[str, Any
                 skipped.append(skipped_item)
                 continue
             if target is not None:
-                targets.append(target)
+                try:
+                    targets.append(_claim_production_target(output_root=output_root, target=target))
+                except FileNotFoundError:
+                    skipped.append(
+                        {
+                            "source_path": _as_text(target.get("source_path") or target.get("sourcePath")),
+                            "email": _as_text(target.get("email")),
+                            "reason": "source_disappeared_before_claim",
+                        }
+                    )
+                    continue
     elif account_file_text:
         account_file = Path(account_file_text).expanduser().resolve()
         if not account_file.is_file():
@@ -543,6 +580,30 @@ def _update_production_account_file(
     return True
 
 
+def _production_claim_path_for_target(*, output_root: Path, target: dict[str, Any]) -> Path | None:
+    raw = _as_text(target.get("production_claim_path") or target.get("productionClaimPath"))
+    if not raw:
+        return None
+    try:
+        path = Path(raw).expanduser().resolve()
+        claim_root = _production_claim_dir(output_root).resolve()
+        path.relative_to(claim_root)
+        return path
+    except Exception:
+        return None
+
+
+def _cleanup_production_claim_file(*, output_root: Path, target: dict[str, Any]) -> bool:
+    path = _production_claim_path_for_target(output_root=output_root, target=target)
+    if path is None or not path.is_file():
+        return False
+    try:
+        path.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def _finalize_production_account_audit_result(
     *,
     step_input: dict[str, Any],
@@ -559,6 +620,7 @@ def _finalize_production_account_audit_result(
         "source_missing": 0,
         "deleted_files_removed": 0,
         "files_updated": 0,
+        "claim_files_removed": 0,
     }
     now = _utc_now()
     timestamp = _format_utc(now)
@@ -569,9 +631,11 @@ def _finalize_production_account_audit_result(
         counts[status] = int(counts.get(status, 0)) + 1
         email = _as_text(target.get("email") or result.get("email")).lower()
         source_path = Path(_as_text(target.get("source_path") or target.get("sourcePath"))).expanduser()
-        related_paths = _related_production_files(output_root=output_root, email=email, source_path=source_path)
+        original_path_text = _as_text(target.get("original_path") or target.get("originalPath"))
+        original_path = Path(original_path_text).expanduser() if original_path_text else source_path
+        related_paths = _related_production_files(output_root=output_root, email=email, source_path=original_path)
         action = "left_in_place"
-        final_path = str(source_path)
+        final_path = str(original_path)
         touched_paths: list[str] = []
 
         if status == "deleted_confirmed":
@@ -589,6 +653,7 @@ def _finalize_production_account_audit_result(
             if not touched_paths:
                 counts["source_missing"] += 1
                 action = "source_missing"
+            final_path = ""
         else:
             action = "updated_audit_state"
             for path in related_paths:
@@ -604,6 +669,11 @@ def _finalize_production_account_audit_result(
                 counts["source_missing"] += 1
                 action = "source_missing"
                 final_path = ""
+            else:
+                final_path = touched_paths[0]
+
+        if _cleanup_production_claim_file(output_root=output_root, target=target):
+            counts["claim_files_removed"] += 1
 
         records.append(
             {
@@ -612,8 +682,8 @@ def _finalize_production_account_audit_result(
                 "status": status,
                 "rawStatus": _as_text(result.get("status") or result.get("outcome")),
                 "action": action,
-                "source_path": str(source_path),
-                "original_path": _as_text(target.get("original_path") or target.get("originalPath")),
+                "source_path": str(original_path),
+                "original_path": original_path_text,
                 "final_path": final_path,
                 "touched_paths": touched_paths,
                 "result": _redact_for_audit(result),

@@ -99,10 +99,62 @@ class DstFlowIntegrationTests(unittest.TestCase):
                     }
                 )
 
+            selected_original_path = result["targets"][0]["original_path"]
+            selected_source_path = result["targets"][0]["source_path"]
+            selected_claim_exists = Path(selected_source_path).is_file()
+
         self.assertTrue(result["ok"])
         self.assertEqual(1, result["target_count"])
         self.assertEqual("ready@example.com", result["targets"][0]["email"])
-        self.assertEqual([ready_path.resolve(), ready_path.resolve()], read_paths)
+        self.assertEqual([ready_path.resolve()], read_paths)
+        self.assertEqual(str(ready_path.resolve()), selected_original_path)
+        self.assertNotEqual(str(ready_path.resolve()), selected_source_path)
+        self.assertTrue(selected_claim_exists)
+
+    def test_account_availability_audit_production_selection_claims_stable_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            original = converted / "ready.json"
+            original.write_text(json.dumps({"email": "ready@example.com"}), encoding="utf-8")
+
+            selected = account_availability_audit.select_account_audit_targets(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "max_targets": 1,
+                }
+            )
+            target = selected["targets"][0]
+            claim_path = Path(target["source_path"])
+            original.unlink()
+
+            self.assertTrue(claim_path.is_file())
+            self.assertEqual({"email": "ready@example.com"}, json.loads(claim_path.read_text(encoding="utf-8")))
+
+            finalized = account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "targets": [target],
+                    "audit_result": {
+                        "target_id": target["target_id"],
+                        "source_path": target["source_path"],
+                        "original_path": target["original_path"],
+                        "email": "ready@example.com",
+                        "status": "inconclusive",
+                        "detail": "http_login_inconclusive",
+                    },
+                }
+            )
+
+        self.assertTrue(finalized["ok"])
+        self.assertEqual(1, finalized["counts"]["source_missing"])
+        self.assertEqual(1, finalized["counts"]["claim_files_removed"])
+        self.assertFalse(claim_path.exists())
+        self.assertEqual("source_missing", finalized["records"][0]["action"])
+        self.assertEqual(str(original.resolve()), finalized["records"][0]["source_path"])
 
     def test_account_availability_audit_production_deleted_removes_same_email_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
