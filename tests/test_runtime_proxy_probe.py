@@ -73,6 +73,22 @@ class RuntimeProxyProbeTests(unittest.TestCase):
                 text="Proxy Authentication Required",
             )
 
+    def test_curl_transport_failures_are_high_confidence_route_failures(self) -> None:
+        samples = [
+            "Failed to perform, curl: (35) Recv failure: Connection reset by peer.",
+            "curl: (7) Failed to connect to easy-proxy port 25155 after 0 ms: Could not connect to server",
+            "Failed to perform, curl: (56) Connection closed abruptly.",
+            "curl: (35) TLS connect error: error:00000000:invalid library (0):OPENSSL_internal:invalid library (0).",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                code, failure_class, confidence = runtime_proxy_probe.classify_easy_proxy_error(RuntimeError(sample))
+
+                self.assertEqual(sample, code)
+                self.assertEqual("route_failure", failure_class)
+                self.assertEqual("high", confidence)
+
 
 if __name__ == "__main__":
     unittest.main()

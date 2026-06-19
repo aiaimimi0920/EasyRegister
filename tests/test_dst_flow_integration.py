@@ -160,15 +160,17 @@ class DstFlowIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"
             converted = output_root / "openai" / "converted"
+            failed_once = output_root / "openai" / "failed-once"
             failed_twice = output_root / "openai" / "failed-twice"
             codex_free = output_root / "codex" / "free"
-            for directory in (converted, failed_twice, codex_free):
+            for directory in (converted, failed_once, failed_twice, codex_free):
                 directory.mkdir(parents=True, exist_ok=True)
             source = converted / "small-deleted@example.com.json"
+            related_continue = failed_once / "small-deleted-continue-related.json"
             related_openai = failed_twice / "small-deleted-related.json"
             related_codex = codex_free / "codex-deleted-related.json"
             unrelated = codex_free / "codex-other.json"
-            for path in (source, related_openai, related_codex):
+            for path in (source, related_continue, related_openai, related_codex):
                 path.write_text(json.dumps({"email": "deleted@example.com"}), encoding="utf-8")
             unrelated.write_text(json.dumps({"email": "other@example.com"}), encoding="utf-8")
 
@@ -198,10 +200,11 @@ class DstFlowIntegrationTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertFalse(source.exists())
+            self.assertFalse(related_continue.exists())
             self.assertFalse(related_openai.exists())
             self.assertFalse(related_codex.exists())
             self.assertTrue(unrelated.exists())
-            self.assertEqual(3, result["counts"]["deleted_files_removed"])
+            self.assertEqual(4, result["counts"]["deleted_files_removed"])
 
     def test_account_availability_audit_production_login_updates_recovery_data_and_daily_schedule(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -140,6 +140,7 @@ def _production_output_root(step_input: dict[str, Any]) -> Path:
 def _production_pool_roots(output_root: Path) -> list[Path]:
     return [
         output_root / "openai" / "converted",
+        output_root / "openai" / "failed-once",
         output_root / "openai" / "failed-twice",
         output_root / "codex",
     ]
