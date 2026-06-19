@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import json
 import multiprocessing as mp
 import os
 import signal
@@ -15,6 +17,14 @@ from others.runner_flow_scheduler import flow_spec_summary
 from others.runner_flow_scheduler import release_flow_slot_for_owner
 from others.preflight import validate_runtime_preflight as _validate_runtime_preflight
 from others.runner_worker_loop import worker_loop
+
+
+def flow_slot_uninterruptible_stale_seconds() -> float:
+    raw_value = str(os.getenv("REGISTER_FLOW_SLOT_UNINTERRUPTIBLE_STALE_SECONDS", "900") or "").strip()
+    try:
+        return max(0.0, float(raw_value))
+    except ValueError:
+        return 900.0
 
 
 def cleanup_dashboard_worker_state_files(*, shared_root: Path, instance_id: str) -> None:
@@ -107,6 +117,135 @@ def task_counter_value(task_counter: Any) -> int:
         except Exception:
             pass
     return int(getattr(task_counter, "value", 0) or 0)
+
+
+def _worker_label_from_id(worker_id: Any) -> str:
+    try:
+        return f"worker-{int(worker_id):02d}"
+    except (TypeError, ValueError):
+        text = str(worker_id or "").strip()
+        return text if text.startswith("worker-") else f"worker-{text}"
+
+
+def _read_linux_process_state(*, pid: int, proc_root: Path = Path("/proc")) -> str:
+    if pid <= 0:
+        return ""
+    status_path = proc_root / str(pid) / "status"
+    try:
+        for line in status_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.startswith("State:"):
+                continue
+            parts = line.split()
+            return str(parts[1] if len(parts) > 1 else "").strip()
+    except OSError:
+        return ""
+    return ""
+
+
+def _parse_utc_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _read_worker_state(*, shared_root: Path, instance_id: str, worker_label: str) -> dict[str, Any]:
+    state_path = (
+        shared_root
+        / "others"
+        / "dashboard-state"
+        / str(instance_id or "default").strip()
+        / "workers"
+        / f"{worker_label}.json"
+    )
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def recover_stale_uninterruptible_worker_slots(
+    *,
+    processes: dict[int, Any],
+    shared_root: Path,
+    instance_id: str,
+    active_flow_counts: Any,
+    active_flow_owners: Any,
+    active_flow_lock: Any,
+    stale_seconds: float,
+    now: datetime | None = None,
+    proc_root: Path = Path("/proc"),
+) -> list[dict[str, Any]]:
+    threshold_seconds = max(0.0, float(stale_seconds or 0.0))
+    if threshold_seconds <= 0.0:
+        return []
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    recovered: list[dict[str, Any]] = []
+    for worker_id, process in list(processes.items()):
+        is_alive = getattr(process, "is_alive", None)
+        try:
+            if callable(is_alive) and not is_alive():
+                continue
+        except Exception:
+            continue
+        try:
+            pid = int(getattr(process, "pid", 0) or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if _read_linux_process_state(pid=pid, proc_root=proc_root) != "D":
+            continue
+        worker_label = _worker_label_from_id(worker_id)
+        try:
+            owned_slot_key = str(active_flow_owners.get(worker_label, "") or "").strip()
+        except Exception:
+            owned_slot_key = ""
+        if not owned_slot_key:
+            continue
+        worker_state = _read_worker_state(
+            shared_root=shared_root,
+            instance_id=instance_id,
+            worker_label=worker_label,
+        )
+        timestamp = _parse_utc_timestamp(worker_state.get("updatedAt")) or _parse_utc_timestamp(
+            worker_state.get("startedAt")
+        )
+        if timestamp is None:
+            continue
+        age_seconds = (now_utc - timestamp).total_seconds()
+        if age_seconds < threshold_seconds:
+            continue
+        released_slot_key = release_flow_slot_for_owner(
+            owner_id=worker_label,
+            active_flow_counts=active_flow_counts,
+            active_flow_owners=active_flow_owners,
+            active_flow_lock=active_flow_lock,
+        )
+        if not released_slot_key:
+            continue
+        recovery = {
+            "workerId": worker_label,
+            "pid": pid,
+            "slotKey": released_slot_key,
+            "processState": "D",
+            "staleSeconds": age_seconds,
+            "thresholdSeconds": threshold_seconds,
+            "currentTaskRole": str(worker_state.get("currentTaskRole") or ""),
+            "currentFlowName": str(worker_state.get("currentFlowName") or ""),
+            "currentOutputDir": str(worker_state.get("currentOutputDir") or ""),
+            "updatedAt": str(worker_state.get("updatedAt") or ""),
+        }
+        recovered.append(recovery)
+        _json_log({"event": "register_worker_flow_slot_recovered_from_uninterruptible_state", **recovery})
+    return recovered
 
 
 def cleanup_process_handle(*, process: Any, join_timeout: float = 0.0, terminate_if_alive: bool = False) -> None:
@@ -238,6 +377,15 @@ def main() -> int:
                 break
             if stop_event.is_set():
                 break
+            recover_stale_uninterruptible_worker_slots(
+                processes=processes,
+                shared_root=shared_root,
+                instance_id=config.instance_id,
+                active_flow_counts=active_flow_counts,
+                active_flow_owners=active_flow_owners,
+                active_flow_lock=active_flow_lock,
+                stale_seconds=flow_slot_uninterruptible_stale_seconds(),
+            )
             for worker_id, process in list(processes.items()):
                 if process.is_alive():
                     continue

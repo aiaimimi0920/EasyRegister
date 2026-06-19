@@ -1360,6 +1360,48 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
 
 
 class RunnerProcessSupervisorTests(unittest.TestCase):
+    def test_recover_stale_uninterruptible_worker_releases_flow_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            workers_dir = shared_root / "others" / "dashboard-state" / "easy-register" / "workers"
+            workers_dir.mkdir(parents=True, exist_ok=True)
+            (workers_dir / "worker-05.json").write_text(
+                json.dumps(
+                    {
+                        "workerId": "worker-05",
+                        "status": "running",
+                        "updatedAt": "2026-06-19T01:03:05+00:00",
+                        "currentTaskRole": "account-audit",
+                        "currentFlowName": "openai-account-availability-audit",
+                        "currentOutputDir": "/shared/register-output/others/mixed-runs/worker-05/run-active",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            proc_root = Path(tmp_dir) / "proc"
+            pid_status = proc_root / "123" / "status"
+            pid_status.parent.mkdir(parents=True, exist_ok=True)
+            pid_status.write_text("Name:\tpython\nState:\tD (disk sleep)\n", encoding="utf-8")
+            active_counts = {"openai-account-availability-audit": 1}
+            active_owners = {"worker-05": "openai-account-availability-audit"}
+            process = SimpleNamespace(pid=123, is_alive=lambda: True)
+
+            recovered = runner_process_supervisor.recover_stale_uninterruptible_worker_slots(
+                processes={5: process},
+                shared_root=shared_root,
+                instance_id="easy-register",
+                active_flow_counts=active_counts,
+                active_flow_owners=active_owners,
+                active_flow_lock=None,
+                stale_seconds=600.0,
+                now=datetime(2026, 6, 19, 2, 13, 5, tzinfo=timezone.utc),
+                proc_root=proc_root,
+            )
+
+        self.assertEqual(["openai-account-availability-audit"], [item["slotKey"] for item in recovered])
+        self.assertEqual({}, active_counts)
+        self.assertEqual({}, active_owners)
+
     def test_task_slots_exhausted_reads_counter_without_lock(self) -> None:
         class _Counter:
             @property
