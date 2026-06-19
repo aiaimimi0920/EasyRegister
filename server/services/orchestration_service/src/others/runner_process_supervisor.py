@@ -27,6 +27,31 @@ def flow_slot_uninterruptible_stale_seconds() -> float:
         return 900.0
 
 
+def _env_float(*, name: str, default: float) -> float:
+    raw_value = str(os.getenv(name) or "").strip()
+    if not raw_value:
+        return float(default)
+    try:
+        return max(0.0, float(raw_value))
+    except ValueError:
+        return float(default)
+
+
+def _worker_uninterruptible_stale_threshold_seconds(
+    *,
+    worker_state: dict[str, Any],
+    default_seconds: float,
+) -> float:
+    role = str(worker_state.get("currentTaskRole") or "").strip().lower()
+    flow_name = str(worker_state.get("currentFlowName") or "").strip().lower()
+    if role == "account-audit" or flow_name == "openai-account-availability-audit":
+        return _env_float(
+            name="REGISTER_ACCOUNT_AUDIT_FLOW_SLOT_UNINTERRUPTIBLE_STALE_SECONDS",
+            default=max(float(default_seconds or 0.0), 3600.0),
+        )
+    return max(0.0, float(default_seconds or 0.0))
+
+
 def cleanup_dashboard_worker_state_files(*, shared_root: Path, instance_id: str) -> None:
     workers_dir = shared_root / "others" / "dashboard-state" / str(instance_id or "default").strip() / "workers"
     if not workers_dir.is_dir():
@@ -221,7 +246,11 @@ def recover_stale_uninterruptible_worker_slots(
         if timestamp is None:
             continue
         age_seconds = (now_utc - timestamp).total_seconds()
-        if age_seconds < threshold_seconds:
+        effective_threshold_seconds = _worker_uninterruptible_stale_threshold_seconds(
+            worker_state=worker_state,
+            default_seconds=threshold_seconds,
+        )
+        if age_seconds < effective_threshold_seconds:
             continue
         released_slot_key = release_flow_slot_for_owner(
             owner_id=worker_label,
@@ -245,7 +274,8 @@ def recover_stale_uninterruptible_worker_slots(
             "slotKey": released_slot_key,
             "processState": "D",
             "staleSeconds": age_seconds,
-            "thresholdSeconds": threshold_seconds,
+            "thresholdSeconds": effective_threshold_seconds,
+            "defaultThresholdSeconds": threshold_seconds,
             "terminateSignalSent": terminate_signal_sent,
             "currentTaskRole": str(worker_state.get("currentTaskRole") or ""),
             "currentFlowName": str(worker_state.get("currentFlowName") or ""),
