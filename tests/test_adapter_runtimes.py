@@ -1338,6 +1338,71 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             self.assertIn("org_target", local_source.read_text(encoding="utf-8"))
             self.assertFalse((bridge_dir / local_source.name).exists())
 
+    def test_easyprotocol_account_audit_target_source_paths_are_bridged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            local_source = Path(tmp_dir) / "account-audit-claim.json"
+            local_source.write_text('{"email": "user@example.com"}', encoding="utf-8")
+            bridge_dir = Path(tmp_dir) / "protocol-visible"
+            protocol_target_dir = "/shared/register-output/easyregister-bridge"
+            captured_inputs: list[dict[str, object]] = []
+
+            def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                captured_inputs.append(dict(step_input))
+                self.assertEqual("audit_openai_account_availability", step_type)
+                targets = step_input["targets"]
+                self.assertIsInstance(targets, list)
+                target = targets[0]
+                self.assertIsInstance(target, dict)
+                expected_protocol_source = f"{protocol_target_dir}/{local_source.name}"
+                self.assertEqual(expected_protocol_source, target["source_path"])
+                self.assertEqual(expected_protocol_source, target["sourcePath"])
+                local_bridge_source = bridge_dir / local_source.name
+                self.assertTrue(local_bridge_source.is_file())
+                local_bridge_source.write_text(
+                    '{"email": "user@example.com", "checked": true}',
+                    encoding="utf-8",
+                )
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "results": [
+                        {
+                            "target_id": target["target_id"],
+                            "source_path": target["source_path"],
+                            "status": "inconclusive",
+                        }
+                    ],
+                }
+
+            with mock.patch.object(easyprotocol_runtime, "invoke_easyprotocol", side_effect=_invoke):
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "REGISTER_PROTOCOL_BRIDGE_DIR": str(bridge_dir),
+                        "REGISTER_PROTOCOL_BRIDGE_TARGET_DIR": protocol_target_dir,
+                    },
+                    clear=False,
+                ):
+                    result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                        step_type="audit_openai_account_availability",
+                        step_input={
+                            "targets": [
+                                {
+                                    "target_id": "target-1",
+                                    "source_path": str(local_source),
+                                    "sourcePath": str(local_source),
+                                    "original_path": str(local_source),
+                                }
+                            ],
+                            "proxy_url": "http://proxy.local:8080",
+                        },
+                    )
+
+            self.assertEqual(1, len(captured_inputs))
+            self.assertEqual("completed", result["status"])
+            self.assertIn('"checked": true', local_source.read_text(encoding="utf-8"))
+            self.assertFalse((bridge_dir / local_source.name).exists())
+
     def test_easyprotocol_source_path_defaults_to_bridge_inside_protocol_output_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"

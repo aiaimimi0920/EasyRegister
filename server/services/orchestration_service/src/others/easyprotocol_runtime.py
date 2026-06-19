@@ -349,6 +349,49 @@ def sync_protocol_source_bridge_back(*, bridge_info: dict[str, str]) -> None:
             pass
 
 
+def maybe_bridge_account_audit_targets_for_protocol(
+    *,
+    step_input: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    raw_targets = step_input.get("targets")
+    if not isinstance(raw_targets, list):
+        return step_input, []
+
+    bridged_targets: list[Any] = []
+    bridge_infos: list[dict[str, str]] = []
+    changed = False
+    for item in raw_targets:
+        if not isinstance(item, dict):
+            bridged_targets.append(item)
+            continue
+        source_path = str(item.get("source_path") or item.get("sourcePath") or "").strip()
+        if not source_path:
+            bridged_targets.append(item)
+            continue
+        bridged_source_input, bridge_info = maybe_bridge_source_path_for_protocol(
+            step_input={"source_path": source_path},
+        )
+        if not bridge_info:
+            bridged_targets.append(item)
+            continue
+        bridged_source_path = str(bridged_source_input.get("source_path") or "").strip()
+        if not bridged_source_path:
+            bridged_targets.append(item)
+            continue
+        bridged_item = dict(item)
+        bridged_item["source_path"] = bridged_source_path
+        bridged_item["sourcePath"] = bridged_source_path
+        bridged_targets.append(bridged_item)
+        bridge_infos.append(bridge_info)
+        changed = True
+
+    if not changed:
+        return step_input, []
+    bridged_step_input = dict(step_input)
+    bridged_step_input["targets"] = bridged_targets
+    return bridged_step_input, bridge_infos
+
+
 def rewrite_protocol_source_bridge_result_paths(
     *,
     step_result: dict[str, Any],
@@ -598,6 +641,11 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
     bridged_step_input, source_bridge_info = maybe_bridge_source_path_for_protocol(
         step_input=normalized_step_input,
     )
+    account_audit_target_bridge_infos: list[dict[str, str]] = []
+    if normalized_step_type == "audit_openai_account_availability":
+        bridged_step_input, account_audit_target_bridge_infos = maybe_bridge_account_audit_targets_for_protocol(
+            step_input=bridged_step_input,
+        )
     try:
         result = invoke_easyprotocol(
             step_type=normalized_step_type,
@@ -619,6 +667,8 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
             step_input=bridged_step_input,
         )
     finally:
+        for bridge_info in account_audit_target_bridge_infos:
+            sync_protocol_source_bridge_back(bridge_info=bridge_info)
         sync_protocol_source_bridge_back(bridge_info=source_bridge_info)
     if isinstance(result, dict):
         result = rewrite_protocol_source_bridge_result_paths(
