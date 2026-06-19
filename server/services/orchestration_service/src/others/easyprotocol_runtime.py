@@ -349,6 +349,18 @@ def sync_protocol_source_bridge_back(*, bridge_info: dict[str, str]) -> None:
             pass
 
 
+def cleanup_protocol_source_bridge(*, bridge_info: dict[str, str]) -> None:
+    if not bridge_info:
+        return
+    local_bridge_path = Path(str(bridge_info.get("local_bridge_path") or "")).expanduser()
+    if not local_bridge_path.is_file():
+        return
+    try:
+        local_bridge_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def maybe_bridge_account_audit_targets_for_protocol(
     *,
     step_input: dict[str, Any],
@@ -668,7 +680,7 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
         )
     finally:
         for bridge_info in account_audit_target_bridge_infos:
-            sync_protocol_source_bridge_back(bridge_info=bridge_info)
+            cleanup_protocol_source_bridge(bridge_info=bridge_info)
         sync_protocol_source_bridge_back(bridge_info=source_bridge_info)
     if isinstance(result, dict):
         result = rewrite_protocol_source_bridge_result_paths(

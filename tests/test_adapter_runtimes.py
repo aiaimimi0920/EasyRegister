@@ -1400,7 +1400,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
 
             self.assertEqual(1, len(captured_inputs))
             self.assertEqual("completed", result["status"])
-            self.assertIn('"checked": true', local_source.read_text(encoding="utf-8"))
+            self.assertNotIn('"checked": true', local_source.read_text(encoding="utf-8"))
             self.assertFalse((bridge_dir / local_source.name).exists())
 
     def test_easyprotocol_source_path_defaults_to_bridge_inside_protocol_output_root(self) -> None:
