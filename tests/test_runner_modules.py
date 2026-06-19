@@ -1384,7 +1384,9 @@ class RunnerProcessSupervisorTests(unittest.TestCase):
             pid_status.write_text("Name:\tpython\nState:\tD (disk sleep)\n", encoding="utf-8")
             active_counts = {"openai-account-availability-audit": 1}
             active_owners = {"worker-05": "openai-account-availability-audit"}
-            process = SimpleNamespace(pid=123, is_alive=lambda: True)
+            process = mock.Mock()
+            process.pid = 123
+            process.is_alive.return_value = True
 
             recovered = runner_process_supervisor.recover_stale_uninterruptible_worker_slots(
                 processes={5: process},
@@ -1399,8 +1401,10 @@ class RunnerProcessSupervisorTests(unittest.TestCase):
             )
 
         self.assertEqual(["openai-account-availability-audit"], [item["slotKey"] for item in recovered])
+        self.assertEqual([True], [item["terminateSignalSent"] for item in recovered])
         self.assertEqual({}, active_counts)
         self.assertEqual({}, active_owners)
+        process.terminate.assert_called_once_with()
 
     def test_task_slots_exhausted_reads_counter_without_lock(self) -> None:
         class _Counter:

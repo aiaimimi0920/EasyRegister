@@ -231,6 +231,14 @@ def recover_stale_uninterruptible_worker_slots(
         )
         if not released_slot_key:
             continue
+        terminate_signal_sent = False
+        terminate = getattr(process, "terminate", None)
+        if callable(terminate):
+            try:
+                terminate()
+                terminate_signal_sent = True
+            except Exception:
+                terminate_signal_sent = False
         recovery = {
             "workerId": worker_label,
             "pid": pid,
@@ -238,6 +246,7 @@ def recover_stale_uninterruptible_worker_slots(
             "processState": "D",
             "staleSeconds": age_seconds,
             "thresholdSeconds": threshold_seconds,
+            "terminateSignalSent": terminate_signal_sent,
             "currentTaskRole": str(worker_state.get("currentTaskRole") or ""),
             "currentFlowName": str(worker_state.get("currentFlowName") or ""),
             "currentOutputDir": str(worker_state.get("currentOutputDir") or ""),

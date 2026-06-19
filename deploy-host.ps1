@@ -553,7 +553,11 @@ function Ensure-RepoRoot {
     $archiveUrlValue = Get-RepoArchiveUrlValue -Owner $Owner -Name $Name -Ref $Ref -Kind $RefKind -ExplicitUrl $ArchiveUrl
     $repoRoot = Join-Path $resolvedCacheRoot "repo"
 
-    if ($ForceRefresh -and (Test-Path -LiteralPath $resolvedCacheRoot)) {
+    $refreshCachedBranch = [string]::IsNullOrWhiteSpace($CacheRoot) -and ($RefKind -eq "branch") -and (Test-Path -LiteralPath $repoRoot)
+    if (($ForceRefresh -or $refreshCachedBranch) -and (Test-Path -LiteralPath $resolvedCacheRoot)) {
+        if ($refreshCachedBranch -and -not $ForceRefresh) {
+            Write-Host "[deploy-host] refreshing cached branch repository: $Name/$Ref" -ForegroundColor Cyan
+        }
         Remove-Item -LiteralPath $resolvedCacheRoot -Recurse -Force
     }
 
