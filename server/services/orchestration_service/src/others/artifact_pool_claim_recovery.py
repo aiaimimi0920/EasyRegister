@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
+from others.artifact_transfer import move_artifact_to_dir
 from others.artifact_pool_paths import team_auth_runtime_config_for_step_input
 from others.common import validate_openai_oauth_seed_payload
 from others.storage import load_json_payload
@@ -27,11 +27,11 @@ def load_openai_oauth_seed_validation(
 
 
 def restore_to_pool(*, claimed_path: Path, pool_dir: Path, preferred_name: str) -> str:
-    destination = pool_dir / preferred_name
-    if destination.exists():
-        destination = pool_dir / f"{destination.stem}-{uuid.uuid4().hex[:6]}{destination.suffix}"
-    claimed_path.replace(destination)
-    return str(destination)
+    return move_artifact_to_dir(
+        source_path=claimed_path,
+        destination_dir=pool_dir,
+        preferred_name=preferred_name,
+    )
 
 
 def derive_original_name_from_claim(path: Path) -> str:

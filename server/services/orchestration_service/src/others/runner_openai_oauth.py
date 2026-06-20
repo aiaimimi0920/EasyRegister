@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from errors import ErrorCodes
-from others.artifact_transfer import copy_artifact_to_dir
+from others.artifact_transfer import copy_artifact_to_dir, move_artifact_to_dir
 from others.common import (
     ensure_directory,
     extract_account_id,
@@ -538,15 +538,16 @@ def route_openai_oauth_artifact(
         }
     ensure_directory(destination_dir)
     if move_local:
-        destination = destination_dir / artifact_name
-        if destination.exists():
-            destination = destination_dir / f"{destination.stem}-{uuid.uuid4().hex[:6]}{destination.suffix}"
-        resolved_source.replace(destination)
+        stored_path = move_artifact_to_dir(
+            source_path=resolved_source,
+            destination_dir=destination_dir,
+            preferred_name=artifact_name,
+        )
         return {
             "ok": True,
             "route": "local",
             "object_key": "",
-            "stored_path": str(destination),
+            "stored_path": stored_path,
             "target_dir": str(destination_dir),
         }
     stored_path = copy_artifact_to_dir(

@@ -44,6 +44,36 @@ class ArtifactPoolCommonTests(unittest.TestCase):
             self.assertFalse(claimed_path.exists())
             self.assertTrue((pool_dir / "original.json").exists())
 
+    def test_recover_stale_team_claims_falls_back_when_restore_crosses_filesystems(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pool_dir = Path(tmp_dir) / "pool"
+            claims_dir = Path(tmp_dir) / "claims"
+            pool_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            claimed_path = claims_dir / "deadbeef-original.json"
+            claimed_path.write_text('{"email":"user@example.com"}', encoding="utf-8")
+            stale_timestamp = time.time() - 120
+            os.utime(claimed_path, (stale_timestamp, stale_timestamp))
+            original_replace = Path.replace
+
+            def _replace(self: Path, target: Path) -> Path:
+                if self == claimed_path:
+                    raise OSError(errno.EXDEV, "Invalid cross-device link")
+                return original_replace(self, target)
+
+            with mock.patch.object(Path, "replace", _replace):
+                recovered = artifact_pool_common.recover_stale_team_claims(
+                    pool_dir=pool_dir,
+                    claims_dir=claims_dir,
+                    stale_after_seconds=60,
+                )
+
+            self.assertEqual(1, len(recovered))
+            self.assertFalse(claimed_path.exists())
+            restored_path = pool_dir / "original.json"
+            self.assertTrue(restored_path.exists())
+            self.assertEqual('{"email":"user@example.com"}', restored_path.read_text(encoding="utf-8"))
+
     def test_team_expand_progress_normalizes_success_emails(self) -> None:
         progress = artifact_pool_common.team_expand_progress_from_payload(
             {
@@ -461,6 +491,45 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
             self.assertEqual("restored", result["status"])
             self.assertFalse(claimed_path.exists())
             self.assertTrue((output_root / "openai" / "failed-twice" / "retry.json").exists())
+
+    def test_finalize_openai_oauth_artifact_falls_back_when_restore_crosses_filesystems(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260620-task000001"
+            continue_pool_dir = output_root / "openai" / "failed-once"
+            continue_pool_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir = output_root / "others" / "openai-oauth-claims"
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            claimed_path = claims_dir / "claimed.json"
+            claimed_path.write_text('{"email":"retry@example.com"}', encoding="utf-8")
+            failed_twice_dir = (output_root / "openai" / "failed-twice").resolve()
+            original_replace = Path.replace
+
+            def _replace(self: Path, target: Path) -> Path:
+                if self == claimed_path.resolve() and target.parent.resolve() == failed_twice_dir:
+                    raise OSError(errno.EXDEV, "Invalid cross-device link")
+                return original_replace(self, target)
+
+            with mock.patch.object(Path, "replace", _replace):
+                result = artifact_pool_claims.finalize_openai_oauth_artifact(
+                    step_input={
+                        "output_dir": str(run_output_dir),
+                        "artifact": {
+                            "claimed_path": str(claimed_path),
+                            "original_name": "retry.json",
+                            "email": "retry@example.com",
+                            "pool_dir": str(continue_pool_dir),
+                        },
+                        "task_error_code": "obtain_codex_oauth_failed",
+                        "failure_mode": "delete",
+                    }
+                )
+
+            self.assertEqual("restored", result["status"])
+            self.assertFalse(claimed_path.exists())
+            restored_path = output_root / "openai" / "failed-twice" / "retry.json"
+            self.assertTrue(restored_path.exists())
+            self.assertEqual('{"email":"retry@example.com"}', restored_path.read_text(encoding="utf-8"))
 
     def test_finalize_openai_oauth_artifact_normalizes_materialized_continue_failure_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
