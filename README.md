@@ -339,6 +339,18 @@ powershell -ExecutionPolicy Bypass -File "C:\Users\Public\nas_home\AI\GameEditor
 但不会把 `others` 移到 NAS；`/shared/register-output/others` 仍然来自 `-OutputDirHost`，用于 claims、运行目录、审计 JSONL、dashboard/state、team-pre/team-post 等内部状态。
 `-CredentialRootHost` 会自动派生 `-CodexRootDirHost <root>\codex` 和 `-OpenaiRootDirHost <root>\openai`；如果 Docker Desktop 不能直接挂载映射盘路径，可以保留 host 侧路径用于目录创建，再用 `-CodexRootDockerSource` / `-OpenaiRootDockerSource` 显式传入 Docker 能识别的 bind source。
 
+如果 NAS 只能通过 Docker local CIFS volume 暴露给 daemon，先在宿主机预创建 external volumes，然后让部署脚本引用这些 volumes：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\deploy-host.ps1" `
+  -OutputDirHost "C:\Users\Public\nas_home\AI\GameEditor\SelfDocker\EasyRegister\runtime\register-output" `
+  -CredentialRootHost "Z:\oauth" `
+  -CodexRootDockerVolume "easyregister_codex_result_pool" `
+  -OpenaiRootDockerVolume "easyregister_openai_result_pool"
+```
+
+这种模式下生成的 compose override 使用 `type: volume` 并把两个 volume 标记为 `external: true`；部署脚本不会创建、修改、或删除这些 Docker volumes，也不会把 `others` 放到 NAS。
+
 底层通用 compose 包装入口仍然是：
 
 - `scripts/deploy-compose.ps1`

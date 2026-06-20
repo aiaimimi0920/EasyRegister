@@ -177,6 +177,77 @@ class DeployHostEnvTests(unittest.TestCase):
             self.assertTrue((credential_root / "openai" / "converted").is_dir())
             self.assertTrue((launcher_root / "runtime" / "register-output" / "others").is_dir())
 
+    def test_materialize_only_can_mount_result_pools_from_external_docker_volumes(self) -> None:
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        if not powershell:
+            self.skipTest("PowerShell not available")
+
+        with tempfile.TemporaryDirectory(prefix="easyregister-deploy-host-") as temp:
+            launcher_root = Path(temp)
+            script_path = launcher_root / "deploy-host.ps1"
+            shutil.copyfile(DEPLOY_HOST, script_path)
+            credential_root = launcher_root / "nas-oauth"
+
+            command = [powershell, "-NoProfile"]
+            if Path(powershell).name.lower().startswith("powershell"):
+                command.extend(["-ExecutionPolicy", "Bypass"])
+            command.extend(
+                [
+                    "-File",
+                    str(script_path),
+                    "-RepoCacheRoot",
+                    str(REPO_ROOT),
+                    "-OutputDirHost",
+                    str(launcher_root / "runtime" / "register-output"),
+                    "-CredentialRootHost",
+                    str(credential_root),
+                    "-CodexRootDockerVolume",
+                    "easyregister_codex_pool",
+                    "-OpenaiRootDockerVolume",
+                    "easyregister_openai_pool",
+                    "-MailboxServiceApiKey",
+                    "mailbox-test-key",
+                    "-EasyProxyApiKey",
+                    "proxy-test-key",
+                    "-SmsServiceApiKey",
+                    "sms-test-key",
+                    "-Image",
+                    "ghcr.io/example/easyregister:test",
+                    "-MaterializeOnly",
+                    "-NoBuild",
+                ]
+            )
+
+            result = subprocess.run(
+                command,
+                cwd=launcher_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                0,
+                result.returncode,
+                msg=(result.stderr or result.stdout).strip(),
+            )
+
+            env_values = _read_dotenv(launcher_root / ".deploy-compose.env")
+            self.assertEqual("easyregister_codex_pool", env_values.get("REGISTER_CODEX_ROOT_DOCKER_VOLUME"))
+            self.assertEqual("easyregister_openai_pool", env_values.get("REGISTER_OPENAI_ROOT_DOCKER_VOLUME"))
+
+            override_payload = (launcher_root / ".deploy-compose.result-pools.generated.yaml").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn('type: volume', override_payload)
+            self.assertIn('source: "easyregister_codex_pool"', override_payload)
+            self.assertIn('target: "/shared/register-output/codex"', override_payload)
+            self.assertIn('source: "easyregister_openai_pool"', override_payload)
+            self.assertIn('target: "/shared/register-output/openai"', override_payload)
+            self.assertIn("volumes:", override_payload)
+            self.assertIn("easyregister_codex_pool:", override_payload)
+            self.assertIn("external: true", override_payload)
+            self.assertIn("easyregister_openai_pool:", override_payload)
+
     def test_materialize_only_autodetects_majority_easyprotocol_provider_output_mount(self) -> None:
         powershell = shutil.which("powershell") or shutil.which("pwsh")
         if not powershell:

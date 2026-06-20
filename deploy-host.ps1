@@ -5,6 +5,8 @@ param(
     [string]$OpenaiRootDirHost = "",
     [string]$CodexRootDockerSource = "",
     [string]$OpenaiRootDockerSource = "",
+    [string]$CodexRootDockerVolume = "",
+    [string]$OpenaiRootDockerVolume = "",
     [string]$ImportCode = "",
     [string]$BootstrapFile = "",
     [string]$ComposeFile = "",
@@ -467,30 +469,63 @@ function Convert-ResultPoolMountSource {
     return Convert-HostPathToComposeSource -Path $HostPath
 }
 
+function New-ResultPoolMountSpec {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$HostPath,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath,
+        [string]$DockerSource = "",
+        [string]$DockerVolume = ""
+    )
+
+    if ((-not [string]::IsNullOrWhiteSpace($DockerSource)) -and (-not [string]::IsNullOrWhiteSpace($DockerVolume))) {
+        throw "Specify either DockerSource or DockerVolume for ${TargetPath}, not both."
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($DockerVolume)) {
+        return [pscustomobject]@{
+            Type       = "volume"
+            SourcePath = $HostPath
+            Source     = $DockerVolume
+            TargetPath = $TargetPath
+        }
+    }
+
+    return [pscustomobject]@{
+        Type       = "bind"
+        SourcePath = $HostPath
+        Source     = Convert-ResultPoolMountSource -HostPath $HostPath -DockerSource $DockerSource
+        TargetPath = $TargetPath
+    }
+}
+
 function New-ResultPoolMountOverrideFile {
     param(
         [string]$CodexRootDirHost,
         [string]$OpenaiRootDirHost,
         [string]$CodexRootDockerSource = "",
         [string]$OpenaiRootDockerSource = "",
+        [string]$CodexRootDockerVolume = "",
+        [string]$OpenaiRootDockerVolume = "",
         [Parameter(Mandatory = $true)]
         [string]$OverridePath
     )
 
     $mounts = @()
     if (-not [string]::IsNullOrWhiteSpace($CodexRootDirHost)) {
-        $mounts += [pscustomobject]@{
-            SourcePath = $CodexRootDirHost
-            Source     = Convert-ResultPoolMountSource -HostPath $CodexRootDirHost -DockerSource $CodexRootDockerSource
-            TargetPath = "/shared/register-output/codex"
-        }
+        $mounts += New-ResultPoolMountSpec `
+            -HostPath $CodexRootDirHost `
+            -TargetPath "/shared/register-output/codex" `
+            -DockerSource $CodexRootDockerSource `
+            -DockerVolume $CodexRootDockerVolume
     }
     if (-not [string]::IsNullOrWhiteSpace($OpenaiRootDirHost)) {
-        $mounts += [pscustomobject]@{
-            SourcePath = $OpenaiRootDirHost
-            Source     = Convert-ResultPoolMountSource -HostPath $OpenaiRootDirHost -DockerSource $OpenaiRootDockerSource
-            TargetPath = "/shared/register-output/openai"
-        }
+        $mounts += New-ResultPoolMountSpec `
+            -HostPath $OpenaiRootDirHost `
+            -TargetPath "/shared/register-output/openai" `
+            -DockerSource $OpenaiRootDockerSource `
+            -DockerVolume $OpenaiRootDockerVolume
     }
 
     if ($mounts.Count -eq 0) {
@@ -505,9 +540,17 @@ function New-ResultPoolMountOverrideFile {
     $lines.Add('  easy-register:')
     $lines.Add('    volumes:')
     foreach ($mount in $mounts) {
-        $lines.Add('      - type: bind')
+        $lines.Add(("      - type: {0}" -f $mount.Type))
         $lines.Add(("        source: ""{0}""" -f $mount.Source))
         $lines.Add(("        target: ""{0}""" -f $mount.TargetPath))
+    }
+    $volumeMounts = @($mounts | Where-Object { $_.Type -eq "volume" })
+    if ($volumeMounts.Count -gt 0) {
+        $lines.Add('volumes:')
+        foreach ($mount in $volumeMounts) {
+            $lines.Add(("  {0}:" -f $mount.Source))
+            $lines.Add('    external: true')
+        }
     }
     Set-Content -LiteralPath $OverridePath -Value $lines -Encoding ASCII
     return $mounts
@@ -847,6 +890,8 @@ $resolvedCodexRootDirHost = Resolve-EnvValue -ParameterName 'CodexRootDirHost' -
 $resolvedOpenaiRootDirHost = Resolve-EnvValue -ParameterName 'OpenaiRootDirHost' -RuntimeKey 'REGISTER_OPENAI_ROOT_DIR_HOST' -Fallback ''
 $resolvedCodexRootDockerSource = Resolve-EnvValue -ParameterName 'CodexRootDockerSource' -RuntimeKey 'REGISTER_CODEX_ROOT_DOCKER_SOURCE' -Fallback ''
 $resolvedOpenaiRootDockerSource = Resolve-EnvValue -ParameterName 'OpenaiRootDockerSource' -RuntimeKey 'REGISTER_OPENAI_ROOT_DOCKER_SOURCE' -Fallback ''
+$resolvedCodexRootDockerVolume = Resolve-EnvValue -ParameterName 'CodexRootDockerVolume' -RuntimeKey 'REGISTER_CODEX_ROOT_DOCKER_VOLUME' -Fallback ''
+$resolvedOpenaiRootDockerVolume = Resolve-EnvValue -ParameterName 'OpenaiRootDockerVolume' -RuntimeKey 'REGISTER_OPENAI_ROOT_DOCKER_VOLUME' -Fallback ''
 if (-not [string]::IsNullOrWhiteSpace($resolvedCredentialRootHost)) {
     $resolvedCredentialRootHost = Resolve-AbsolutePath -Path $resolvedCredentialRootHost -BaseDir $launcherRoot
 }
@@ -1030,6 +1075,12 @@ if (-not [string]::IsNullOrWhiteSpace($resolvedCodexRootDockerSource)) {
 if (-not [string]::IsNullOrWhiteSpace($resolvedOpenaiRootDockerSource)) {
     $env:REGISTER_OPENAI_ROOT_DOCKER_SOURCE = $resolvedOpenaiRootDockerSource
 }
+if (-not [string]::IsNullOrWhiteSpace($resolvedCodexRootDockerVolume)) {
+    $env:REGISTER_CODEX_ROOT_DOCKER_VOLUME = $resolvedCodexRootDockerVolume
+}
+if (-not [string]::IsNullOrWhiteSpace($resolvedOpenaiRootDockerVolume)) {
+    $env:REGISTER_OPENAI_ROOT_DOCKER_VOLUME = $resolvedOpenaiRootDockerVolume
+}
 if (-not [string]::IsNullOrWhiteSpace($effectiveCodexFreeDirHost)) {
     $env:REGISTER_CODEX_FREE_DIR_HOST = $effectiveCodexFreeDirHost
 }
@@ -1103,6 +1154,8 @@ foreach ($entry in @{
     REGISTER_OPENAI_ROOT_DIR_HOST             = $env:REGISTER_OPENAI_ROOT_DIR_HOST
     REGISTER_CODEX_ROOT_DOCKER_SOURCE         = $env:REGISTER_CODEX_ROOT_DOCKER_SOURCE
     REGISTER_OPENAI_ROOT_DOCKER_SOURCE        = $env:REGISTER_OPENAI_ROOT_DOCKER_SOURCE
+    REGISTER_CODEX_ROOT_DOCKER_VOLUME         = $env:REGISTER_CODEX_ROOT_DOCKER_VOLUME
+    REGISTER_OPENAI_ROOT_DOCKER_VOLUME        = $env:REGISTER_OPENAI_ROOT_DOCKER_VOLUME
     REGISTER_CODEX_FREE_DIR_HOST              = $env:REGISTER_CODEX_FREE_DIR_HOST
     REGISTER_CODEX_TEAM_DIR_HOST              = $env:REGISTER_CODEX_TEAM_DIR_HOST
     REGISTER_CODEX_TEAM_INPUT_DIR_HOST        = $env:REGISTER_CODEX_TEAM_INPUT_DIR_HOST
@@ -1146,6 +1199,8 @@ $resultPoolMounts = @(
         -OpenaiRootDirHost $resolvedOpenaiRootDirHost `
         -CodexRootDockerSource $resolvedCodexRootDockerSource `
         -OpenaiRootDockerSource $resolvedOpenaiRootDockerSource `
+        -CodexRootDockerVolume $resolvedCodexRootDockerVolume `
+        -OpenaiRootDockerVolume $resolvedOpenaiRootDockerVolume `
         -OverridePath $resultPoolOverridePath
 )
 $aliasMountOverridePath = Join-Path $launcherRoot '.deploy-compose.alias-mounts.generated.yaml'
