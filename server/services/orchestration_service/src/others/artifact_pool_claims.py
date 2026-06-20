@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from errors import ErrorCodes
+from others.artifact_transfer import move_artifact_to_dir
 from others.artifact_pool_common import (
     artifact_routing_config_for_step_input,
     choose_random_files,
@@ -146,9 +147,14 @@ def claim_configured_input_file(*, step_input: dict[str, Any]) -> dict[str, Any]
             missing_email_candidates.append(str(candidate))
             continue
         claim_name = f"{uuid.uuid4().hex[:8]}-{candidate.name}"
-        claimed_path = claims_dir / claim_name
         try:
-            candidate.replace(claimed_path)
+            claimed_path = Path(
+                move_artifact_to_dir(
+                    source_path=candidate,
+                    destination_dir=claims_dir,
+                    preferred_name=claim_name,
+                )
+            )
         except FileNotFoundError:
             continue
         return {
@@ -226,9 +232,14 @@ def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]
             )
             continue
         claim_name = f"{uuid.uuid4().hex[:8]}-{candidate.name}"
-        claimed_path = claims_dir / claim_name
         try:
-            candidate.replace(claimed_path)
+            claimed_path = Path(
+                move_artifact_to_dir(
+                    source_path=candidate,
+                    destination_dir=claims_dir,
+                    preferred_name=claim_name,
+                )
+            )
         except FileNotFoundError:
             continue
         conversion_claim = acquire_conversion_lock(
@@ -617,11 +628,14 @@ def fill_team_pre_pool(*, step_input: dict[str, Any]) -> dict[str, Any]:
                 }
             )
             continue
-        destination = team_pre_pool_dir / candidate.name
-        if destination.exists():
-            destination = team_pre_pool_dir / f"{candidate.stem}-{uuid.uuid4().hex[:6]}{candidate.suffix}"
         try:
-            candidate.replace(destination)
+            destination = Path(
+                move_artifact_to_dir(
+                    source_path=candidate,
+                    destination_dir=team_pre_pool_dir,
+                    preferred_name=candidate.name,
+                )
+            )
         except FileNotFoundError:
             continue
         moved.append(
@@ -694,9 +708,14 @@ def claim_team_mother_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]:
             busy.append(busy_state)
             continue
         claim_name = f"{uuid.uuid4().hex[:8]}-{candidate.name}"
-        claimed_path = claims_dir / claim_name
         try:
-            candidate.replace(claimed_path)
+            claimed_path = Path(
+                move_artifact_to_dir(
+                    source_path=candidate,
+                    destination_dir=claims_dir,
+                    preferred_name=claim_name,
+                )
+            )
         except FileNotFoundError:
             continue
         claimed_payload, progress_reset = reset_claimed_team_expand_cycle_payload(
@@ -819,9 +838,14 @@ def claim_team_member_candidates(*, step_input: dict[str, Any]) -> dict[str, Any
             )
             continue
         claim_name = f"{uuid.uuid4().hex[:8]}-{candidate.name}"
-        claimed_path = claims_dir / claim_name
         try:
-            candidate.replace(claimed_path)
+            claimed_path = Path(
+                move_artifact_to_dir(
+                    source_path=candidate,
+                    destination_dir=claims_dir,
+                    preferred_name=claim_name,
+                )
+            )
         except FileNotFoundError:
             continue
         conversion_claim = acquire_conversion_lock(

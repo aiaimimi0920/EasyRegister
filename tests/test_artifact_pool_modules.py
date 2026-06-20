@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import errno
 import os
 import sys
 import tempfile
@@ -198,6 +199,41 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
             self.assertEqual("promoted_success", finalize_result["status"])
             self.assertEqual([], list(lock_dir.glob("*.json")))
             self.assertTrue((output_root / "openai" / "converted" / "seed.json").exists())
+
+    def test_claim_openai_oauth_artifact_falls_back_when_claim_crosses_filesystems(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260620-task000001"
+            source_pool_dir = output_root / "openai" / "failed-once"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            seed_path = source_pool_dir / "seed.json"
+            seed_path.write_text('{"email":"seed@example.com"}', encoding="utf-8")
+            original_replace = Path.replace
+
+            def _replace(self: Path, target: Path) -> Path:
+                if self == seed_path:
+                    raise OSError(errno.EXDEV, "Invalid cross-device link")
+                return original_replace(self, target)
+
+            with mock.patch.object(
+                artifact_pool_claims,
+                "load_openai_oauth_seed_validation",
+                return_value=(True, "", {"email": "seed@example.com"}),
+            ):
+                with mock.patch.object(Path, "replace", _replace):
+                    artifact = artifact_pool_claims.claim_openai_oauth_artifact(
+                        step_input={
+                            "output_dir": str(run_output_dir),
+                            "pool_dir": str(source_pool_dir),
+                            "worker_label": "worker-01",
+                            "task_index": 1,
+                        }
+                    )
+
+            claimed_path = Path(artifact["claimed_path"])
+            self.assertFalse(seed_path.exists())
+            self.assertTrue(claimed_path.exists())
+            self.assertEqual('{"email":"seed@example.com"}', claimed_path.read_text(encoding="utf-8"))
 
     def test_claim_openai_oauth_artifact_ignores_age_for_user_layer_seed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
