@@ -1801,6 +1801,80 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual(12, captured_calls[1]["timeout_seconds"])
         self.assertEqual("phone_verification_attempted_small_success", result["status"])
 
+    def test_audit_openai_account_availability_uses_dedicated_protocol_timeout(self) -> None:
+        captured_calls: list[dict[str, object]] = []
+
+        class _FakeResponse:
+            def __enter__(self) -> "_FakeResponse":
+                return self
+
+            def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+                return False
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {
+                        "status": "completed",
+                        "result": {
+                            "step_result": {
+                                "ok": True,
+                                "status": "completed",
+                                "results": [],
+                            }
+                        },
+                    }
+                ).encode("utf-8")
+
+        def _urlopen(req: object, timeout: object = None) -> object:
+            request_payload = json.loads(req.data.decode("utf-8"))  # type: ignore[attr-defined]
+            captured_calls.append(
+                {
+                    "step_type": request_payload["payload"]["step_type"],
+                    "timeout_seconds": timeout,
+                }
+            )
+            return _FakeResponse()
+
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+            easyprotocol_runtime.urllib.request,
+            "urlopen",
+            side_effect=_urlopen,
+        ):
+            default_result = easyprotocol_runtime.invoke_easyprotocol(
+                step_type="audit_openai_account_availability",
+                step_input={"targets": []},
+            )
+
+        with mock.patch.dict(
+            os.environ,
+            {"EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS": "120"},
+            clear=True,
+        ), mock.patch.object(
+            easyprotocol_runtime.urllib.request,
+            "urlopen",
+            side_effect=_urlopen,
+        ):
+            configured_result = easyprotocol_runtime.invoke_easyprotocol(
+                step_type="audit_openai_account_availability",
+                step_input={"targets": []},
+            )
+
+        self.assertEqual("completed", default_result["status"])
+        self.assertEqual("completed", configured_result["status"])
+        self.assertEqual(
+            [
+                {
+                    "step_type": "audit_openai_account_availability",
+                    "timeout_seconds": 300,
+                },
+                {
+                    "step_type": "audit_openai_account_availability",
+                    "timeout_seconds": 120,
+                },
+            ],
+            captured_calls,
+        )
+
     def test_dispatch_obtain_codex_oauth_treats_phone_submit_timeout_as_intermediate_result(self) -> None:
         def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
             if step_type == "obtain_codex_oauth":

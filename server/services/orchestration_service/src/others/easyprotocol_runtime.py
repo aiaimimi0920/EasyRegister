@@ -20,6 +20,7 @@ DEFAULT_EASY_PROTOCOL_REQUESTED_SERVICE = ""
 DEFAULT_EASY_PROTOCOL_TIMEOUT_SECONDS = 900
 DEFAULT_EASY_PROTOCOL_OAUTH_TIMEOUT_SECONDS = 240
 DEFAULT_EASY_PROTOCOL_PHONE_TIMEOUT_SECONDS = 120
+DEFAULT_EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS = 300
 DEFAULT_PROTOCOL_OUTPUT_TARGET_DIR = "/shared/register-output"
 DEFAULT_PROTOCOL_BRIDGE_SUBDIR = "easyregister-bridge"
 DEFAULT_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS = 5
@@ -82,6 +83,16 @@ def easyprotocol_phone_timeout_seconds() -> int:
         except Exception:
             return DEFAULT_EASY_PROTOCOL_PHONE_TIMEOUT_SECONDS
     return min(easyprotocol_timeout_seconds(), DEFAULT_EASY_PROTOCOL_PHONE_TIMEOUT_SECONDS)
+
+
+def easyprotocol_account_audit_timeout_seconds() -> int:
+    raw = str(os.environ.get("EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS") or "").strip()
+    if raw:
+        try:
+            return max(1, int(float(raw)))
+        except Exception:
+            return DEFAULT_EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS
+    return min(easyprotocol_timeout_seconds(), DEFAULT_EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS)
 
 
 def phone_verification_terminal_retry_attempts() -> int:
@@ -568,6 +579,8 @@ def invoke_easyprotocol(
             "submit_phone_verification_code",
         }:
             request_timeout = easyprotocol_phone_timeout_seconds()
+        elif normalized_step_type == "audit_openai_account_availability":
+            request_timeout = easyprotocol_account_audit_timeout_seconds()
         else:
             request_timeout = easyprotocol_timeout_seconds()
         with urllib.request.urlopen(req, timeout=request_timeout) as resp:

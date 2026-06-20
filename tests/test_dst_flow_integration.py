@@ -185,6 +185,44 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual("source_missing", finalized["records"][0]["action"])
         self.assertEqual(str(original.resolve()), finalized["records"][0]["source_path"])
 
+    def test_account_availability_audit_production_selection_removes_stale_claim_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            claims_dir = output_root / "others" / "account-availability-audit" / "claims"
+            converted.mkdir(parents=True, exist_ok=True)
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            ready = converted / "ready.json"
+            ready.write_text(json.dumps({"email": "ready@example.com"}), encoding="utf-8")
+            stale_claim = claims_dir / "stale.json"
+            fresh_claim = claims_dir / "fresh.json"
+            stale_claim.write_text(json.dumps({"email": "old@example.com"}), encoding="utf-8")
+            fresh_claim.write_text(json.dumps({"email": "fresh@example.com"}), encoding="utf-8")
+            stale_timestamp = datetime.now(timezone.utc).timestamp() - 7200
+            fresh_timestamp = datetime.now(timezone.utc).timestamp()
+            os.utime(stale_claim, (stale_timestamp, stale_timestamp))
+            os.utime(fresh_claim, (fresh_timestamp, fresh_timestamp))
+
+            with mock.patch.dict(
+                os.environ,
+                {"REGISTER_ACCOUNT_AUDIT_STALE_CLAIM_SECONDS": "3600"},
+                clear=False,
+            ):
+                selected = account_availability_audit.select_account_audit_targets(
+                    step_input={
+                        "production_mode": True,
+                        "output_root": str(output_root),
+                        "max_targets": 1,
+                    }
+                )
+            stale_exists = stale_claim.exists()
+            fresh_exists = fresh_claim.exists()
+
+        self.assertTrue(selected["ok"])
+        self.assertEqual(1, selected["stale_claims_removed"])
+        self.assertFalse(stale_exists)
+        self.assertTrue(fresh_exists)
+
     def test_account_availability_audit_production_deleted_removes_same_email_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"

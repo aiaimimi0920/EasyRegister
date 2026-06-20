@@ -42,6 +42,7 @@ AUDIT_STATE_KEY = "accountAvailabilityAudit"
 AUDIT_FLOW_VERSION = "openai-account-availability-audit-v1"
 PRODUCTION_LOGIN_RECHECK_SECONDS = 24 * 60 * 60
 PRODUCTION_INCONCLUSIVE_RECHECK_SECONDS = 12 * 60 * 60
+DEFAULT_PRODUCTION_STALE_CLAIM_SECONDS = 6 * 60 * 60
 
 
 def _as_text(value: Any) -> str:
@@ -59,6 +60,15 @@ def _as_int(value: Any, default: int = 0) -> int:
         return int(float(_as_text(value)))
     except Exception:
         return default
+
+
+def _stale_claim_seconds() -> int:
+    import os
+
+    raw = _as_text(os.environ.get("REGISTER_ACCOUNT_AUDIT_STALE_CLAIM_SECONDS"))
+    if not raw:
+        return DEFAULT_PRODUCTION_STALE_CLAIM_SECONDS
+    return max(0, _as_int(raw, DEFAULT_PRODUCTION_STALE_CLAIM_SECONDS))
 
 
 def _utc_now() -> datetime:
@@ -255,6 +265,32 @@ def _production_claim_dir(output_root: Path) -> Path:
     return output_root / "others" / "account-availability-audit" / "claims"
 
 
+def _cleanup_stale_production_claims(*, output_root: Path, now: datetime | None = None) -> int:
+    stale_after_seconds = _stale_claim_seconds()
+    if stale_after_seconds <= 0:
+        return 0
+    claim_dir = _production_claim_dir(output_root)
+    if not claim_dir.is_dir():
+        return 0
+    current_time = (now or _utc_now()).timestamp()
+    removed = 0
+    for candidate in claim_dir.glob("*.json"):
+        if not candidate.is_file():
+            continue
+        try:
+            age_seconds = max(0.0, current_time - candidate.stat().st_mtime)
+        except FileNotFoundError:
+            continue
+        if age_seconds < stale_after_seconds:
+            continue
+        try:
+            candidate.unlink()
+            removed += 1
+        except FileNotFoundError:
+            continue
+    return removed
+
+
 def _claim_production_target(*, output_root: Path, target: dict[str, Any]) -> dict[str, Any]:
     original_path = Path(_as_text(target.get("source_path") or target.get("sourcePath"))).expanduser().resolve()
     if not original_path.is_file():
@@ -317,6 +353,7 @@ def select_account_audit_targets(*, step_input: dict[str, Any]) -> dict[str, Any
     mode = "single-file"
     source_dir = ""
     claims_dir = ""
+    stale_claims_removed = 0
 
     if _is_production_mode(step_input):
         output_root = _production_output_root(step_input)
@@ -324,6 +361,7 @@ def select_account_audit_targets(*, step_input: dict[str, Any]) -> dict[str, Any
         source_dir = str(output_root)
         production_max_targets = max_targets if max_targets > 0 else 1
         now = _utc_now()
+        stale_claims_removed = _cleanup_stale_production_claims(output_root=output_root, now=now)
         for candidate in _production_candidate_paths(output_root):
             if len(targets) >= production_max_targets:
                 break
@@ -395,6 +433,7 @@ def select_account_audit_targets(*, step_input: dict[str, Any]) -> dict[str, Any
             "claims_dir": claims_dir,
             "targets": [],
             "skipped": skipped,
+            "stale_claims_removed": stale_claims_removed,
         }
     return {
         "ok": True,
@@ -406,6 +445,7 @@ def select_account_audit_targets(*, step_input: dict[str, Any]) -> dict[str, Any
         "skipped_count": len(skipped),
         "targets": targets,
         "skipped": skipped,
+        "stale_claims_removed": stale_claims_removed,
     }
 
 
