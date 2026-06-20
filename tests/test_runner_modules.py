@@ -1501,6 +1501,86 @@ class RunnerProcessSupervisorTests(unittest.TestCase):
         self.assertEqual([600.0], [item["defaultThresholdSeconds"] for item in recovered])
         process.terminate.assert_called_once_with()
 
+    def test_recover_stale_account_audit_worker_releases_running_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            workers_dir = shared_root / "others" / "dashboard-state" / "easy-register" / "workers"
+            workers_dir.mkdir(parents=True, exist_ok=True)
+            (workers_dir / "worker-05.json").write_text(
+                json.dumps(
+                    {
+                        "workerId": "worker-05",
+                        "status": "running",
+                        "updatedAt": "2026-06-19T02:00:00+00:00",
+                        "startedAt": "2026-06-19T02:00:00+00:00",
+                        "currentTaskRole": "account-audit",
+                        "currentFlowName": "openai-account-availability-audit",
+                        "currentOutputDir": "/shared/register-output/others/mixed-runs/worker-05/run-active",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            active_counts = {"openai-account-availability-audit": 1}
+            active_owners = {"worker-05": "openai-account-availability-audit"}
+            process = mock.Mock()
+            process.pid = 123
+            process.is_alive.return_value = True
+
+            recovered = runner_process_supervisor.recover_stale_account_audit_workers(
+                processes={5: process},
+                shared_root=shared_root,
+                instance_id="easy-register",
+                active_flow_counts=active_counts,
+                active_flow_owners=active_owners,
+                active_flow_lock=None,
+                now=datetime(2026, 6, 19, 2, 8, 0, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(["openai-account-availability-audit"], [item["slotKey"] for item in recovered])
+        self.assertEqual([420.0], [item["thresholdSeconds"] for item in recovered])
+        self.assertEqual({}, active_counts)
+        self.assertEqual({}, active_owners)
+        process.terminate.assert_called_once_with()
+
+    def test_recover_stale_account_audit_worker_does_not_touch_main_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            workers_dir = shared_root / "others" / "dashboard-state" / "easy-register" / "workers"
+            workers_dir.mkdir(parents=True, exist_ok=True)
+            (workers_dir / "worker-05.json").write_text(
+                json.dumps(
+                    {
+                        "workerId": "worker-05",
+                        "status": "running",
+                        "updatedAt": "2026-06-19T02:00:00+00:00",
+                        "startedAt": "2026-06-19T02:00:00+00:00",
+                        "currentTaskRole": "main",
+                        "currentFlowName": "openai-main",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            active_counts = {"openai-main": 1}
+            active_owners = {"worker-05": "openai-main"}
+            process = mock.Mock()
+            process.pid = 123
+            process.is_alive.return_value = True
+
+            recovered = runner_process_supervisor.recover_stale_account_audit_workers(
+                processes={5: process},
+                shared_root=shared_root,
+                instance_id="easy-register",
+                active_flow_counts=active_counts,
+                active_flow_owners=active_owners,
+                active_flow_lock=None,
+                now=datetime(2026, 6, 19, 2, 30, 0, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual([], recovered)
+        self.assertEqual({"openai-main": 1}, active_counts)
+        self.assertEqual({"worker-05": "openai-main"}, active_owners)
+        process.terminate.assert_not_called()
+
     def test_task_slots_exhausted_reads_counter_without_lock(self) -> None:
         class _Counter:
             @property
