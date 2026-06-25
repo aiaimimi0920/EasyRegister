@@ -335,6 +335,13 @@ def _delete_protocol_bridge_source_quiet(path: Path) -> None:
         pass
 
 
+def _file_content_matches(left: Path, right: Path) -> bool:
+    try:
+        return left.read_bytes() == right.read_bytes()
+    except Exception:
+        return False
+
+
 def _materialize_openai_oauth_artifact_from_output(
     *,
     result_or_payload: Any,
@@ -425,6 +432,7 @@ def copy_openai_oauth_artifacts_to_pool(
     worker_label: str,
     task_index: int,
     result_or_payload: Any | None = None,
+    delete_protocol_bridge_source: bool = True,
 ) -> list[str]:
     source_paths = _iter_openai_oauth_artifacts(
         run_output_dir=run_output_dir,
@@ -446,7 +454,8 @@ def copy_openai_oauth_artifacts_to_pool(
         valid, reason = validate_openai_oauth_seed_payload(payload, enforce_max_age=False)
         if not valid:
             discarded_paths.append({"source_path": str(resolved_source), "reason": reason})
-            _delete_protocol_bridge_source_quiet(resolved_source)
+            if delete_protocol_bridge_source:
+                _delete_protocol_bridge_source_quiet(resolved_source)
             continue
         payload, payload_enriched = _enrich_openai_oauth_payload_recovery_data(
             payload=payload,
@@ -460,13 +469,19 @@ def copy_openai_oauth_artifacts_to_pool(
             copied_paths.append(str(resolved_source))
             continue
         if destination.exists():
+            if _file_content_matches(resolved_source, destination):
+                copied_paths.append(str(destination))
+                if delete_protocol_bridge_source:
+                    _delete_protocol_bridge_source_quiet(resolved_source)
+                continue
             destination = pool_dir / f"{Path(artifact_name).stem}-{uuid.uuid4().hex[:6]}{Path(artifact_name).suffix}"
         if payload_enriched:
             write_json_atomic(destination, payload, include_pid=True, cleanup_temp=True)
         else:
             shutil.copy2(resolved_source, destination)
         copied_paths.append(str(destination))
-        _delete_protocol_bridge_source_quiet(resolved_source)
+        if delete_protocol_bridge_source:
+            _delete_protocol_bridge_source_quiet(resolved_source)
     json_log(
         {
             "event": "register_openai_oauth_collected",

@@ -2502,6 +2502,94 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual(["http://proxy-1", "http://proxy-2"], create_proxy_urls)
         self.assertEqual(2, proxy_call_count)
 
+    def test_run_dst_flow_once_collects_openai_pool_as_soon_as_small_success_is_created(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            output_root = root / "register-output"
+            run_output_dir = output_root / "worker-01" / "run-20260625-000000-task000001"
+            bridge_dir = root / "easyregister-bridge"
+            pool_dir = output_root / "openai" / "failed-once"
+            bridge_dir.mkdir(parents=True, exist_ok=True)
+            payload_path = bridge_dir / "small-immediate.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "email": "immediate@example.com",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                        "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"}
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            flow_path = root / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "create-openai-account",
+                                    "type": "create_openai_account",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"output_dir": "{{task.output_dir}}"},
+                                    "saveAs": "create_openai_account",
+                                },
+                                {
+                                    "id": "obtain-codex-oauth",
+                                    "type": "obtain_codex_oauth",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"source_path": "{{create_openai_account.storage_path}}"},
+                                    "saveAs": "obtain_codex_oauth",
+                                },
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "create_openai_account":
+                    return {
+                        "ok": True,
+                        "status": "completed",
+                        "storage_path": str(payload_path),
+                        "email": "immediate@example.com",
+                    }
+                if step_type == "obtain_codex_oauth":
+                    raise RuntimeError("missing_workspace")
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(dst_flow.OWNER_DISPATCHERS, {"easyprotocol": _dispatcher}, clear=True):
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "REGISTER_PROTOCOL_BRIDGE_DIR": str(bridge_dir),
+                        "REGISTER_OPENAI_OAUTH_CONTINUE_POOL_DIR": str(pool_dir),
+                    },
+                    clear=False,
+                ):
+                    result = dst_flow.run_dst_flow_once(
+                        output_dir=str(run_output_dir),
+                        flow_path=flow_path,
+                    )
+
+            copied_path = pool_dir / payload_path.name
+            copied_exists = copied_path.is_file()
+            source_exists = payload_path.exists()
+
+        self.assertFalse(result.ok)
+        self.assertEqual("obtain-codex-oauth", result.error_step)
+        self.assertTrue(copied_exists)
+        self.assertTrue(source_exists)
+
     def test_run_dst_flow_once_retries_create_account_with_mailbox_and_proxy_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             flow_path = Path(tmp_dir) / "temp-flow.json"

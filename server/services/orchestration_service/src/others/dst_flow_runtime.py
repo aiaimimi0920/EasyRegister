@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -380,6 +381,60 @@ def _copy_recovery_data_credential_to_output(*, step_input: Any, step_output: An
     return step_output
 
 
+def _task_index_from_output_dir(output_dir: str) -> int:
+    name = Path(str(output_dir or "")).name
+    marker = "-task"
+    if marker not in name:
+        return 0
+    raw = name.rsplit(marker, 1)[-1]
+    try:
+        return int(raw)
+    except Exception:
+        return 0
+
+
+def _maybe_collect_openai_oauth_artifact_after_step(
+    *,
+    state: dict[str, Any],
+    result: DstExecutionResult,
+) -> None:
+    if bool(state.get("_openai_oauth_immediate_collected")):
+        return
+    task = state.get("task") if isinstance(state.get("task"), dict) else {}
+    output_dir_text = str(task.get("output_dir") or "").strip()
+    if not output_dir_text:
+        return
+
+    from others.artifact_pool_paths import resolve_openai_oauth_continue_pool
+    from others.common import validate_openai_oauth_seed_payload
+    from others.result_artifacts import FREE_OPENAI_OAUTH_SOURCE_CANDIDATES, first_existing_output_path
+    from others.runner_openai_oauth import copy_openai_oauth_artifacts_to_pool
+    from others.storage import load_json_payload
+
+    source_path = first_existing_output_path(result, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES)
+    if source_path is None:
+        return
+    try:
+        payload = load_json_payload(source_path)
+    except Exception:
+        return
+    valid, reason = validate_openai_oauth_seed_payload(payload, enforce_max_age=False)
+    if not valid:
+        state["_openai_oauth_immediate_collect_skip_reason"] = reason
+        return
+
+    copied_paths = copy_openai_oauth_artifacts_to_pool(
+        run_output_dir=Path(output_dir_text),
+        pool_dir=resolve_openai_oauth_continue_pool({"output_dir": output_dir_text}),
+        worker_label=str(os.environ.get("REGISTER_WORKER_ID") or "dst-flow"),
+        task_index=_task_index_from_output_dir(output_dir_text),
+        result_or_payload=result,
+        delete_protocol_bridge_source=False,
+    )
+    if copied_paths:
+        state["_openai_oauth_immediate_collected"] = True
+
+
 def run_statement_once(
     *,
     statement: DstStatement,
@@ -406,6 +461,7 @@ def run_statement_once(
     result.outputs[statement.step_id] = step_output
     if statement.save_as:
         state[statement.save_as] = step_output
+    _maybe_collect_openai_oauth_artifact_after_step(state=state, result=result)
     return step_output
 
 
