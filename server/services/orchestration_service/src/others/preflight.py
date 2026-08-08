@@ -12,6 +12,10 @@ from others.config import (
     RunnerMainConfig,
     TeamAuthRuntimeConfig,
 )
+from others.config_env import (
+    account_audit_protocol_timeout_seconds,
+    account_audit_worker_hard_timeout_seconds,
+)
 from others.paths import resolve_shared_root
 
 
@@ -124,6 +128,16 @@ def validate_runtime_preflight() -> dict[str, Any]:
     if missing_r2_fields:
         errors.append(f"incomplete_r2_config:{','.join(missing_r2_fields)}")
 
+    audit_protocol_timeout = int(account_audit_protocol_timeout_seconds())
+    audit_worker_hard_timeout = int(account_audit_worker_hard_timeout_seconds())
+    if audit_worker_hard_timeout > 0 and audit_protocol_timeout >= audit_worker_hard_timeout:
+        # The worker would be killed while the protocol is still auditing, and
+        # finalize (alwaysRun) then marks every claimed target inconclusive.
+        errors.append(
+            "account_audit_timeout_exceeds_worker_hard_timeout:"
+            f"{audit_protocol_timeout}>={audit_worker_hard_timeout}"
+        )
+
     if errors:
         raise RuntimeError(";".join(errors))
 
@@ -144,6 +158,10 @@ def validate_runtime_preflight() -> dict[str, Any]:
             "ttlSeconds": mailbox_config.ttl_seconds,
             "providers": list(mailbox_config.providers),
             "domainStatePath": str(mailbox_config.domain_state_path),
+        },
+        "accountAudit": {
+            "protocolTimeoutSeconds": audit_protocol_timeout,
+            "workerHardTimeoutSeconds": audit_worker_hard_timeout,
         },
         "teamAuth": {
             "motherPoolDir": str(team_auth_config.mother_pool_dir),

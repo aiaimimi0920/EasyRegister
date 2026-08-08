@@ -1875,6 +1875,65 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             captured_calls,
         )
 
+    def test_dispatch_account_audit_propagates_timeout_budget_to_protocol(self) -> None:
+        """The protocol must be told our HTTP budget, else it plans for its own larger default."""
+        captured: list[dict[str, object]] = []
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured.append(dict(step_input))
+            return {"ok": True, "status": "completed", "results": []}
+
+        with mock.patch.dict(
+            os.environ,
+            {"EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS": "240"},
+            clear=True,
+        ), mock.patch.object(easyprotocol_runtime, "invoke_easyprotocol", side_effect=_invoke):
+            easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="audit_openai_account_availability",
+                step_input={"targets": [{"email": "batch@example.com"}]},
+            )
+
+        self.assertEqual(1, len(captured))
+        self.assertEqual(240, captured[0].get("timeout_seconds"))
+
+    def test_dispatch_account_audit_keeps_explicit_timeout_seconds(self) -> None:
+        captured: list[dict[str, object]] = []
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured.append(dict(step_input))
+            return {"ok": True, "status": "completed", "results": []}
+
+        with mock.patch.dict(
+            os.environ,
+            {"EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS": "240"},
+            clear=True,
+        ), mock.patch.object(easyprotocol_runtime, "invoke_easyprotocol", side_effect=_invoke):
+            easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="audit_openai_account_availability",
+                step_input={"targets": [], "timeout_seconds": 90},
+            )
+
+        self.assertEqual(90, captured[0].get("timeout_seconds"))
+
+    def test_dispatch_non_audit_step_does_not_get_audit_timeout_budget(self) -> None:
+        captured: list[dict[str, object]] = []
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured.append(dict(step_input))
+            return {"ok": True, "status": "completed"}
+
+        with mock.patch.dict(
+            os.environ,
+            {"EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS": "240"},
+            clear=True,
+        ), mock.patch.object(easyprotocol_runtime, "invoke_easyprotocol", side_effect=_invoke):
+            easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="login_openai_community",
+                step_input={"source_path": ""},
+            )
+
+        self.assertNotIn("timeout_seconds", captured[0])
+
     def test_dispatch_obtain_codex_oauth_treats_phone_submit_timeout_as_intermediate_result(self) -> None:
         def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
             if step_type == "obtain_codex_oauth":

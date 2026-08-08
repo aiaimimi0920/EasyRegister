@@ -646,6 +646,38 @@ class TypedConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "incomplete_r2_config"):
                     validate_runtime_preflight()
 
+    def test_runtime_preflight_rejects_audit_http_timeout_above_worker_hard_timeout(self) -> None:
+        """A batch the worker gets killed mid-way through marks every claimed target inconclusive."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS": "600",
+                    "REGISTER_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS": "420",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "account_audit_timeout_exceeds_worker_hard_timeout"):
+                    validate_runtime_preflight()
+
+    def test_runtime_preflight_accepts_audit_http_timeout_below_worker_hard_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS": "300",
+                    "REGISTER_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS": "420",
+                },
+                clear=True,
+            ):
+                preflight = validate_runtime_preflight()
+        self.assertEqual(300, preflight["accountAudit"]["protocolTimeoutSeconds"])
+        self.assertEqual(420, preflight["accountAudit"]["workerHardTimeoutSeconds"])
+
     def test_runtime_preflight_accepts_minimal_local_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"

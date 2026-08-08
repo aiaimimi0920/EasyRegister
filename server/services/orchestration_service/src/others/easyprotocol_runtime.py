@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from others import runtime_sms
+from others.config_env import (
+    account_audit_protocol_timeout_seconds as _account_audit_protocol_timeout_seconds,
+)
 
 
 DEFAULT_EASY_PROTOCOL_BASE_URL = "http://127.0.0.1:19788"
@@ -86,13 +89,9 @@ def easyprotocol_phone_timeout_seconds() -> int:
 
 
 def easyprotocol_account_audit_timeout_seconds() -> int:
-    raw = str(os.environ.get("EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS") or "").strip()
-    if raw:
-        try:
-            return max(1, int(float(raw)))
-        except Exception:
-            return DEFAULT_EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS
-    return min(easyprotocol_timeout_seconds(), DEFAULT_EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS)
+    # Single source of truth lives in config_env so preflight can validate it
+    # without importing this module's heavier dependency chain.
+    return _account_audit_protocol_timeout_seconds()
 
 
 def phone_verification_terminal_retry_attempts() -> int:
@@ -670,6 +669,13 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
     if normalized_step_type == "audit_openai_account_availability":
         bridged_step_input, account_audit_target_bridge_infos = maybe_bridge_account_audit_targets_for_protocol(
             step_input=bridged_step_input,
+        )
+        # Hand the protocol our own HTTP budget. Without this it falls back to a
+        # much larger internal default, keeps auditing after we have already hung
+        # up, and every claimed target in the batch comes back unmatched.
+        bridged_step_input.setdefault(
+            "timeout_seconds",
+            easyprotocol_account_audit_timeout_seconds(),
         )
     try:
         result = invoke_easyprotocol(

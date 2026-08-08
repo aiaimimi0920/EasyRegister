@@ -13,6 +13,9 @@ from dashboard_server import ServiceRuntimeState, start_dashboard_server_if_enab
 from others.common import ensure_directory as _ensure_directory
 from others.common import json_log as _json_log
 from others.config import RunnerMainConfig
+from others.config_env import (
+    account_audit_worker_hard_timeout_seconds as _account_audit_worker_hard_timeout_seconds,
+)
 from others.runner_flow_scheduler import flow_spec_summary
 from others.runner_flow_scheduler import release_flow_slot_for_owner
 from others.preflight import validate_runtime_preflight as _validate_runtime_preflight
@@ -56,10 +59,9 @@ def _worker_uninterruptible_stale_threshold_seconds(
 
 
 def account_audit_worker_hard_timeout_seconds() -> float:
-    return _env_float(
-        name="REGISTER_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS",
-        default=DEFAULT_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS,
-    )
+    # Single source of truth lives in config_env so preflight can validate this
+    # against the protocol HTTP budget without importing this module.
+    return _account_audit_worker_hard_timeout_seconds()
 
 
 def _worker_state_is_account_audit(worker_state: dict[str, Any]) -> bool:

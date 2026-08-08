@@ -107,6 +107,43 @@ def env_path(name: str, default: str = "") -> Path:
     return Path(env_text(name, default) or default).expanduser().resolve()
 
 
+DEFAULT_EASY_PROTOCOL_TIMEOUT_SECONDS = 900
+DEFAULT_EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS = 300
+DEFAULT_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS = 420.0
+
+
+def easyprotocol_timeout_seconds() -> int:
+    raw = env_text("EASY_PROTOCOL_TIMEOUT_SECONDS", "")
+    if raw:
+        try:
+            return max(1, int(float(raw)))
+        except Exception:
+            return DEFAULT_EASY_PROTOCOL_TIMEOUT_SECONDS
+    return DEFAULT_EASY_PROTOCOL_TIMEOUT_SECONDS
+
+
+def account_audit_protocol_timeout_seconds() -> int:
+    """HTTP budget EasyRegister allows one account-audit protocol call."""
+    raw = env_text("EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS", "")
+    if raw:
+        try:
+            return max(1, int(float(raw)))
+        except Exception:
+            return DEFAULT_EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS
+    return min(easyprotocol_timeout_seconds(), DEFAULT_EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS)
+
+
+def account_audit_worker_hard_timeout_seconds() -> float:
+    """Wall clock after which the supervisor kills a stuck account-audit worker."""
+    raw = env_text("REGISTER_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS", "")
+    if raw:
+        try:
+            return float(raw)
+        except Exception:
+            return DEFAULT_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS
+    return DEFAULT_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS
+
+
 def resolve_output_root_text(default: str = "/shared/register-output") -> str:
     return env_text("REGISTER_OUTPUT_ROOT", default) or default
 
