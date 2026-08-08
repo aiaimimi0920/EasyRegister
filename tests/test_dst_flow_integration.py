@@ -443,6 +443,53 @@ class DstFlowIntegrationTests(unittest.TestCase):
             self.assertEqual("login_succeeded", alive_state["status"])
             self.assertEqual("login_succeeded", doomed_state["status"])
 
+    def test_account_availability_audit_record_redacts_credentials_inside_urls(self) -> None:
+        """Redaction matches sensitive key names, but OAuth callbacks carry the
+        authorization code in the query string under innocuous keys like finalUrl."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-url-leak.json"
+            source.write_text(json.dumps({"email": "urlleak@example.com"}), encoding="utf-8")
+            audit_path = output_root / "others" / "account-availability-audit.jsonl"
+
+            account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "audit_path": str(audit_path),
+                    "targets": [
+                        {
+                            "target_id": "eeee5555",
+                            "source_path": str(source),
+                            "original_path": str(source),
+                            "original_name": source.name,
+                            "email": "urlleak@example.com",
+                        }
+                    ],
+                    "audit_result": {
+                        "results": [
+                            {
+                                "target_id": "eeee5555",
+                                "email": "urlleak@example.com",
+                                "status": "inconclusive",
+                                "detail": "login_incomplete",
+                                "target_url": "https://platform.openai.com/auth/callback?code=ac_SuperSecretCode123&state=xyz",
+                                "browser": {
+                                    "finalUrl": "https://chatgpt.com/auth/login_with?id_token=eyJhbGciSecret",
+                                },
+                            }
+                        ]
+                    },
+                }
+            )
+
+            written = audit_path.read_text(encoding="utf-8")
+            self.assertNotIn("ac_SuperSecretCode123", written)
+            self.assertNotIn("eyJhbGciSecret", written)
+            self.assertIn("platform.openai.com/auth/callback", written)
+
     def test_account_availability_audit_production_update_does_not_truncate_on_write_failure(self) -> None:
         """Audit workers are hard-killed at a timeout and these files are credentials
         on a network share, so a rewrite must never leave the original truncated."""

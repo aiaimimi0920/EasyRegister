@@ -39,6 +39,17 @@ SENSITIVE_KEY_MARKERS = {
     "token",
 }
 
+SENSITIVE_QUERY_MARKERS = {
+    "code",
+    "token",
+    "secret",
+    "credential",
+    "password",
+    "session",
+    "auth",
+    "key",
+}
+
 NOT_ATTEMPTED_DETAILS = {
     "account_audit_timeout_exceeded",
     "missing_account_audit_result",
@@ -584,6 +595,31 @@ def _classify_status(result: dict[str, Any]) -> str:
     return "inconclusive"
 
 
+def _redact_url_credentials(value: str) -> str:
+    """Strip credential-bearing query parameters, keeping the host and path.
+
+    Key-name redaction misses these: an OAuth callback carries the authorization
+    code, and a login handoff carries the id_token, under keys as innocuous as
+    finalUrl or target_url.
+    """
+    if "?" not in value or "://" not in value:
+        return value
+    base, _, query = value.partition("?")
+    kept: list[str] = []
+    stripped = False
+    for pair in query.split("&"):
+        name = pair.partition("=")[0].strip().lower()
+        if name and any(marker in name for marker in SENSITIVE_QUERY_MARKERS):
+            stripped = True
+            continue
+        if pair:
+            kept.append(pair)
+    if not stripped:
+        return value
+    suffix = "&".join(kept)
+    return f"{base}?{suffix}&<redacted>" if suffix else f"{base}?<redacted>"
+
+
 def _redact_for_audit(value: Any) -> Any:
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
@@ -597,6 +633,8 @@ def _redact_for_audit(value: Any) -> Any:
         return redacted
     if isinstance(value, list):
         return [_redact_for_audit(item) for item in value]
+    if isinstance(value, str):
+        return _redact_url_credentials(value)
     return value
 
 
