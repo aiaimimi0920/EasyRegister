@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import urllib.request
 from datetime import timedelta
@@ -14,6 +15,35 @@ from others.dashboard_state import json_default
 from others.dashboard_state import parse_iso8601
 from others.dashboard_state import read_json
 from others.dashboard_state import utcnow
+
+
+_EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def _mask_email_match(match: re.Match[str]) -> str:
+    local = match.group(0).partition("@")[0]
+    # Artifact names embed the email after a run prefix such as
+    # "small-20260725-094907-indigo-". The pattern greedily swallows that prefix,
+    # so put back everything up to the final separator and mask only the address.
+    prefix, separator, _ = local.rpartition("-")
+    return f"{prefix}{separator}***@***" if separator else "***@***"
+
+
+def mask_account_emails(value: Any) -> Any:
+    """Redact account emails anywhere in the dashboard payload.
+
+    /api/status has no authentication and the shipped default listens on all
+    interfaces, while artifact object keys are named after the account email.
+    Masking at the response boundary keeps the on-disk state fully detailed for
+    forensics without publishing the account list to the local network.
+    """
+    if isinstance(value, str):
+        return _EMAIL_PATTERN.sub(_mask_email_match, value)
+    if isinstance(value, dict):
+        return {key: mask_account_emails(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [mask_account_emails(item) for item in value]
+    return value
 
 
 class DashboardHTTPServer:
@@ -187,22 +217,24 @@ class DashboardHTTPServer:
             "size": openai_oauth_pool_size,
         }
 
-        return {
-            "generatedAt": now.isoformat(),
-            "pipelines": pipeline_payload,
-            "flows": flow_payload,
-            "openaiOauthPool": openai_oauth_pool_payload,
-            "smallSuccessPool": openai_oauth_pool_payload,
-            "recentUploads": {
-                "windowSeconds": self._recent_window_seconds,
-                "count": len(recent_uploads),
-                "items": recent_uploads[:20],
-            },
-            "executors": executor_rows,
-            "easyProtocol": {
-                "baseUrl": self._easy_protocol_base_url,
-            },
-        }
+        return mask_account_emails(
+            {
+                "generatedAt": now.isoformat(),
+                "pipelines": pipeline_payload,
+                "flows": flow_payload,
+                "openaiOauthPool": openai_oauth_pool_payload,
+                "smallSuccessPool": openai_oauth_pool_payload,
+                "recentUploads": {
+                    "windowSeconds": self._recent_window_seconds,
+                    "count": len(recent_uploads),
+                    "items": recent_uploads[:20],
+                },
+                "executors": executor_rows,
+                "easyProtocol": {
+                    "baseUrl": self._easy_protocol_base_url,
+                },
+            }
+        )
 
     def _fetch_easy_protocol_stats(self) -> dict[str, Any]:
         base = self._easy_protocol_base_url.rstrip("/")

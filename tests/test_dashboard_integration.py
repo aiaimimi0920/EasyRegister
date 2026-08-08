@@ -109,3 +109,61 @@ class DashboardIntegrationTests(unittest.TestCase):
         self.assertEqual("PythonProtocol-1", payload["executors"][0]["service"])
         self.assertEqual(5, payload["flows"]["openai-main"]["concurrencyLimit"])
         self.assertEqual(0, payload["flows"]["openai-main"]["activeWorkers"])
+
+    def test_dashboard_status_masks_account_emails_in_object_keys(self) -> None:
+        """The status endpoint is unauthenticated and listens on 0.0.0.0 by default,
+        so object keys must not publish the account emails they are named after."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            output_root = Path(tmp_dir) / "output"
+            worker_state = dashboard_server.WorkerRuntimeState(
+                shared_root=shared_root,
+                instance_id="instance-main",
+                instance_role="main",
+                worker_id="worker-01",
+            )
+            worker_state.started(pid=2222, output_root=str(output_root), team_auth_pinned=False)
+            worker_state.run_finished(
+                task_index=1,
+                result={
+                    "ok": True,
+                    "outputs": {
+                        "upload-oauth-artifact": {
+                            "ok": True,
+                            "object_key": "oauth/openai/small-20260725-094907-indigo-d8tr@znhyo.dpdns.org-a2cfe0.json",
+                            "bucket": "bucket-a",
+                            "target_folder": "oauth/openai",
+                        }
+                    },
+                },
+                output_dir=str(output_root / "run-1"),
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            with mock.patch.object(
+                dashboard_server.DashboardHTTPServer,
+                "_fetch_easy_protocol_stats",
+                return_value={"services": []},
+            ):
+                server = dashboard_server.DashboardHTTPServer(
+                    listen="127.0.0.1:0",
+                    shared_root=shared_root,
+                    easy_protocol_base_url="http://example.test/api/public/request",
+                    easy_protocol_token="secure-token",
+                    easy_protocol_actor="actor",
+                    recent_window_seconds=900,
+                )
+                server.start()
+                try:
+                    port = int(server._httpd.server_address[1])
+                    with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=5) as response:
+                        raw = response.read().decode("utf-8")
+                finally:
+                    server.stop()
+
+        self.assertNotIn("d8tr@znhyo.dpdns.org", raw)
+        self.assertNotIn("znhyo.dpdns.org", raw)
+        payload = json.loads(raw)
+        object_key = payload["recentUploads"]["items"][0]["objectKey"]
+        self.assertIn("oauth/openai/", object_key)
+        self.assertIn("small-20260725-094907", object_key)
