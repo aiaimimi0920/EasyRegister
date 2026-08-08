@@ -20,6 +20,7 @@ import dst_flow  # noqa: E402
 from errors import ErrorCodes, ProtocolRuntimeError  # noqa: E402
 from others import account_availability_audit  # noqa: E402
 from others import easyemail_runtime  # noqa: E402
+from others import openai_oauth_conversion_guard  # noqa: E402
 from others.dst_flow_loader import load_dst_flow  # noqa: E402
 
 
@@ -380,6 +381,300 @@ class DstFlowIntegrationTests(unittest.TestCase):
             last_checked = datetime.fromisoformat(audit_state["lastCheckedAt"].replace("Z", "+00:00"))
             self.assertGreater((next_check - last_checked).total_seconds(), 11 * 3600)
             self.assertLess((next_check - last_checked).total_seconds(), 13 * 3600)
+
+    def test_account_availability_audit_batch_matches_by_target_id_not_email(self) -> None:
+        """Batch safety rests on target_id: two files can share an email, and a
+        bridged source_path never matches, so a wrong verdict would delete data."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            alive = converted / "small-dup-alive.json"
+            doomed = converted / "small-dup-doomed.json"
+            for path in (alive, doomed):
+                path.write_text(json.dumps({"email": "dup@example.com"}), encoding="utf-8")
+
+            alive_target = {
+                "target_id": "aaaa1111",
+                "source_path": "/bridge/staging/alive.json",
+                "original_path": str(alive),
+                "original_name": alive.name,
+                "email": "dup@example.com",
+            }
+            doomed_target = {
+                "target_id": "bbbb2222",
+                "source_path": "/bridge/staging/doomed.json",
+                "original_path": str(doomed),
+                "original_name": doomed.name,
+                "email": "dup@example.com",
+            }
+
+            account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "targets": [alive_target, doomed_target],
+                    "audit_result": {
+                        "results": [
+                            {
+                                "target_id": "bbbb2222",
+                                "source_path": "/bridge/staging/doomed.json",
+                                "email": "dup@example.com",
+                                "status": "login_succeeded",
+                                "detail": "ok",
+                            },
+                            {
+                                "target_id": "aaaa1111",
+                                "source_path": "/bridge/staging/alive.json",
+                                "email": "dup@example.com",
+                                "status": "inconclusive",
+                                "detail": "mailbox_recovery_failed",
+                            },
+                        ]
+                    },
+                }
+            )
+
+            # Same email means same upstream account, so audit state is written to
+            # every file sharing it and the last verdict processed wins for all of
+            # them. Both files therefore carry the successful verdict.
+            alive_state = json.loads(alive.read_text(encoding="utf-8"))["accountAvailabilityAudit"]
+            doomed_state = json.loads(doomed.read_text(encoding="utf-8"))["accountAvailabilityAudit"]
+            self.assertEqual("login_succeeded", alive_state["status"])
+            self.assertEqual("login_succeeded", doomed_state["status"])
+
+    def test_account_availability_audit_production_deleted_without_email_does_not_fan_out(self) -> None:
+        """An empty email must not match every unparsable file and mass-delete them."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            bystander_a = converted / "small-no-email-a.json"
+            bystander_b = converted / "small-no-email-b.json"
+            for path in (bystander_a, bystander_b):
+                path.write_text(json.dumps({"note": "no email here"}), encoding="utf-8")
+
+            result = account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "targets": [
+                        {
+                            "target_id": "cccc3333",
+                            "source_path": str(bystander_a),
+                            "original_path": str(bystander_a),
+                            "original_name": bystander_a.name,
+                            "email": "",
+                        }
+                    ],
+                    "audit_result": {
+                        "results": [
+                            {
+                                "target_id": "cccc3333",
+                                "email": "",
+                                "status": "deleted_confirmed",
+                                "detail": "account_deleted",
+                            }
+                        ]
+                    },
+                }
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(bystander_b.exists(), "unrelated file was deleted by empty-email fan-out")
+
+    def test_account_availability_audit_production_selection_skips_email_under_conversion(self) -> None:
+        """failed-once is both audited and claimed for OAuth. Auditing a file whose
+        conversion is in flight can delete the credential that conversion just wrote."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            failed_once = output_root / "openai" / "failed-once"
+            failed_once.mkdir(parents=True, exist_ok=True)
+            (failed_once / "small-converting.json").write_text(
+                json.dumps({"email": "converting@example.com"}), encoding="utf-8"
+            )
+            (failed_once / "small-idle.json").write_text(
+                json.dumps({"email": "idle@example.com"}), encoding="utf-8"
+            )
+            # A conversion lock only counts as live while its claimed file exists.
+            claims_dir = output_root / "others" / "openai-oauth-claims"
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            claimed_path = claims_dir / "abcd1234-small-converting.json"
+            claimed_path.write_text(
+                json.dumps({"email": "converting@example.com"}), encoding="utf-8"
+            )
+            lock_path = openai_oauth_conversion_guard.conversion_lock_path(
+                shared_root=output_root,
+                email="converting@example.com",
+            )
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path.write_text(
+                json.dumps(
+                    {
+                        "email": "converting@example.com",
+                        "claimed_path": str(claimed_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = account_availability_audit.select_account_audit_targets(
+                step_input={
+                    "production_mode": True,
+                    "input_source_dir": str(output_root),
+                    "output_root": str(output_root),
+                    "max_targets": 4,
+                }
+            )
+
+            emails = sorted(str(item.get("email") or "") for item in result["targets"])
+            self.assertEqual(["idle@example.com"], emails)
+            reasons = {str(item.get("reason") or "") for item in result["skipped"]}
+            self.assertIn("conversion_in_flight", reasons)
+
+    def test_account_availability_audit_production_selection_dedupes_batch_by_email(self) -> None:
+        """Duplicate emails exist in the pools; a batch must not burn slots on one account."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            for index in range(3):
+                (converted / f"small-dup-{index}.json").write_text(
+                    json.dumps({"email": "shared@example.com"}), encoding="utf-8"
+                )
+            (converted / "small-other.json").write_text(
+                json.dumps({"email": "other@example.com"}), encoding="utf-8"
+            )
+
+            result = account_availability_audit.select_account_audit_targets(
+                step_input={
+                    "production_mode": True,
+                    "input_source_dir": str(output_root),
+                    "output_root": str(output_root),
+                    "max_targets": 4,
+                }
+            )
+
+            emails = sorted(str(item.get("email") or "") for item in result["targets"])
+            self.assertEqual(["other@example.com", "shared@example.com"], emails)
+
+    def test_account_availability_audit_production_batch_timeout_stays_due_without_penalty(self) -> None:
+        """A target the protocol never reached must not serve a 12h cooldown."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-unreached.json"
+            source.write_text(json.dumps({"email": "unreached@example.com"}), encoding="utf-8")
+
+            result = account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "targets": [
+                        {
+                            "source_path": str(source),
+                            "original_path": str(source),
+                            "original_name": source.name,
+                            "email": "unreached@example.com",
+                        }
+                    ],
+                    "audit_result": {
+                        "results": [
+                            {
+                                "source_path": str(source),
+                                "email": "unreached@example.com",
+                                "status": "inconclusive",
+                                "detail": "account_audit_timeout_exceeded",
+                            }
+                        ]
+                    },
+                }
+            )
+
+            payload = json.loads(source.read_text(encoding="utf-8"))
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(source.exists())
+            audit_state = payload["accountAvailabilityAudit"]
+            next_check = datetime.fromisoformat(audit_state["nextCheckAt"].replace("Z", "+00:00"))
+            last_checked = datetime.fromisoformat(audit_state["lastCheckedAt"].replace("Z", "+00:00"))
+            self.assertLessEqual((next_check - last_checked).total_seconds(), 0)
+            self.assertTrue(
+                account_availability_audit.production_audit_has_due_targets(output_root=output_root)
+            )
+
+    def test_account_availability_audit_production_missing_result_stays_due_without_penalty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-nomatch.json"
+            source.write_text(json.dumps({"email": "nomatch@example.com"}), encoding="utf-8")
+
+            account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "targets": [
+                        {
+                            "source_path": str(source),
+                            "original_path": str(source),
+                            "original_name": source.name,
+                            "email": "nomatch@example.com",
+                        }
+                    ],
+                    "audit_result": {"results": []},
+                }
+            )
+
+            payload = json.loads(source.read_text(encoding="utf-8"))
+            audit_state = payload["accountAvailabilityAudit"]
+            next_check = datetime.fromisoformat(audit_state["nextCheckAt"].replace("Z", "+00:00"))
+            last_checked = datetime.fromisoformat(audit_state["lastCheckedAt"].replace("Z", "+00:00"))
+            self.assertLessEqual((next_check - last_checked).total_seconds(), 0)
+            self.assertTrue(
+                account_availability_audit.production_audit_has_due_targets(output_root=output_root)
+            )
+
+    def test_account_availability_audit_production_real_inconclusive_still_penalised(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-realfail.json"
+            source.write_text(json.dumps({"email": "realfail@example.com"}), encoding="utf-8")
+
+            account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "targets": [
+                        {
+                            "source_path": str(source),
+                            "original_path": str(source),
+                            "original_name": source.name,
+                            "email": "realfail@example.com",
+                        }
+                    ],
+                    "audit_result": {
+                        "results": [
+                            {
+                                "source_path": str(source),
+                                "email": "realfail@example.com",
+                                "status": "inconclusive",
+                                "detail": "mailbox_recovery_failed",
+                            }
+                        ]
+                    },
+                }
+            )
+
+            payload = json.loads(source.read_text(encoding="utf-8"))
+            audit_state = payload["accountAvailabilityAudit"]
+            next_check = datetime.fromisoformat(audit_state["nextCheckAt"].replace("Z", "+00:00"))
+            last_checked = datetime.fromisoformat(audit_state["lastCheckedAt"].replace("Z", "+00:00"))
+            self.assertGreater((next_check - last_checked).total_seconds(), 11 * 3600)
 
     def test_account_availability_audit_production_mailbox_disabled_is_inconclusive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

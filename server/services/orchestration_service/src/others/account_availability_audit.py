@@ -38,6 +38,11 @@ SENSITIVE_KEY_MARKERS = {
     "token",
 }
 
+NOT_ATTEMPTED_DETAILS = {
+    "account_audit_timeout_exceeded",
+    "missing_account_audit_result",
+}
+
 AUDIT_STATE_KEY = "accountAvailabilityAudit"
 AUDIT_FLOW_VERSION = "openai-account-availability-audit-v1"
 PRODUCTION_LOGIN_RECHECK_SECONDS = 24 * 60 * 60
@@ -261,6 +266,29 @@ def _target_from_account_file(*, source_path: Path, original_path: Path) -> dict
     return _target_from_payload(source_path=source_path, original_path=original_path, payload=payload)
 
 
+def _email_conversion_in_flight(*, output_root: Path, email: str) -> bool:
+    """True while an OAuth conversion holds this email.
+
+    failed-once is both an audit pool and a claim source for the continue flow.
+    Auditing a file whose conversion is running races the conversion: a stale
+    deleted_confirmed verdict would fan out by email and remove the credential
+    the conversion had just written to converted.
+    """
+    normalized = _as_text(email)
+    if not normalized:
+        return False
+    from others.openai_oauth_conversion_guard import (
+        conversion_lock_path,
+        prune_stale_conversion_lock,
+    )
+
+    try:
+        prune_stale_conversion_lock(shared_root=output_root, email=normalized)
+        return conversion_lock_path(shared_root=output_root, email=normalized).is_file()
+    except Exception:
+        return False
+
+
 def _production_claim_dir(output_root: Path) -> Path:
     return output_root / "others" / "account-availability-audit" / "claims"
 
@@ -362,6 +390,7 @@ def select_account_audit_targets(*, step_input: dict[str, Any]) -> dict[str, Any
         production_max_targets = max_targets if max_targets > 0 else 1
         now = _utc_now()
         stale_claims_removed = _cleanup_stale_production_claims(output_root=output_root, now=now)
+        batched_emails: set[str] = set()
         for candidate in _production_candidate_paths(output_root):
             if len(targets) >= production_max_targets:
                 break
@@ -370,6 +399,30 @@ def select_account_audit_targets(*, step_input: dict[str, Any]) -> dict[str, Any
                 skipped.append(skipped_item)
                 continue
             if target is not None:
+                # One email is one upstream account, and finalization writes audit
+                # state to every file sharing it. Auditing a second copy in the same
+                # batch spends a slot to reach a verdict we already have.
+                target_email = _as_text(target.get("email")).lower()
+                if target_email and target_email in batched_emails:
+                    skipped.append(
+                        {
+                            "source_path": str(candidate),
+                            "email": target_email,
+                            "reason": "duplicate_email_in_batch",
+                        }
+                    )
+                    continue
+                if _email_conversion_in_flight(output_root=output_root, email=target_email):
+                    skipped.append(
+                        {
+                            "source_path": str(candidate),
+                            "email": target_email,
+                            "reason": "conversion_in_flight",
+                        }
+                    )
+                    continue
+                if target_email:
+                    batched_emails.add(target_email)
                 try:
                     targets.append(_claim_production_target(output_root=output_root, target=target))
                 except FileNotFoundError:
@@ -580,13 +633,16 @@ def _restore_claimed_account_file(*, source_path: Path, original_path: Path, ori
 def _related_production_files(*, output_root: Path, email: str, source_path: Path) -> list[Path]:
     normalized_email = _as_text(email).lower()
     related: list[Path] = []
-    for path in _production_candidate_paths(output_root):
-        try:
-            payload = _read_json_object(path)
-        except Exception:
-            continue
-        if _extract_email(payload).lower() == normalized_email:
-            related.append(path)
+    # Without an email there is nothing to relate by, and matching "" would pair
+    # this target with every file whose email cannot be parsed.
+    if normalized_email:
+        for path in _production_candidate_paths(output_root):
+            try:
+                payload = _read_json_object(path)
+            except Exception:
+                continue
+            if _extract_email(payload).lower() == normalized_email:
+                related.append(path)
     if source_path.is_file():
         try:
             source_resolved = source_path.resolve()
@@ -604,6 +660,11 @@ def _write_json_payload(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
+def _result_was_never_attempted(result: dict[str, Any]) -> bool:
+    detail = _as_text(result.get("detail") or result.get("reason")).lower()
+    return detail in NOT_ATTEMPTED_DETAILS
+
+
 def _update_production_account_file(
     *,
     path: Path,
@@ -614,11 +675,15 @@ def _update_production_account_file(
     if not path.is_file():
         return False
     payload = _read_json_object(path)
-    next_seconds = (
-        PRODUCTION_LOGIN_RECHECK_SECONDS
-        if status == "login_succeeded"
-        else PRODUCTION_INCONCLUSIVE_RECHECK_SECONDS
-    )
+    if status == "login_succeeded":
+        next_seconds = PRODUCTION_LOGIN_RECHECK_SECONDS
+    elif _result_was_never_attempted(result):
+        # The protocol ran out of budget or returned nothing for this target, so
+        # no audit actually happened. Leave it due instead of parking it for 12h,
+        # otherwise an oversized batch penalises every account it failed to reach.
+        next_seconds = 0
+    else:
+        next_seconds = PRODUCTION_INCONCLUSIVE_RECHECK_SECONDS
     payload[AUDIT_STATE_KEY] = {
         "flowVersion": AUDIT_FLOW_VERSION,
         "lastCheckedAt": _format_utc(now),
