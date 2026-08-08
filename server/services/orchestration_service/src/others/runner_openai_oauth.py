@@ -425,6 +425,40 @@ def _materialize_openai_oauth_artifact_from_output(
     return materialized_path
 
 
+_OPENAI_SIBLING_POOL_DIRNAMES = ("converted", "pending", "failed-once", "failed-twice")
+
+
+def _openai_sibling_pool_dirs(pool_dir: Path) -> list[Path]:
+    """Sibling openai pools that must not already hold an artifact we are about to deposit.
+
+    A run output dir keeps its source artifact after collection, so a re-collection of the
+    same run (crash handling, retry) would otherwise deposit a second copy of an artifact
+    that a previous pass already routed to another pool.
+    """
+    resolved_pool = Path(pool_dir).resolve()
+    if resolved_pool.name.lower() not in _OPENAI_SIBLING_POOL_DIRNAMES:
+        return []
+    openai_root = resolved_pool.parent
+    siblings: list[Path] = []
+    for name in _OPENAI_SIBLING_POOL_DIRNAMES:
+        candidate = (openai_root / name).resolve()
+        if candidate == resolved_pool or not candidate.is_dir():
+            continue
+        siblings.append(candidate)
+    return siblings
+
+
+def _sibling_pool_path_holding_artifact(*, pool_dir: Path, artifact_name: str) -> Path | None:
+    name = str(artifact_name or "").strip()
+    if not name:
+        return None
+    for sibling in _openai_sibling_pool_dirs(pool_dir):
+        candidate = sibling / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def copy_openai_oauth_artifacts_to_pool(
     *,
     run_output_dir: Path,
@@ -462,6 +496,21 @@ def copy_openai_oauth_artifacts_to_pool(
             result_or_payload=result_or_payload,
         )
         artifact_name = _normalize_openai_oauth_artifact_name(payload=payload, preferred_name=resolved_source.name)
+        sibling_path = _sibling_pool_path_holding_artifact(
+            pool_dir=pool_dir,
+            artifact_name=artifact_name,
+        )
+        if sibling_path is not None:
+            discarded_paths.append(
+                {
+                    "source_path": str(resolved_source),
+                    "reason": "already_present_in_sibling_pool",
+                    "sibling_path": str(sibling_path),
+                }
+            )
+            if delete_protocol_bridge_source:
+                _delete_protocol_bridge_source_quiet(resolved_source)
+            continue
         destination = (pool_dir / artifact_name).resolve()
         if resolved_source == destination:
             if payload_enriched:

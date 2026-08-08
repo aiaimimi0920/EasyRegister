@@ -554,6 +554,101 @@ class RunnerArtifactsTests(unittest.TestCase):
             self.assertEqual("small-target-bridge-valid.json", Path(copied_paths[0]).name)
             self.assertFalse(payload_path.exists())
 
+    def _write_openai_oauth_seed(self, path: Path, email: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "email": email,
+                    "mailboxRef": "mailbox-ref",
+                    "mailboxSessionId": "session-id",
+                    "createdAt": "2026-05-01T00:00:00Z",
+                    "platformOrganization": {"status": "completed"},
+                    "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                    "chatgptLoginDetails": {
+                        "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"}
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_copy_openai_oauth_artifacts_to_pool_skips_artifact_already_in_converted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "mixed-runs" / "worker-01" / "run-1"
+            pool_dir = output_root / "openai" / "failed-twice"
+            artifact_name = "small-20260501-000000-dupe@example.com-abc123.json"
+            self._write_openai_oauth_seed(run_output_dir / "small_success" / artifact_name, "dupe@example.com")
+            self._write_openai_oauth_seed(output_root / "openai" / "converted" / artifact_name, "dupe@example.com")
+
+            with mock.patch.dict(
+                os.environ,
+                {"REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0"},
+                clear=False,
+            ):
+                copied_paths = runner_artifacts.copy_openai_oauth_artifacts_to_pool(
+                    run_output_dir=run_output_dir,
+                    pool_dir=pool_dir,
+                    worker_label="worker-01",
+                    task_index=1,
+                )
+
+            self.assertEqual([], copied_paths)
+            self.assertFalse((pool_dir / artifact_name).exists())
+
+    def test_copy_openai_oauth_artifacts_to_pool_skips_artifact_already_in_sibling_failure_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "mixed-runs" / "worker-01" / "run-1"
+            pool_dir = output_root / "openai" / "pending"
+            artifact_name = "small-20260501-000000-sibling@example.com-abc123.json"
+            self._write_openai_oauth_seed(run_output_dir / "small_success" / artifact_name, "sibling@example.com")
+            self._write_openai_oauth_seed(output_root / "openai" / "failed-once" / artifact_name, "sibling@example.com")
+
+            with mock.patch.dict(
+                os.environ,
+                {"REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0"},
+                clear=False,
+            ):
+                copied_paths = runner_artifacts.copy_openai_oauth_artifacts_to_pool(
+                    run_output_dir=run_output_dir,
+                    pool_dir=pool_dir,
+                    worker_label="worker-01",
+                    task_index=1,
+                )
+
+            self.assertEqual([], copied_paths)
+            self.assertFalse((pool_dir / artifact_name).exists())
+
+    def test_copy_openai_oauth_artifacts_to_pool_still_copies_when_no_sibling_pool_holds_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "mixed-runs" / "worker-01" / "run-1"
+            pool_dir = output_root / "openai" / "pending"
+            artifact_name = "small-20260501-000000-fresh@example.com-abc123.json"
+            self._write_openai_oauth_seed(run_output_dir / "small_success" / artifact_name, "fresh@example.com")
+            (output_root / "openai" / "converted").mkdir(parents=True, exist_ok=True)
+            self._write_openai_oauth_seed(
+                output_root / "openai" / "converted" / "small-20260501-000000-other@example.com-zzz999.json",
+                "other@example.com",
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0"},
+                clear=False,
+            ):
+                copied_paths = runner_artifacts.copy_openai_oauth_artifacts_to_pool(
+                    run_output_dir=run_output_dir,
+                    pool_dir=pool_dir,
+                    worker_label="worker-01",
+                    task_index=1,
+                )
+
+            self.assertEqual(1, len(copied_paths))
+            self.assertTrue((pool_dir / artifact_name).is_file())
+
     def test_copy_openai_oauth_artifacts_to_pool_prefers_valid_bridge_sibling_over_partial_run_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_output_dir = Path(tmp_dir) / "run-1"
