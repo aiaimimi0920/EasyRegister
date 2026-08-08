@@ -19,6 +19,11 @@ from others.config_env import (
 from others.paths import resolve_shared_root
 
 
+# Proxy acquisition retries up to 4 times with a 20s probe each, then finalize
+# rewrites the claimed artifacts. That work sits outside the protocol call but
+# inside the worker's hard timeout.
+ACCOUNT_AUDIT_NON_PROTOCOL_HEADROOM_SECONDS = 100
+
 DEFAULT_EASY_PROXY_BASE_URL_HOST = "http://localhost:19888"
 DEFAULT_EASY_PROXY_BASE_URL_DOCKER = "http://easy-proxy:29888"
 DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER = "easy-proxy"
@@ -136,6 +141,18 @@ def validate_runtime_preflight() -> dict[str, Any]:
         errors.append(
             "account_audit_timeout_exceeds_worker_hard_timeout:"
             f"{audit_protocol_timeout}>={audit_worker_hard_timeout}"
+        )
+    elif (
+        audit_worker_hard_timeout > 0
+        and audit_protocol_timeout + ACCOUNT_AUDIT_NON_PROTOCOL_HEADROOM_SECONDS > audit_worker_hard_timeout
+    ):
+        # A hard-timeout kill is a SIGTERM, so the flow's alwaysRun proxy release
+        # never runs and the lease sits until its TTL. Leave room for the work
+        # around the protocol call: proxy acquisition and finalize.
+        errors.append(
+            "account_audit_timeout_leaves_no_headroom:"
+            f"{audit_protocol_timeout}+{ACCOUNT_AUDIT_NON_PROTOCOL_HEADROOM_SECONDS}"
+            f">{audit_worker_hard_timeout}"
         )
 
     if errors:

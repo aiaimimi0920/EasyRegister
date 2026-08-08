@@ -443,6 +443,65 @@ class DstFlowIntegrationTests(unittest.TestCase):
             self.assertEqual("login_succeeded", alive_state["status"])
             self.assertEqual("login_succeeded", doomed_state["status"])
 
+    def test_account_availability_audit_production_update_does_not_truncate_on_write_failure(self) -> None:
+        """Audit workers are hard-killed at a timeout and these files are credentials
+        on a network share, so a rewrite must never leave the original truncated."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-precious.json"
+            original_payload = {
+                "email": "precious@example.com",
+                "recoveryDataCredential": {"tempToken": "keep-me"},
+            }
+            source.write_text(json.dumps(original_payload), encoding="utf-8")
+
+            real_write_text = Path.write_text
+
+            def _die_mid_write(self, data, *args, **kwargs):
+                # Emulate the process being killed after the file was opened and
+                # truncated but before the full payload reached disk.
+                if self.name == "small-precious.json":
+                    real_write_text(self, data[: len(data) // 3], *args, **kwargs)
+                    raise OSError("simulated kill during write")
+                return real_write_text(self, data, *args, **kwargs)
+
+            with mock.patch.object(Path, "write_text", _die_mid_write):
+                try:
+                    account_availability_audit.finalize_account_audit_result(
+                        step_input={
+                            "production_mode": True,
+                            "output_root": str(output_root),
+                            "targets": [
+                                {
+                                    "target_id": "dddd4444",
+                                    "source_path": str(source),
+                                    "original_path": str(source),
+                                    "original_name": source.name,
+                                    "email": "precious@example.com",
+                                }
+                            ],
+                            "audit_result": {
+                                "results": [
+                                    {
+                                        "target_id": "dddd4444",
+                                        "email": "precious@example.com",
+                                        "status": "login_succeeded",
+                                        "detail": "ok",
+                                    }
+                                ]
+                            },
+                        }
+                    )
+                except Exception:
+                    pass
+
+            self.assertTrue(source.is_file(), "credential file disappeared")
+            recovered = json.loads(source.read_text(encoding="utf-8"))
+            self.assertEqual("precious@example.com", recovered.get("email"))
+            self.assertEqual({"tempToken": "keep-me"}, recovered.get("recoveryDataCredential"))
+
     def test_account_availability_audit_production_deleted_without_email_does_not_fan_out(self) -> None:
         """An empty email must not match every unparsable file and mass-delete them."""
         with tempfile.TemporaryDirectory() as tmp_dir:

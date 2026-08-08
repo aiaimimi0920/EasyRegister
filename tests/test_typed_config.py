@@ -646,6 +646,23 @@ class TypedConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "incomplete_r2_config"):
                     validate_runtime_preflight()
 
+    def test_runtime_preflight_requires_headroom_for_proxy_acquire_and_finalize(self) -> None:
+        """The protocol call is not the whole run: proxy acquisition and finalize also
+        happen inside the worker, and a kill skips the proxy release step."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS": "400",
+                    "REGISTER_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS": "420",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "account_audit_timeout_leaves_no_headroom"):
+                    validate_runtime_preflight()
+
     def test_runtime_preflight_rejects_audit_http_timeout_above_worker_hard_timeout(self) -> None:
         """A batch the worker gets killed mid-way through marks every claimed target inconclusive."""
         with tempfile.TemporaryDirectory() as tmp_dir:

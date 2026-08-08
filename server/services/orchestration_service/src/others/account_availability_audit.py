@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 import uuid
@@ -68,8 +69,6 @@ def _as_int(value: Any, default: int = 0) -> int:
 
 
 def _stale_claim_seconds() -> int:
-    import os
-
     raw = _as_text(os.environ.get("REGISTER_ACCOUNT_AUDIT_STALE_CLAIM_SECONDS"))
     if not raw:
         return DEFAULT_PRODUCTION_STALE_CLAIM_SECONDS
@@ -654,10 +653,20 @@ def _related_production_files(*, output_root: Path, email: str, source_path: Pat
 
 
 def _write_json_payload(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    """Rewrite a credential file without ever leaving it truncated.
+
+    These are credentials on a network share, and audit workers are hard-killed
+    at REGISTER_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS, so a direct write to
+    the final path can destroy the artifact it was only annotating.
+    """
+    body = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    temp_path = path.parent / f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        temp_path.write_text(body, encoding="utf-8")
+        os.replace(temp_path, path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
 
 
 def _result_was_never_attempted(result: dict[str, Any]) -> bool:
