@@ -110,6 +110,43 @@ class DashboardIntegrationTests(unittest.TestCase):
         self.assertEqual(5, payload["flows"]["openai-main"]["concurrencyLimit"])
         self.assertEqual(0, payload["flows"]["openai-main"]["activeWorkers"])
 
+    def test_dashboard_page_escapes_interpolated_values(self) -> None:
+        """The page builds rows with innerHTML from /api/status, and some of those
+        values arrive from an external service, so every one must be escaped."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            with mock.patch.object(
+                dashboard_server.DashboardHTTPServer,
+                "_fetch_easy_protocol_stats",
+                return_value={"services": []},
+            ):
+                server = dashboard_server.DashboardHTTPServer(
+                    listen="127.0.0.1:0",
+                    shared_root=shared_root,
+                    easy_protocol_base_url="http://example.test/api/public/request",
+                    easy_protocol_token="secure-token",
+                    easy_protocol_actor="actor",
+                    recent_window_seconds=900,
+                )
+                server.start()
+                try:
+                    port = int(server._httpd.server_address[1])
+                    with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
+                        page = response.read().decode("utf-8")
+                finally:
+                    server.stop()
+
+        self.assertIn("function esc(", page)
+        unescaped = [
+            "${item.service}",
+            "${item.objectKey ?? ''}",
+            "${item.instanceRole ?? ''}",
+            "${item.workerId ?? ''}",
+            "${role}",
+        ]
+        for fragment in unescaped:
+            self.assertNotIn(fragment, page, f"unescaped interpolation still present: {fragment}")
+
     def test_dashboard_status_masks_account_emails_in_object_keys(self) -> None:
         """The status endpoint is unauthenticated and listens on 0.0.0.0 by default,
         so object keys must not publish the account emails they are named after."""

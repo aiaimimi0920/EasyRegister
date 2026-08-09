@@ -416,6 +416,11 @@ class DashboardHTTPServer:
   </div>
 
   <script>
+    function esc(value) {{
+      const s = String(value == null ? '' : value);
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+               .replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+    }}
     async function refresh() {{
       const response = await fetch('/api/status', {{ cache: 'no-store' }});
       const data = await response.json();
@@ -439,7 +444,7 @@ class DashboardHTTPServer:
 
       document.getElementById('pipelines-body').innerHTML = Object.entries(pipelines).map(([role, item]) => `
         <tr>
-          <td><span class="tag">${{role}}</span></td>
+          <td><span class="tag">${{esc(role)}}</span></td>
           <td>${{item.configuredWorkers ?? 0}}</td>
           <td class="ok">${{item.activeWorkers ?? 0}}</td>
           <td class="warn">${{item.sleepingWorkers ?? 0}}</td>
@@ -449,7 +454,7 @@ class DashboardHTTPServer:
 
       document.getElementById('executors-body').innerHTML = executors.map((item) => `
         <tr>
-          <td><code>${{item.service}}</code></td>
+          <td><code>${{esc(item.service)}}</code></td>
           <td>${{item.activeRequests}}</td>
           <td>${{item.hitCount}}</td>
           <td class="ok">${{item.successCount}}</td>
@@ -459,10 +464,10 @@ class DashboardHTTPServer:
 
       document.getElementById('uploads-body').innerHTML = uploads.map((item) => `
         <tr>
-          <td>${{item.finishedAt ?? ''}}</td>
-          <td>${{item.instanceRole ?? ''}}</td>
-          <td>${{item.workerId ?? ''}}</td>
-          <td><code>${{item.objectKey ?? ''}}</code></td>
+          <td>${{esc(item.finishedAt ?? '')}}</td>
+          <td>${{esc(item.instanceRole ?? '')}}</td>
+          <td>${{esc(item.workerId ?? '')}}</td>
+          <td><code>${{esc(item.objectKey ?? '')}}</code></td>
         </tr>
       `).join('');
     }}
