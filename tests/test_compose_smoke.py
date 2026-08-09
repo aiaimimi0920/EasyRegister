@@ -62,6 +62,51 @@ class ComposeSmokeTests(unittest.TestCase):
             test_payload,
         )
 
+    def test_compose_account_audit_defaults_satisfy_preflight(self) -> None:
+        """The audit batch size, protocol timeout and worker hard timeout are three
+        separate defaults that preflight cross-checks. Parse them out of the shipped
+        compose files and prove the combination actually starts."""
+        import os
+        import re
+        import sys
+        import tempfile
+        from unittest import mock
+
+        src_root = REPO_ROOT / "server" / "services" / "orchestration_service" / "src"
+        if str(src_root) not in sys.path:
+            sys.path.insert(0, str(src_root))
+        shared_root = REPO_ROOT / "server" / "services" / "python_shared" / "src"
+        if str(shared_root) not in sys.path:
+            sys.path.insert(0, str(shared_root))
+        from others.preflight import validate_runtime_preflight
+
+        for compose_path in (MAIN_COMPOSE_PATH, TEST_COMPOSE_PATH):
+            payload = compose_path.read_text(encoding="utf-8")
+            defaults = {}
+            for name in (
+                "EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS",
+                "REGISTER_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS",
+            ):
+                match = re.search(r"%s:\s*\$\{[A-Z_]+:-([0-9]+)\}" % name, payload)
+                self.assertIsNotNone(match, f"{name} missing a default in {compose_path.name}")
+                defaults[name] = match.group(1)
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                env = dict(defaults)
+                env["REGISTER_OUTPUT_ROOT"] = str(Path(tmp_dir) / "register-output")
+                with mock.patch.dict(os.environ, env, clear=True):
+                    preflight = validate_runtime_preflight()
+
+            audit = preflight["accountAudit"]
+            self.assertEqual(
+                int(defaults["EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS"]),
+                audit["protocolTimeoutSeconds"],
+            )
+            self.assertEqual(
+                int(defaults["REGISTER_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS"]),
+                audit["workerHardTimeoutSeconds"],
+            )
+
     def test_deploy_host_generates_protocol_bridge_mount_contract(self) -> None:
         payload = (REPO_ROOT / "deploy-host.ps1").read_text(encoding="utf-8")
         for expected in (
