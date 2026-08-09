@@ -443,6 +443,58 @@ class DstFlowIntegrationTests(unittest.TestCase):
             self.assertEqual("login_succeeded", alive_state["status"])
             self.assertEqual("login_succeeded", doomed_state["status"])
 
+    def test_account_availability_audit_log_rotates_when_oversized(self) -> None:
+        """The audit log is the only record of what the audit deleted, and it grows
+        forever on the local volume. Rotate it instead of filling the disk."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-rotate.json"
+            source.write_text(json.dumps({"email": "rotate@example.com"}), encoding="utf-8")
+            audit_path = output_root / "others" / "account-availability-audit.jsonl"
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            audit_path.write_text("x" * 4096 + "\n", encoding="utf-8")
+
+            with mock.patch.dict(
+                os.environ,
+                {"REGISTER_ACCOUNT_AUDIT_LOG_MAX_BYTES": "1024"},
+                clear=False,
+            ):
+                account_availability_audit.finalize_account_audit_result(
+                    step_input={
+                        "production_mode": True,
+                        "output_root": str(output_root),
+                        "audit_path": str(audit_path),
+                        "targets": [
+                            {
+                                "target_id": "ffff6666",
+                                "source_path": str(source),
+                                "original_path": str(source),
+                                "original_name": source.name,
+                                "email": "rotate@example.com",
+                            }
+                        ],
+                        "audit_result": {
+                            "results": [
+                                {
+                                    "target_id": "ffff6666",
+                                    "email": "rotate@example.com",
+                                    "status": "login_succeeded",
+                                    "detail": "ok",
+                                }
+                            ]
+                        },
+                    }
+                )
+
+            rotated = sorted(audit_path.parent.glob("account-availability-audit.jsonl.*"))
+            self.assertEqual(1, len(rotated), "expected exactly one rotated file")
+            self.assertIn("x" * 32, rotated[0].read_text(encoding="utf-8"))
+            current = audit_path.read_text(encoding="utf-8")
+            self.assertNotIn("x" * 32, current)
+            self.assertIn("rotate@example.com", current)
+
     def test_account_availability_audit_record_redacts_credentials_inside_urls(self) -> None:
         """Redaction matches sensitive key names, but OAuth callbacks carry the
         authorization code in the query string under innocuous keys like finalUrl."""

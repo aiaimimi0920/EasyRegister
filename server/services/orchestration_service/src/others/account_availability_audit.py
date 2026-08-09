@@ -60,6 +60,7 @@ AUDIT_FLOW_VERSION = "openai-account-availability-audit-v1"
 PRODUCTION_LOGIN_RECHECK_SECONDS = 24 * 60 * 60
 PRODUCTION_INCONCLUSIVE_RECHECK_SECONDS = 12 * 60 * 60
 DEFAULT_PRODUCTION_STALE_CLAIM_SECONDS = 6 * 60 * 60
+DEFAULT_AUDIT_LOG_MAX_BYTES = 32 * 1024 * 1024
 
 
 def _as_text(value: Any) -> str:
@@ -707,6 +708,35 @@ def _write_json_payload(path: Path, payload: dict[str, Any]) -> None:
             temp_path.unlink(missing_ok=True)
 
 
+def _audit_log_max_bytes() -> int:
+    raw = _as_text(os.environ.get("REGISTER_ACCOUNT_AUDIT_LOG_MAX_BYTES"))
+    if not raw:
+        return DEFAULT_AUDIT_LOG_MAX_BYTES
+    return max(0, _as_int(raw, DEFAULT_AUDIT_LOG_MAX_BYTES))
+
+
+def _append_audit_records(*, audit_path: Path, records: list[dict[str, Any]]) -> None:
+    """Append audit records, rotating first so the log cannot grow without bound.
+
+    This is the only record of what the audit deleted, so rotation keeps one
+    generation rather than truncating in place.
+    """
+    max_bytes = _audit_log_max_bytes()
+    if max_bytes > 0:
+        try:
+            if audit_path.is_file() and audit_path.stat().st_size >= max_bytes:
+                rotated = audit_path.with_name(
+                    f"{audit_path.name}.{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+                )
+                if not rotated.exists():
+                    os.replace(audit_path, rotated)
+        except OSError:
+            pass
+    with audit_path.open("a", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
 def _result_was_never_attempted(result: dict[str, Any]) -> bool:
     detail = _as_text(result.get("detail") or result.get("reason")).lower()
     return detail in NOT_ATTEMPTED_DETAILS
@@ -857,9 +887,7 @@ def _finalize_production_account_audit_result(
             }
         )
 
-    with audit_path.open("a", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    _append_audit_records(audit_path=audit_path, records=records)
 
     return {
         "ok": True,
@@ -974,9 +1002,7 @@ def finalize_account_audit_result(*, step_input: dict[str, Any]) -> dict[str, An
         }
         records.append(record)
 
-    with audit_path.open("a", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    _append_audit_records(audit_path=audit_path, records=records)
 
     return {
         "ok": True,
