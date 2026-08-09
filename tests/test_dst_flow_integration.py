@@ -443,6 +443,101 @@ class DstFlowIntegrationTests(unittest.TestCase):
             self.assertEqual("login_succeeded", alive_state["status"])
             self.assertEqual("login_succeeded", doomed_state["status"])
 
+    def test_account_availability_audit_payload_load_failure_stays_due(self) -> None:
+        """A transient NAS read failure in the protocol side must not penalise the
+        account with a 12h cooldown; leave it due for immediate retry."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-ioerr.json"
+            source.write_text(json.dumps({"email": "ioerr@example.com"}), encoding="utf-8")
+
+            account_availability_audit.finalize_account_audit_result(
+                step_input={
+                    "production_mode": True,
+                    "output_root": str(output_root),
+                    "targets": [
+                        {
+                            "target_id": "hhhh8888",
+                            "source_path": str(source),
+                            "original_path": str(source),
+                            "original_name": source.name,
+                            "email": "ioerr@example.com",
+                        }
+                    ],
+                    "audit_result": {
+                        "results": [
+                            {
+                                "target_id": "hhhh8888",
+                                "email": "ioerr@example.com",
+                                "status": "inconclusive",
+                                "detail": "account_payload_load_failed:PermissionError",
+                            }
+                        ]
+                    },
+                }
+            )
+
+            payload = json.loads(source.read_text(encoding="utf-8"))
+            audit_state = payload["accountAvailabilityAudit"]
+            next_check = datetime.fromisoformat(audit_state["nextCheckAt"].replace("Z", "+00:00"))
+            last_checked = datetime.fromisoformat(audit_state["lastCheckedAt"].replace("Z", "+00:00"))
+            self.assertLessEqual((next_check - last_checked).total_seconds(), 0)
+            self.assertTrue(
+                account_availability_audit.production_audit_has_due_targets(output_root=output_root)
+            )
+
+    def test_account_availability_audit_log_does_not_rotate_when_below_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            converted = output_root / "openai" / "converted"
+            converted.mkdir(parents=True, exist_ok=True)
+            source = converted / "small-norotate.json"
+            source.write_text(json.dumps({"email": "norotate@example.com"}), encoding="utf-8")
+            audit_path = output_root / "others" / "account-availability-audit.jsonl"
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            existing_content = "existing record\n"
+            audit_path.write_text(existing_content, encoding="utf-8")
+
+            with mock.patch.dict(
+                os.environ,
+                {"REGISTER_ACCOUNT_AUDIT_LOG_MAX_BYTES": "1048576"},
+                clear=False,
+            ):
+                account_availability_audit.finalize_account_audit_result(
+                    step_input={
+                        "production_mode": True,
+                        "output_root": str(output_root),
+                        "audit_path": str(audit_path),
+                        "targets": [
+                            {
+                                "target_id": "gggg7777",
+                                "source_path": str(source),
+                                "original_path": str(source),
+                                "original_name": source.name,
+                                "email": "norotate@example.com",
+                            }
+                        ],
+                        "audit_result": {
+                            "results": [
+                                {
+                                    "target_id": "gggg7777",
+                                    "email": "norotate@example.com",
+                                    "status": "inconclusive",
+                                    "detail": "mailbox_recovery_failed",
+                                }
+                            ]
+                        },
+                    }
+                )
+
+            rotated = sorted(audit_path.parent.glob("account-availability-audit.jsonl.*"))
+            self.assertEqual(0, len(rotated), "unexpected rotation for small file")
+            current = audit_path.read_text(encoding="utf-8")
+            self.assertIn("existing record", current)
+            self.assertIn("norotate@example.com", current)
+
     def test_account_availability_audit_log_rotates_when_oversized(self) -> None:
         """The audit log is the only record of what the audit deleted, and it grows
         forever on the local volume. Rotate it instead of filling the disk."""
@@ -640,6 +735,43 @@ class DstFlowIntegrationTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertTrue(bystander_b.exists(), "unrelated file was deleted by empty-email fan-out")
+
+    def test_account_availability_audit_production_selection_stale_lock_becomes_selectable(self) -> None:
+        """A lock whose claimed file is gone is stale; the email must not stay
+        blocked once the lock is pruned."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            failed_once = output_root / "openai" / "failed-once"
+            failed_once.mkdir(parents=True, exist_ok=True)
+            (failed_once / "small-stale.json").write_text(
+                json.dumps({"email": "stale@example.com"}), encoding="utf-8"
+            )
+            lock_path = openai_oauth_conversion_guard.conversion_lock_path(
+                shared_root=output_root,
+                email="stale@example.com",
+            )
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path.write_text(
+                json.dumps(
+                    {
+                        "email": "stale@example.com",
+                        "claimed_path": str(output_root / "others" / "claims" / "gone.json"),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = account_availability_audit.select_account_audit_targets(
+                step_input={
+                    "production_mode": True,
+                    "input_source_dir": str(output_root),
+                    "output_root": str(output_root),
+                    "max_targets": 4,
+                }
+            )
+
+            emails = [str(item.get("email") or "") for item in result["targets"]]
+            self.assertIn("stale@example.com", emails)
 
     def test_account_availability_audit_production_selection_skips_email_under_conversion(self) -> None:
         """failed-once is both audited and claimed for OAuth. Auditing a file whose

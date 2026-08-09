@@ -53,6 +53,8 @@ SENSITIVE_QUERY_MARKERS = {
 NOT_ATTEMPTED_DETAILS = {
     "account_audit_timeout_exceeded",
     "missing_account_audit_result",
+    # EasyProtocol could not read the file — transient NAS/IO error, not an audit result.
+    "account_payload_load_failed",
 }
 
 AUDIT_STATE_KEY = "accountAvailabilityAudit"
@@ -739,7 +741,7 @@ def _append_audit_records(*, audit_path: Path, records: list[dict[str, Any]]) ->
 
 def _result_was_never_attempted(result: dict[str, Any]) -> bool:
     detail = _as_text(result.get("detail") or result.get("reason")).lower()
-    return detail in NOT_ATTEMPTED_DETAILS
+    return any(detail == marker or detail.startswith(marker + ":") for marker in NOT_ATTEMPTED_DETAILS)
 
 
 def _update_production_account_file(
