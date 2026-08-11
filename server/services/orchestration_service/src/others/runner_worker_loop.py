@@ -12,6 +12,7 @@ from dst_flow import run_dst_flow_once
 from others.common import ensure_directory as _ensure_directory
 from others.common import json_log as _json_log
 from others.config import CleanupRuntimeConfig
+from others.config import env_int as _env_int
 from others.paths import resolve_shared_root as _shared_root_from_output_root
 from others.runner_artifacts import (
     artifact_routing_config as _artifact_routing_config,
@@ -40,8 +41,24 @@ from others.runner_worker_results import (
 )
 
 
+DEFAULT_ACCOUNT_AUDIT_MAX_TARGETS = 4
+
+
 def cleanup_runtime_config() -> CleanupRuntimeConfig:
     return CleanupRuntimeConfig.from_env()
+
+
+def account_audit_max_targets() -> int:
+    """How many accounts one production audit run may claim.
+
+    Batching is safe because EasyProtocol audits every entry of ``targets`` and
+    reports the ones it could not reach as ``account_audit_timeout_exceeded``,
+    which finalize leaves due instead of parking for 12h. The batch still shares
+    one proxy lease and one HTTP call bounded by
+    EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS, so oversizing it just means the
+    tail rolls over to the next run.
+    """
+    return max(1, _env_int("REGISTER_ACCOUNT_AUDIT_MAX_TARGETS", DEFAULT_ACCOUNT_AUDIT_MAX_TARGETS))
 
 
 def build_worker_output_root(*, output_root: Path, worker_id: int) -> Path:
@@ -160,6 +177,7 @@ def worker_loop(
     worker_label = f"worker-{worker_id:02d}"
     os.environ["REGISTER_WORKER_ID"] = worker_label
     local_run_index = 0
+    previous_flow_role = ""
     configured_roles = _configured_flow_roles(flow_specs) or {str(instance_role or "").strip().lower()}
     any_team_auth_pinned = any(bool(str(getattr(spec, "team_auth_path", "") or "").strip()) for spec in flow_specs)
 
@@ -214,6 +232,7 @@ def worker_loop(
                 active_flow_counts=active_flow_counts,
                 active_flow_lock=active_flow_lock,
             ),
+            previous_flow_role=previous_flow_role,
         )
         if selected_flow_spec is None:
             sleep_seconds = max(float(delay_seconds or 0.0), 1.0)
@@ -409,6 +428,9 @@ def worker_loop(
                 task_max_attempts=selected_flow_spec.task_max_attempts or task_max_attempts or None,
                 mailbox_business_key=str(selected_flow_spec.mailbox_business_key or "").strip() or None,
                 account_audit_production_mode=normalized_role == "account-audit",
+                account_max_targets=(
+                    account_audit_max_targets() if normalized_role == "account-audit" else None
+                ),
                 r2_upload_enabled=(not free_local_selected)
                 if normalized_role in {"main", "continue"}
                 else None,
@@ -464,6 +486,7 @@ def worker_loop(
                     }
                 )
 
+        previous_flow_role = normalized_role
         if stop_event.is_set():
             break
         sleep_seconds = max(float(delay_seconds or 0.0), float(extra_cooldown_seconds or 0.0))

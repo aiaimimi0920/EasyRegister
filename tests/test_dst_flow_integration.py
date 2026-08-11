@@ -3093,7 +3093,7 @@ class DstFlowIntegrationTests(unittest.TestCase):
             output_root = root / "register-output"
             run_output_dir = output_root / "worker-01" / "run-20260625-000000-task000001"
             bridge_dir = root / "easyregister-bridge"
-            pool_dir = output_root / "openai" / "failed-once"
+            pool_dir = output_root / "openai" / "pending"
             bridge_dir.mkdir(parents=True, exist_ok=True)
             payload_path = bridge_dir / "small-immediate.json"
             payload_path.write_text(
@@ -3157,7 +3157,6 @@ class DstFlowIntegrationTests(unittest.TestCase):
                     os.environ,
                     {
                         "REGISTER_PROTOCOL_BRIDGE_DIR": str(bridge_dir),
-                        "REGISTER_OPENAI_OAUTH_CONTINUE_POOL_DIR": str(pool_dir),
                     },
                     clear=False,
                 ):
@@ -3174,6 +3173,459 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual("obtain-codex-oauth", result.error_step)
         self.assertTrue(copied_exists)
         self.assertTrue(source_exists)
+
+    def test_run_dst_flow_once_materializes_openai_pool_before_codex_oauth_when_create_has_no_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            output_root = root / "register-output"
+            run_output_dir = output_root / "worker-01" / "run-20260625-000000-task000001"
+            pool_dir = output_root / "openai" / "pending"
+            missing_source_path = run_output_dir / "small_success" / "small-missing.json"
+            flow_path = root / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "create-openai-account",
+                                    "type": "create_openai_account",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"output_dir": "{{task.output_dir}}"},
+                                    "saveAs": "create_openai_account",
+                                },
+                                {
+                                    "id": "initialize-platform-organization",
+                                    "type": "initialize_platform_organization",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"source_path": "{{create_openai_account.storage_path}}"},
+                                    "saveAs": "initialize_platform_organization",
+                                },
+                                {
+                                    "id": "initialize-chatgpt-login-session",
+                                    "type": "initialize_chatgpt_login_session",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"source_path": "{{create_openai_account.storage_path}}"},
+                                    "saveAs": "initialize_chatgpt_login_session",
+                                },
+                                {
+                                    "id": "obtain-codex-oauth",
+                                    "type": "obtain_codex_oauth",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"source_path": "{{create_openai_account.storage_path}}"},
+                                    "saveAs": "obtain_codex_oauth",
+                                },
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "create_openai_account":
+                    return {
+                        "ok": True,
+                        "status": "completed",
+                        "storage_path": str(missing_source_path),
+                        "email": "materialized@example.com",
+                        "password": "pw",
+                        "mailbox_provider": "im215",
+                        "mailbox_ref": "mailbox-ref",
+                        "mailbox_session_id": "session-id",
+                    }
+                if step_type == "initialize_platform_organization":
+                    return {
+                        "ok": True,
+                        "status": "completed",
+                        "organizationId": "org_123",
+                    }
+                if step_type == "initialize_chatgpt_login_session":
+                    return {
+                        "ok": True,
+                        "status": "completed",
+                        "workspaceId": "ws_123",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                    }
+                if step_type == "obtain_codex_oauth":
+                    raise RuntimeError("phone_verification_required")
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(dst_flow.OWNER_DISPATCHERS, {"easyprotocol": _dispatcher}, clear=True):
+                with mock.patch.dict(
+                    os.environ,
+                    {"REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0"},
+                    clear=False,
+                ):
+                    result = dst_flow.run_dst_flow_once(
+                        output_dir=str(run_output_dir),
+                        flow_path=flow_path,
+                    )
+
+            copied_paths = sorted(pool_dir.glob("small-*.json"))
+            copied_payload = json.loads(copied_paths[0].read_text(encoding="utf-8")) if copied_paths else {}
+
+        self.assertFalse(result.ok)
+        self.assertEqual("obtain-codex-oauth", result.error_step)
+        self.assertEqual(1, len(copied_paths))
+        self.assertEqual("materialized@example.com", copied_payload["email"])
+        self.assertEqual("completed", copied_payload["platformOrganization"]["status"])
+        self.assertEqual("completed", copied_payload["chatgptLogin"]["status"])
+
+    def test_run_dst_flow_once_collects_small_success_when_create_dispatcher_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            output_root = root / "register-output"
+            run_output_dir = output_root / "worker-01" / "run-20260625-000000-task000001"
+            small_success_dir = run_output_dir / "small_success"
+            pool_dir = output_root / "openai" / "pending"
+            failed_once_dir = output_root / "openai" / "failed-once"
+            payload_path = small_success_dir / "small-dispatcher-error.json"
+            flow_path = root / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "create-openai-account",
+                                    "type": "create_openai_account",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"output_dir": "{{task.output_dir}}"},
+                                    "saveAs": "create_openai_account",
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            payload = {
+                "outcome": "small_success",
+                "source": "protocol_small_success",
+                "email": "dispatcher-error@example.com",
+                "mailboxRef": "mailbox-ref",
+                "mailboxSessionId": "session-id",
+                "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "platformAuth": {
+                    "clientId": "client-id",
+                    "redirectUri": "https://platform.openai.com/auth/callback",
+                    "codeVerifier": "code-verifier",
+                    "state": "state-value",
+                    "nonce": "nonce-value",
+                },
+            }
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                self.assertEqual("create_openai_account", step_type)
+                small_success_dir.mkdir(parents=True, exist_ok=True)
+                payload_path.write_text(json.dumps(payload), encoding="utf-8")
+                raise RuntimeError(
+                    "user_register status=400 body={"
+                    '"error":{"message":"Failed to create account. Please try again."}}'
+                )
+
+            with mock.patch.dict(dst_flow.OWNER_DISPATCHERS, {"easyprotocol": _dispatcher}, clear=True):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(run_output_dir),
+                    flow_path=flow_path,
+                )
+
+            copied_paths = sorted(pool_dir.glob("*.json"))
+            failed_once_paths = sorted(failed_once_dir.glob("*.json"))
+            source_exists = payload_path.is_file()
+            copied_payload = json.loads(copied_paths[0].read_text(encoding="utf-8")) if copied_paths else {}
+
+        self.assertFalse(result.ok)
+        self.assertEqual("create-openai-account", result.error_step)
+        self.assertEqual(["small-dispatcher-error.json"], [path.name for path in copied_paths])
+        self.assertEqual(payload, copied_payload)
+        self.assertTrue(source_exists)
+        self.assertEqual([], failed_once_paths)
+
+    def test_run_dst_flow_once_immediate_collection_honors_explicit_openai_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            output_root = root / "register-output"
+            run_output_dir = output_root / "worker-01" / "run-20260625-000000-task000001"
+            small_success_dir = run_output_dir / "small_success"
+            custom_pool_dir = root / "custom-openai-pool"
+            default_pool_dir = output_root / "openai" / "pending"
+            payload_path = small_success_dir / "small-custom-pool.json"
+            flow_path = root / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "create-openai-account",
+                                    "type": "create_openai_account",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"output_dir": "{{task.output_dir}}"},
+                                    "saveAs": "create_openai_account",
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload = {
+                "email": "custom-pool@example.com",
+                "mailboxRef": "mailbox-ref",
+                "mailboxSessionId": "session-id",
+                "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "platformOrganization": {"status": "completed"},
+                "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                "chatgptLoginDetails": {
+                    "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"}
+                },
+            }
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                self.assertEqual("create_openai_account", step_type)
+                small_success_dir.mkdir(parents=True, exist_ok=True)
+                payload_path.write_text(json.dumps(payload), encoding="utf-8")
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "storage_path": str(payload_path),
+                }
+
+            with mock.patch.dict(dst_flow.OWNER_DISPATCHERS, {"easyprotocol": _dispatcher}, clear=True):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(run_output_dir),
+                    flow_path=flow_path,
+                    openai_oauth_pool_dir=str(custom_pool_dir),
+                )
+
+            custom_pool_names = sorted(path.name for path in custom_pool_dir.glob("*.json"))
+            default_pool_names = sorted(path.name for path in default_pool_dir.glob("*.json"))
+
+        self.assertTrue(result.ok)
+        self.assertEqual(["small-custom-pool.json"], custom_pool_names)
+        self.assertEqual([], default_pool_names)
+
+    def test_run_dst_flow_once_preserves_create_error_when_immediate_collection_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "create-openai-account",
+                                    "type": "create_openai_account",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {"output_dir": "{{task.output_dir}}"},
+                                    "saveAs": "create_openai_account",
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                self.assertEqual("create_openai_account", step_type)
+                raise RuntimeError("user_register status=400")
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {"easyprotocol": _dispatcher},
+                clear=True,
+            ), mock.patch(
+                "others.dst_flow_runtime._maybe_collect_openai_oauth_artifact_after_step",
+                side_effect=OSError("pending pool unavailable"),
+            ), mock.patch(
+                "others.dst_flow_runtime.json_log",
+                create=True,
+            ) as json_log:
+                try:
+                    result = dst_flow.run_dst_flow_once(
+                        output_dir=str(Path(tmp_dir) / "register-output" / "worker-01" / "run-task000001"),
+                        flow_path=flow_path,
+                    )
+                except Exception as exc:
+                    self.fail(f"immediate collection masked the create-account error: {exc}")
+
+        self.assertFalse(result.ok)
+        self.assertEqual("create-openai-account", result.error_step)
+        self.assertIn("user_register status=400", result.error)
+        json_log.assert_called_once()
+        self.assertEqual(
+            "register_openai_oauth_immediate_collect_failed",
+            json_log.call_args.args[0]["event"],
+        )
+
+    def test_run_dst_flow_once_keeps_retry_success_when_immediate_collection_stays_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "steps": [
+                                {
+                                    "id": "create-openai-account",
+                                    "type": "create_openai_account",
+                                    "metadata": {
+                                        "owner": "easyprotocol",
+                                        "retry": {
+                                            "maxAttempts": 2,
+                                            "retryProfile": "step-create-account-recover",
+                                        },
+                                    },
+                                    "input": {"output_dir": "{{task.output_dir}}"},
+                                    "saveAs": "create_openai_account",
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dispatcher_calls = 0
+
+            def _dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                nonlocal dispatcher_calls
+                self.assertEqual("create_openai_account", step_type)
+                dispatcher_calls += 1
+                if dispatcher_calls == 1:
+                    raise RuntimeError("user_register status=400")
+                return {"ok": True, "status": "completed", "storage_path": "/tmp/success.json"}
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {"easyprotocol": _dispatcher},
+                clear=True,
+            ), mock.patch(
+                "others.dst_flow_runtime._maybe_collect_openai_oauth_artifact_after_step",
+                side_effect=OSError("pending pool unavailable"),
+            ) as collector, mock.patch(
+                "others.dst_flow_runtime.json_log",
+                create=True,
+            ) as json_log:
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "register-output" / "worker-01" / "run-task000001"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(2, dispatcher_calls)
+        self.assertEqual(2, result.step_attempts["create-openai-account"])
+        self.assertEqual("completed", result.outputs["create-openai-account"]["status"])
+        self.assertEqual(2, collector.call_count)
+        self.assertEqual(2, json_log.call_count)
+        self.assertTrue(
+            all(
+                call.args[0]["event"] == "register_openai_oauth_immediate_collect_failed"
+                for call in json_log.call_args_list
+            )
+        )
+
+    def test_run_dst_flow_once_restores_transient_continue_artifact_without_immediate_recollection(self) -> None:
+        flows_dir = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
+        flow_path = flows_dir / "codex-openai-oauth-continue-v1.semantic-flow.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260626-task000001"
+            source_pool_dir = output_root / "openai" / "failed-once"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            seed_name = "small-seed@example.com.json"
+            seed_path = source_pool_dir / seed_name
+            seed_path.write_text(
+                json.dumps(
+                    {
+                        "email": "seed@example.com",
+                        "mailboxRef": "cloudflare_temp_email:old-ref",
+                        "mailboxSessionId": "old-session",
+                        "createdAt": "2026-05-01T00:00:00Z",
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {
+                                "authStatus": "logged_in",
+                                "structure": "personal",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def _easyemail_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "acquire_mailbox":
+                    return {
+                        "ok": True,
+                        "provider": "cloudflare_temp_email",
+                        "email": "seed@example.com",
+                        "mailbox_ref": "cloudflare_temp_email:recovered-ref",
+                        "session_id": "mailbox_recovered",
+                    }
+                if step_type == "release_mailbox":
+                    return {"released": True, "detail": "deleted"}
+                raise AssertionError(step_type)
+
+            def _easyproxy_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "acquire_proxy_chain":
+                    return {"ok": True, "proxy_url": "http://proxy.local:25000", "lease_id": "lease-1"}
+                if step_type == "release_proxy_chain":
+                    return {"released": True}
+                raise AssertionError(step_type)
+
+            def _easyprotocol_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "initialize_platform_organization":
+                    return {"ok": True, "status": "already_initialized"}
+                if step_type == "initialize_chatgpt_login_session":
+                    raise RuntimeError("authorize_continue_blocked")
+                raise AssertionError(step_type)
+
+            def _orchestration_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type == "acquire_openai_oauth_artifact":
+                    from artifact_pool_flow import dispatch_orchestration_step
+
+                    return dispatch_orchestration_step(step_type=step_type, step_input=step_input)
+                if step_type == "finalize_openai_oauth_artifact":
+                    from artifact_pool_flow import dispatch_orchestration_step
+
+                    return dispatch_orchestration_step(step_type=step_type, step_input=step_input)
+                raise AssertionError(step_type)
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "orchestration": _orchestration_dispatcher,
+                    "easyemail": _easyemail_dispatcher,
+                    "easyproxy": _easyproxy_dispatcher,
+                    "easyprotocol": _easyprotocol_dispatcher,
+                },
+                clear=True,
+            ), mock.patch.dict(os.environ, {"REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS": "0"}, clear=False):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(run_output_dir),
+                    flow_path=flow_path,
+                    openai_oauth_pool_dir=str(source_pool_dir),
+                )
+
+            failed_once_names = sorted(path.name for path in source_pool_dir.glob("*.json"))
+            failed_twice_dir = output_root / "openai" / "failed-twice"
+            failed_twice_names = sorted(path.name for path in failed_twice_dir.glob("*.json"))
+
+        self.assertFalse(result.ok)
+        self.assertEqual("initialize-chatgpt-login-session", result.error_step)
+        self.assertEqual([seed_name], failed_once_names)
+        self.assertEqual([], failed_twice_names)
 
     def test_run_dst_flow_once_retries_create_account_with_mailbox_and_proxy_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -3352,6 +3804,109 @@ class DstFlowIntegrationTests(unittest.TestCase):
         )
         self.assertEqual([("mailbox-ref-1", "mailbox-session-1")], released_mailboxes)
         self.assertEqual([("http://proxy-1", "lease-1")], released_proxies)
+
+    def test_run_dst_flow_once_keeps_mailbox_avoidance_across_task_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            flow_path = Path(tmp_dir) / "temp-flow.json"
+            flow_path.write_text(
+                json.dumps(
+                    {
+                        "definition": {
+                            "platform": "chatgpt",
+                            "metadata": {
+                                "taskRetry": {
+                                    "maxAttempts": 2,
+                                    "retryProfile": "task-openai-default",
+                                    "retryOnSteps": ["create-openai-account"],
+                                }
+                            },
+                            "steps": [
+                                {
+                                    "id": "acquire-mailbox",
+                                    "type": "acquire_mailbox",
+                                    "metadata": {"owner": "easyemail"},
+                                    "input": {
+                                        "business_key": "{{task.mailbox_business_key}}",
+                                        "avoid_emails": "{{task.avoidMailboxEmails}}",
+                                        "avoid_domains": "{{task.avoidMailboxDomains}}",
+                                        "avoid_providers": "{{task.avoidMailboxProviders}}",
+                                        "avoid_reason": "{{task.avoidMailboxReason}}",
+                                    },
+                                    "saveAs": "mailbox",
+                                },
+                                {
+                                    "id": "create-openai-account",
+                                    "type": "create_openai_account",
+                                    "metadata": {"owner": "easyprotocol"},
+                                    "input": {
+                                        "preallocated_email": "{{mailbox.email}}",
+                                        "preallocated_session_id": "{{mailbox.session_id}}",
+                                        "preallocated_mailbox_ref": "{{mailbox.mailbox_ref}}",
+                                    },
+                                    "saveAs": "create_openai_account",
+                                },
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            mailbox_inputs: list[dict[str, object]] = []
+            create_inputs: list[str] = []
+            mailbox_call_count = 0
+
+            def _easyemail_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                nonlocal mailbox_call_count
+                if step_type != "acquire_mailbox":
+                    raise AssertionError(step_type)
+                mailbox_inputs.append(dict(step_input))
+                mailbox_call_count += 1
+                return {
+                    "ok": True,
+                    "provider": "m2u" if mailbox_call_count == 1 else "cloudflare_temp_email",
+                    "email": "user1@kkb.qzz.io" if mailbox_call_count == 1 else "user2@example.com",
+                    "mailbox_ref": f"mailbox-ref-{mailbox_call_count}",
+                    "session_id": f"mailbox-session-{mailbox_call_count}",
+                    "business_key": "openai",
+                }
+
+            def _easyprotocol_dispatcher(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+                if step_type != "create_openai_account":
+                    raise AssertionError(step_type)
+                create_inputs.append(str(step_input.get("preallocated_email") or ""))
+                if len(create_inputs) == 1:
+                    raise RuntimeError(
+                        "user_register status=400 body={"
+                        "\"error\":{\"message\":\"Failed to create account. Please try again.\"}}"
+                    )
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "storage_path": "/tmp/create-success.json",
+                }
+
+            with mock.patch.dict(
+                dst_flow.OWNER_DISPATCHERS,
+                {
+                    "easyemail": _easyemail_dispatcher,
+                    "easyprotocol": _easyprotocol_dispatcher,
+                },
+                clear=True,
+            ):
+                result = dst_flow.run_dst_flow_once(
+                    output_dir=str(Path(tmp_dir) / "out"),
+                    flow_path=flow_path,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(2, result.task_attempts)
+        self.assertEqual(["user1@kkb.qzz.io", "user2@example.com"], create_inputs)
+        self.assertEqual("", mailbox_inputs[0]["avoid_emails"])
+        self.assertEqual(["user1@kkb.qzz.io"], mailbox_inputs[1]["avoid_emails"])
+        self.assertEqual(["kkb.qzz.io"], mailbox_inputs[1]["avoid_domains"])
+        self.assertEqual(["m2u"], mailbox_inputs[1]["avoid_providers"])
+        self.assertEqual("create_account_user_register_400", mailbox_inputs[1]["avoid_reason"])
 
     def test_run_dst_flow_once_retries_create_account_after_email_otp_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

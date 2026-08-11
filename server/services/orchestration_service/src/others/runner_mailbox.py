@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,7 @@ STRONG_MAILBOX_FAILURE_REASONS = {"unsupported_email", "registration_disallowed"
 PROVIDER_CONSECUTIVE_BLACKLIST_FAILURE_REASONS = (
     EMAIL_OTP_FAILURE_REASONS
     | STRONG_MAILBOX_FAILURE_REASONS
-    | {"create_account_user_register_400"}
+    | {"create_account_user_register_400", "mailbox_unavailable"}
 )
 DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES = 10
 DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE = 20.0
@@ -344,6 +345,9 @@ def mailbox_provider_dynamic_blacklist_recovery_qualified(
 
 
 def mailbox_domain_blacklist_reason(*, result_payload_value: dict[str, Any]) -> str:
+    explicit_reason = str(result_payload_value.get("mailboxFailureReason") or "").strip().lower()
+    if explicit_reason in STRONG_MAILBOX_FAILURE_REASONS:
+        return explicit_reason
     step_errors = result_payload_value.get("stepErrors") if isinstance(result_payload_value, dict) else {}
     if not isinstance(step_errors, dict):
         return ""
@@ -392,6 +396,7 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
 
     if bool(result_payload_value.get("ok")):
         return ""
+    explicit_reason = str(result_payload_value.get("mailboxFailureReason") or "").strip().lower()
     error_step = str(result_payload_value.get("errorStep") or "").strip().lower()
     combined = _mailbox_result_error_text(result_payload_value=result_payload_value)
 
@@ -425,7 +430,7 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
         or "registration_disallowed" in combined
         or "terms of use restriction on about-you page" in combined
     ):
-        if "mailbox_provider=" in combined:
+        if "mailbox_provider=" in combined or explicit_reason in STRONG_MAILBOX_FAILURE_REASONS:
             return ""
         return "external_registration_blocked"
 
@@ -525,6 +530,12 @@ def mailbox_failure_reason(*, result_payload_value: dict[str, Any]) -> str:
         return "unsupported_email"
     if "registration_disallowed" in combined and "mailbox_provider=" in combined:
         return "registration_disallowed"
+    if error_step == "acquire-mailbox" and result_error_matches(
+        result_payload_value,
+        ErrorCodes.MAILBOX_UNAVAILABLE,
+        step_id="acquire-mailbox",
+    ):
+        return "mailbox_unavailable"
     if error_step == "create-openai-account" and "user_register_400" in combined:
         return "create_account_user_register_400"
     if "wrong_email_otp_code" in combined or "chatgpt_login_otp_validate_failed" in combined:
@@ -581,6 +592,82 @@ def mailbox_provider_from_ref(mailbox_ref: str) -> str:
     return str(value.split(":", 1)[0] or "").strip().lower()
 
 
+def _normalize_mailbox_provider_name(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    alias_map = {
+        "cloudflare-temp-email": "cloudflare_temp_email",
+        "cloudflaretempemail": "cloudflare_temp_email",
+        "duck": "duckmail",
+        "duckmail": "duckmail",
+        "gpt": "gptmail",
+        "gptmail": "gptmail",
+        "guerrilla": "guerrillamail",
+        "guerrillamail": "guerrillamail",
+        "215.im": "im215",
+        "215im": "im215",
+        "im215": "im215",
+        "yyds": "im215",
+        "mail.tm": "mailtm",
+        "mailtm": "mailtm",
+        "mail-to-you": "m2u",
+        "mailtoyou": "m2u",
+        "m2u": "m2u",
+        "moe": "moemail",
+        "moemail": "moemail",
+        "tempmail-lol": "tempmail-lol",
+        "tempmail.lol": "tempmail-lol",
+        "tempmaillol": "tempmail-lol",
+    }
+    return alias_map.get(normalized, normalized)
+
+
+def _mailbox_provider_from_failure_text(text: str) -> str:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return ""
+    for pattern in (
+        r"no available\s+([a-z0-9._-]+)\s+credentials",
+        r"([a-z0-9._-]+)\s+createmailbox failed",
+        r"provider(?:typekey)?[=:\s\"]+([a-z0-9._-]+)",
+    ):
+        match = re.search(pattern, lowered)
+        if not match:
+            continue
+        provider = _normalize_mailbox_provider_name(match.group(1))
+        if provider:
+            return provider
+    for alias in (
+        "cloudflare_temp_email",
+        "duckmail",
+        "guerrillamail",
+        "im215",
+        "215.im",
+        "mail2925",
+        "mailtm",
+        "m2u",
+        "moemail",
+        "tempmail-lol",
+    ):
+        if alias in lowered:
+            return _normalize_mailbox_provider_name(alias)
+    return ""
+
+
+def _mailbox_business_key_from_task_context(result_payload_value: dict[str, Any]) -> str:
+    if not isinstance(result_payload_value, dict):
+        return ""
+    task_context = result_payload_value.get("taskContext")
+    if not isinstance(task_context, dict):
+        return ""
+    return str(
+        task_context.get("mailboxBusinessKey")
+        or task_context.get("mailbox_business_key")
+        or task_context.get("businessKey")
+        or task_context.get("business_key")
+        or ""
+    ).strip().lower()
+
+
 def mailbox_session_id_from_ref(mailbox_ref: str) -> str:
     value = str(mailbox_ref or "").strip()
     if not value:
@@ -591,16 +678,14 @@ def mailbox_session_id_from_ref(mailbox_ref: str) -> str:
 
 
 def extract_mailbox_business_outcome_context(*, result_payload_value: dict[str, Any]) -> dict[str, str]:
-    steps = result_payload_value.get("steps") if isinstance(result_payload_value, dict) else {}
-    if isinstance(steps, dict) and str(steps.get("acquire-mailbox") or "").strip().lower() != "ok":
-        return {}
     outputs = result_payload_value.get("outputs") if isinstance(result_payload_value, dict) else {}
     if not isinstance(outputs, dict):
-        return {}
+        outputs = {}
     mailbox_output = outputs.get("acquire-mailbox")
     mailbox_output = mailbox_output if isinstance(mailbox_output, dict) else {}
     create_output = outputs.get("create-openai-account")
     create_output = create_output if isinstance(create_output, dict) else {}
+    failure_text = _mailbox_result_error_text(result_payload_value=result_payload_value)
     email = str(
         mailbox_output.get("email")
         or mailbox_output.get("emailAddress")
@@ -622,8 +707,12 @@ def extract_mailbox_business_outcome_context(*, result_payload_value: dict[str, 
         or mailbox_output.get("businessKey")
         or ""
     ).strip().lower()
+    if not business_key:
+        business_key = _mailbox_business_key_from_task_context(result_payload_value)
     if not provider and mailbox_ref:
         provider = mailbox_provider_from_ref(mailbox_ref)
+    if not provider:
+        provider = _mailbox_provider_from_failure_text(failure_text)
     if "@" not in email:
         return {
             "business_key": business_key,
@@ -921,7 +1010,7 @@ def record_business_mailbox_domain_outcome(
     provider = str(context.get("provider") or "").strip().lower()
     domain = str(context.get("domain") or "").strip().lower()
     email = str(context.get("email") or "").strip().lower()
-    if not domain:
+    if not domain and not provider:
         return None
     quality_success_reason = mailbox_quality_success_reason(
         result_payload_value=result_payload_value,
@@ -952,12 +1041,6 @@ def record_business_mailbox_domain_outcome(
     business_payload = dict(business_payload) if isinstance(business_payload, dict) else {}
     domains_payload = business_payload.get("domains")
     domains = dict(domains_payload) if isinstance(domains_payload, dict) else {}
-    current = domains.get(domain)
-    current = dict(current) if isinstance(current, dict) else {}
-    attempts = max(0, int(current.get("attempts") or 0)) + 1
-    successes = max(0, int(current.get("successes") or 0))
-    failures = max(0, int(current.get("failures") or 0))
-    consecutive_failures = max(0, int(current.get("consecutiveFailures") or 0))
     failure_reason = "" if ok else mailbox_failure_reason(result_payload_value=result_payload_value)
     if not ok and failure_reason:
         _report_mailbox_failure_outcome_to_easyemail(
@@ -965,61 +1048,75 @@ def record_business_mailbox_domain_outcome(
             business_key=business_key,
             failure_reason=failure_reason,
         )
-    failure_reasons_payload = current.get("failureReasons")
-    failure_reasons = dict(failure_reasons_payload) if isinstance(failure_reasons_payload, dict) else {}
     now = datetime.now(timezone.utc).isoformat()
-    if ok:
-        successes += 1
-        consecutive_failures = 0
-        failure_reasons = {}
-    else:
-        failures += 1
-        consecutive_failures += 1
-        if failure_reason:
-            failure_reasons[failure_reason] = max(0, int(failure_reasons.get(failure_reason) or 0)) + 1
-    failure_rate = (float(failures) / float(attempts)) * 100.0 if attempts > 0 else 0.0
+    attempts = 0
+    successes = 0
+    failures = 0
+    consecutive_failures = 0
+    failure_rate = 0.0
     min_attempts = mailbox_domain_blacklist_min_attempts(shared_root=shared_root)
     failure_rate_threshold = mailbox_domain_blacklist_failure_rate(shared_root=shared_root)
-    blacklist_reason = mailbox_domain_blacklist_reason(result_payload_value=result_payload_value)
-    prior_blacklisted = bool(current.get("blacklisted"))
-    prior_blacklist_reason = str(current.get("blacklistReason") or "").strip()
     threshold = mailbox_domain_consecutive_failure_blacklist_threshold(shared_root=shared_root)
-    if not ok:
-        if not blacklist_reason and consecutive_failures >= threshold:
-            blacklist_reason = "consecutive_failures_threshold"
-        email_otp_threshold = mailbox_email_otp_failure_blacklist_threshold()
-        if (
-            not blacklist_reason
-            and failure_reason in EMAIL_OTP_FAILURE_REASONS
-            and email_otp_threshold > 0
-            and mailbox_failure_reason_total(failure_reasons, EMAIL_OTP_FAILURE_REASONS) >= email_otp_threshold
-        ):
-            blacklist_reason = "email_otp_failure_threshold"
-        if not blacklist_reason and mailbox_failure_rate_reaches_blacklist_threshold(
-            attempts=attempts,
-            failures=failures,
-            min_attempts=min_attempts,
-            failure_rate_threshold=failure_rate_threshold,
-        ):
-            blacklist_reason = "failure_rate_threshold"
-    blacklisted = False if ok else prior_blacklisted or bool(blacklist_reason)
-    stored_blacklist_reason = "" if ok else blacklist_reason or prior_blacklist_reason
-    domains[domain] = {
-        "provider": provider,
-        "attempts": attempts,
-        "successes": successes,
-        "failures": failures,
-        "consecutiveFailures": consecutive_failures,
-        "lastOutcome": "success" if ok else "failure",
-        "lastOutcomeAt": now,
-        "lastEmail": email,
-        "lastSuccessAt": now if ok else str(current.get("lastSuccessAt") or "").strip(),
-        "lastFailureAt": now if not ok else str(current.get("lastFailureAt") or "").strip(),
-        "lastFailureReason": failure_reason if not ok else str(current.get("lastFailureReason") or "").strip(),
-        "failureReasons": failure_reasons,
-        "blacklisted": blacklisted,
-        "blacklistReason": stored_blacklist_reason,
-    }
+    blacklisted = False
+    stored_blacklist_reason = ""
+    if domain:
+        current = domains.get(domain)
+        current = dict(current) if isinstance(current, dict) else {}
+        attempts = max(0, int(current.get("attempts") or 0)) + 1
+        successes = max(0, int(current.get("successes") or 0))
+        failures = max(0, int(current.get("failures") or 0))
+        consecutive_failures = max(0, int(current.get("consecutiveFailures") or 0))
+        failure_reasons_payload = current.get("failureReasons")
+        failure_reasons = dict(failure_reasons_payload) if isinstance(failure_reasons_payload, dict) else {}
+        if ok:
+            successes += 1
+            consecutive_failures = 0
+            failure_reasons = {}
+        else:
+            failures += 1
+            consecutive_failures += 1
+            if failure_reason:
+                failure_reasons[failure_reason] = max(0, int(failure_reasons.get(failure_reason) or 0)) + 1
+        failure_rate = (float(failures) / float(attempts)) * 100.0 if attempts > 0 else 0.0
+        blacklist_reason = mailbox_domain_blacklist_reason(result_payload_value=result_payload_value)
+        prior_blacklisted = bool(current.get("blacklisted"))
+        prior_blacklist_reason = str(current.get("blacklistReason") or "").strip()
+        if not ok:
+            if not blacklist_reason and consecutive_failures >= threshold:
+                blacklist_reason = "consecutive_failures_threshold"
+            email_otp_threshold = mailbox_email_otp_failure_blacklist_threshold()
+            if (
+                not blacklist_reason
+                and failure_reason in EMAIL_OTP_FAILURE_REASONS
+                and email_otp_threshold > 0
+                and mailbox_failure_reason_total(failure_reasons, EMAIL_OTP_FAILURE_REASONS) >= email_otp_threshold
+            ):
+                blacklist_reason = "email_otp_failure_threshold"
+            if not blacklist_reason and mailbox_failure_rate_reaches_blacklist_threshold(
+                attempts=attempts,
+                failures=failures,
+                min_attempts=min_attempts,
+                failure_rate_threshold=failure_rate_threshold,
+            ):
+                blacklist_reason = "failure_rate_threshold"
+        blacklisted = False if ok else prior_blacklisted or bool(blacklist_reason)
+        stored_blacklist_reason = "" if ok else blacklist_reason or prior_blacklist_reason
+        domains[domain] = {
+            "provider": provider,
+            "attempts": attempts,
+            "successes": successes,
+            "failures": failures,
+            "consecutiveFailures": consecutive_failures,
+            "lastOutcome": "success" if ok else "failure",
+            "lastOutcomeAt": now,
+            "lastEmail": email,
+            "lastSuccessAt": now if ok else str(current.get("lastSuccessAt") or "").strip(),
+            "lastFailureAt": now if not ok else str(current.get("lastFailureAt") or "").strip(),
+            "lastFailureReason": failure_reason if not ok else str(current.get("lastFailureReason") or "").strip(),
+            "failureReasons": failure_reasons,
+            "blacklisted": blacklisted,
+            "blacklistReason": stored_blacklist_reason,
+        }
 
     provider_attempts = 0
     provider_successes = 0

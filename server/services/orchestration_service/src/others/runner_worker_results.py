@@ -344,16 +344,21 @@ def process_worker_run_result(
                     "result": postprocess_result,
                 }
             )
-        _copy_openai_oauth_artifacts_to_pool(
-            run_output_dir=run_output_dir,
-            pool_dir=_openai_oauth_failure_target_pool_dir(
-                output_root=output_root,
-                result_payload_value=result_payload,
-            ),
-            worker_label=worker_label,
-            task_index=task_index,
-            result_or_payload=result_payload,
+        finalize_output = _output_dict(result_payload, "finalize-openai-oauth-artifact")
+        already_finalized_openai_artifact = isinstance(finalize_output, dict) and bool(
+            str(finalize_output.get("status") or "").strip()
         )
+        if not already_finalized_openai_artifact:
+            _copy_openai_oauth_artifacts_to_pool(
+                run_output_dir=run_output_dir,
+                pool_dir=_openai_oauth_failure_target_pool_dir(
+                    output_root=output_root,
+                    result_payload_value=result_payload,
+                ),
+                worker_label=worker_label,
+                task_index=task_index,
+                result_or_payload=result_payload,
+            )
         _cleanup_run_output_dir(
             run_output_dir=run_output_dir,
             worker_label=worker_label,

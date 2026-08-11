@@ -8,6 +8,7 @@ from typing import Any
 from easyprotocol_flow import dispatch_easyprotocol_step
 from errors import ErrorCodes, resolve_retry_codes
 from others.config import DstTaskEnvConfig
+from others.common import json_log
 from others.dst_flow_loader import load_dst_flow
 from others.dst_flow_models import DstExecutionResult, DstPlan, DstStatement
 from others.dst_flow_support import OWNER_DISPATCHERS
@@ -67,6 +68,20 @@ def _append_unique_text(existing: Any, value: str) -> list[str]:
         values = [str(existing or "").strip()]
     if value and value not in values:
         values.append(value)
+    return values
+
+
+def _merge_unique_text_values(existing: list[str], incoming: Any) -> list[str]:
+    values = list(existing)
+    if isinstance(incoming, list):
+        for raw_value in incoming:
+            normalized = str(raw_value or "").strip()
+            if normalized:
+                values = _append_unique_text(values, normalized)
+        return values
+    normalized = str(incoming or "").strip()
+    if normalized:
+        values = _append_unique_text(values, normalized)
     return values
 
 
@@ -176,6 +191,8 @@ def _prepare_create_account_mailbox_retry_context(
     if provider and failure_reason != "unsupported_email":
         task_state["avoidMailboxProviders"] = _append_unique_text(task_state.get("avoidMailboxProviders"), provider)
     task_state["avoidMailboxReason"] = failure_reason
+    if not result.outputs.get("mailbox-attempt-outcomes"):
+        result.outputs["mailbox-attempt-outcomes"] = []
     outcomes = result.outputs.get("mailbox-attempt-outcomes")
     if not isinstance(outcomes, list):
         outcomes = []
@@ -196,6 +213,41 @@ def _prepare_create_account_mailbox_retry_context(
         }
     )
     result.outputs["mailbox-attempt-outcomes"] = outcomes
+
+
+def _prepare_task_retry_mailbox_context(
+    *,
+    statement: DstStatement,
+    state: dict[str, Any],
+    result: DstExecutionResult,
+    error_details: dict[str, Any],
+) -> None:
+    if str(statement.step_type or "").strip().lower() != "create_openai_account":
+        return
+    error_code = str(error_details.get("code") or "").strip().lower()
+    error_message = str(error_details.get("message") or "").strip()
+    failure_reason, _failure_class = _mailbox_retry_failure_class(
+        error_code=error_code,
+        error_message=error_message,
+    )
+    if not failure_reason:
+        return
+    context = _current_mailbox_context(state=state, result=result)
+    if not context.get("email") and not context.get("provider") and not context.get("mailbox_ref"):
+        return
+    task_state = state.get("task")
+    if not isinstance(task_state, dict):
+        return
+    email = str(context.get("email") or "").strip().lower()
+    domain = str(context.get("domain") or "").strip().lower()
+    provider = str(context.get("provider") or "").strip().lower()
+    if email:
+        task_state["avoidMailboxEmails"] = _append_unique_text(task_state.get("avoidMailboxEmails"), email)
+    if domain:
+        task_state["avoidMailboxDomains"] = _append_unique_text(task_state.get("avoidMailboxDomains"), domain)
+    if provider and failure_reason != "unsupported_email":
+        task_state["avoidMailboxProviders"] = _append_unique_text(task_state.get("avoidMailboxProviders"), provider)
+    task_state["avoidMailboxReason"] = failure_reason
 
 
 def _cleanup_saved_state_before_refresh(*, refresh_statement: DstStatement, state: dict[str, Any], result: DstExecutionResult) -> None:
@@ -395,44 +447,94 @@ def _task_index_from_output_dir(output_dir: str) -> int:
 
 def _maybe_collect_openai_oauth_artifact_after_step(
     *,
+    statement: DstStatement,
     state: dict[str, Any],
     result: DstExecutionResult,
 ) -> None:
     if bool(state.get("_openai_oauth_immediate_collected")):
+        return
+    step_type = str(statement.step_type or "").strip().lower()
+    if step_type == "create_openai_account":
+        pass
+    elif step_type in {
+        "initialize_platform_organization",
+        "initialize_chatgpt_login_session",
+    }:
+        has_create_output = isinstance(state.get("create_openai_account"), dict) or any(
+            str(step_id or "").strip().lower().replace("_", "-") == "create-openai-account"
+            and isinstance(step_output, dict)
+            for step_id, step_output in result.outputs.items()
+        )
+        if not has_create_output:
+            return
+    else:
         return
     task = state.get("task") if isinstance(state.get("task"), dict) else {}
     output_dir_text = str(task.get("output_dir") or "").strip()
     if not output_dir_text:
         return
 
-    from others.artifact_pool_paths import resolve_openai_oauth_continue_pool
-    from others.common import validate_openai_oauth_seed_payload
+    from others.artifact_pool_paths import resolve_openai_oauth_pool
+    from others.artifact_pool_claim_recovery import load_openai_oauth_seed_validation
     from others.result_artifacts import FREE_OPENAI_OAUTH_SOURCE_CANDIDATES, first_existing_output_path
     from others.runner_openai_oauth import copy_openai_oauth_artifacts_to_pool
-    from others.storage import load_json_payload
 
     source_path = first_existing_output_path(result, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES)
-    if source_path is None:
-        return
-    try:
-        payload = load_json_payload(source_path)
-    except Exception:
-        return
-    valid, reason = validate_openai_oauth_seed_payload(payload, enforce_max_age=False)
-    if not valid:
-        state["_openai_oauth_immediate_collect_skip_reason"] = reason
-        return
+    if source_path is not None:
+        valid, reason, _payload = load_openai_oauth_seed_validation(
+            source_path,
+            enforce_max_age=False,
+            allow_protocol_small_seed=True,
+        )
+        if not valid:
+            state["_openai_oauth_immediate_collect_skip_reason"] = reason
+            return
 
+    explicit_pool_dir = str(task.get("openai_oauth_pool_dir") or "").strip()
     copied_paths = copy_openai_oauth_artifacts_to_pool(
         run_output_dir=Path(output_dir_text),
-        pool_dir=resolve_openai_oauth_continue_pool({"output_dir": output_dir_text}),
+        pool_dir=resolve_openai_oauth_pool(
+            {
+                "output_dir": output_dir_text,
+                "pool_dir": explicit_pool_dir,
+            }
+        ),
         worker_label=str(os.environ.get("REGISTER_WORKER_ID") or "dst-flow"),
         task_index=_task_index_from_output_dir(output_dir_text),
         result_or_payload=result,
         delete_protocol_bridge_source=False,
+        allow_protocol_small_seed=True,
     )
     if copied_paths:
         state["_openai_oauth_immediate_collected"] = True
+
+
+def _collect_openai_oauth_artifact_after_step_nonfatal(
+    *,
+    statement: DstStatement,
+    state: dict[str, Any],
+    result: DstExecutionResult,
+) -> None:
+    try:
+        _maybe_collect_openai_oauth_artifact_after_step(
+            statement=statement,
+            state=state,
+            result=result,
+        )
+    except Exception as collect_exc:
+        error_text = f"{type(collect_exc).__name__}:{collect_exc}"
+        state["_openai_oauth_immediate_collect_error"] = error_text
+        try:
+            json_log(
+                {
+                    "event": "register_openai_oauth_immediate_collect_failed",
+                    "stepId": statement.step_id,
+                    "stepType": statement.step_type,
+                    "error": error_text,
+                }
+            )
+        except Exception:
+            pass
 
 
 def run_statement_once(
@@ -461,7 +563,11 @@ def run_statement_once(
     result.outputs[statement.step_id] = step_output
     if statement.save_as:
         state[statement.save_as] = step_output
-    _maybe_collect_openai_oauth_artifact_after_step(state=state, result=result)
+    _collect_openai_oauth_artifact_after_step_nonfatal(
+        statement=statement,
+        state=state,
+        result=result,
+    )
     return step_output
 
 
@@ -649,6 +755,10 @@ def run_dst_flow_once(
         task_attempts=1,
         task_context=dict(base_task_context),
     )
+    failed_task_mailbox_emails: list[str] = []
+    failed_task_mailbox_domains: list[str] = []
+    failed_task_mailbox_providers: list[str] = []
+    failed_task_mailbox_reason = ""
     save_as_index = {
         str(statement.save_as or "").strip(): statement
         for statement in plan.steps
@@ -658,65 +768,72 @@ def run_dst_flow_once(
     for task_attempt in range(1, task_retry_max_attempts(plan, task_max_attempts) + 1):
         resolved_team_auth_path = str(team_auth_path or "").strip()
         resolved_team_invite_enabled = bool(team_invite_enabled) if team_invite_enabled is not None else bool(resolved_team_auth_path)
-        state = {
-            "task": {
-                "output_dir": str(output_dir or "").strip(),
-                "team_auth_path": resolved_team_auth_path,
-                "team_invite_enabled": resolved_team_invite_enabled,
-                "team_invite_cleanup_enabled": resolved_team_invite_enabled and (not free_stop_after_validate),
-                "input_source_dir": str(input_source_dir or env_config.input_source_dir or "").strip(),
-                "input_claims_dir": str(input_claims_dir or env_config.input_claims_dir or "").strip(),
-                "login_entry_url": str(login_entry_url or env_config.login_entry_url or "").strip(),
-                "preallocated_email": str(preallocated_email or "").strip(),
-                "preallocated_session_id": str(preallocated_session_id or "").strip(),
-                "preallocated_mailbox_ref": str(preallocated_mailbox_ref or "").strip(),
-                "r2_target_folder": str(r2_target_folder or "").strip(),
-                "r2_bucket": str(r2_bucket or "").strip(),
-                "r2_object_name": str(r2_object_name or "").strip(),
-                "r2_account_id": str(r2_account_id or "").strip(),
-                "r2_endpoint_url": str(r2_endpoint_url or "").strip(),
-                "r2_access_key_id": str(r2_access_key_id or "").strip(),
-                "r2_secret_access_key": str(r2_secret_access_key or "").strip(),
-                "r2_region": str(r2_region or "").strip(),
-                "r2_public_base_url": str(r2_public_base_url or "").strip(),
-                "r2_upload_enabled": bool(r2_upload_enabled) if r2_upload_enabled is not None else False,
-                "openai_oauth_pool_dir": str(openai_oauth_pool_dir or "").strip(),
-                "account_file": str(account_file or "").strip(),
-                "account_dir": str(account_dir or "").strip(),
-                "account_claims_dir": str(account_claims_dir or input_claims_dir or env_config.input_claims_dir or "").strip(),
-                "account_claim_mode": (
-                    bool(account_claim_mode)
-                    if account_claim_mode is not None
-                    else bool(str(account_claims_dir or input_claims_dir or env_config.input_claims_dir or "").strip())
-                ),
-                "account_max_targets": int(account_max_targets or 0) if account_max_targets is not None else 0,
-                "account_audit_production_mode": (
-                    bool(account_audit_production_mode)
-                    if account_audit_production_mode is not None
-                    else False
-                ),
-                "loginable_dir": str(loginable_dir or "").strip(),
-                "deleted_dir": str(deleted_dir or "").strip(),
-                "audit_path": str(audit_path or "").strip(),
-                "mailbox_ttl_seconds": env_config.mailbox_ttl_seconds,
-                "mailbox_recreate_preallocated": bool(env_config.mailbox_recreate_preallocated),
-                "team_pre_fill_count": env_config.team_pre_fill_count,
-                "team_member_count": env_config.team_member_count,
-                "team_workspace_selector": env_config.team_workspace_selector,
-                "free_workspace_selector": env_config.free_workspace_selector,
-                "free_oauth_delay_seconds": env_config.free_oauth_delay_seconds,
-                "free_stop_after_validate": free_stop_after_validate,
-                "free_stop_after_validate_cleanup_enabled": not free_stop_after_validate,
-                "platform": str(plan.platform or "").strip(),
-                "flow_id": str(plan.flow_id or "").strip(),
-                "flow_path": resolved_flow_path,
-                "mailbox_business_key": resolved_mailbox_business_key,
-                "taskAttempt": task_attempt,
-                "errorCode": "",
-                "errorStep": "",
-                "avoidProxyUrls": list(failed_task_proxy_urls),
-            }
+        task_state = {
+            "output_dir": str(output_dir or "").strip(),
+            "team_auth_path": resolved_team_auth_path,
+            "team_invite_enabled": resolved_team_invite_enabled,
+            "team_invite_cleanup_enabled": resolved_team_invite_enabled and (not free_stop_after_validate),
+            "input_source_dir": str(input_source_dir or env_config.input_source_dir or "").strip(),
+            "input_claims_dir": str(input_claims_dir or env_config.input_claims_dir or "").strip(),
+            "login_entry_url": str(login_entry_url or env_config.login_entry_url or "").strip(),
+            "preallocated_email": str(preallocated_email or "").strip(),
+            "preallocated_session_id": str(preallocated_session_id or "").strip(),
+            "preallocated_mailbox_ref": str(preallocated_mailbox_ref or "").strip(),
+            "r2_target_folder": str(r2_target_folder or "").strip(),
+            "r2_bucket": str(r2_bucket or "").strip(),
+            "r2_object_name": str(r2_object_name or "").strip(),
+            "r2_account_id": str(r2_account_id or "").strip(),
+            "r2_endpoint_url": str(r2_endpoint_url or "").strip(),
+            "r2_access_key_id": str(r2_access_key_id or "").strip(),
+            "r2_secret_access_key": str(r2_secret_access_key or "").strip(),
+            "r2_region": str(r2_region or "").strip(),
+            "r2_public_base_url": str(r2_public_base_url or "").strip(),
+            "r2_upload_enabled": bool(r2_upload_enabled) if r2_upload_enabled is not None else False,
+            "openai_oauth_pool_dir": str(openai_oauth_pool_dir or "").strip(),
+            "account_file": str(account_file or "").strip(),
+            "account_dir": str(account_dir or "").strip(),
+            "account_claims_dir": str(account_claims_dir or input_claims_dir or env_config.input_claims_dir or "").strip(),
+            "account_claim_mode": (
+                bool(account_claim_mode)
+                if account_claim_mode is not None
+                else bool(str(account_claims_dir or input_claims_dir or env_config.input_claims_dir or "").strip())
+            ),
+            "account_max_targets": int(account_max_targets or 0) if account_max_targets is not None else 0,
+            "account_audit_production_mode": (
+                bool(account_audit_production_mode)
+                if account_audit_production_mode is not None
+                else False
+            ),
+            "loginable_dir": str(loginable_dir or "").strip(),
+            "deleted_dir": str(deleted_dir or "").strip(),
+            "audit_path": str(audit_path or "").strip(),
+            "mailbox_ttl_seconds": env_config.mailbox_ttl_seconds,
+            "mailbox_recreate_preallocated": bool(env_config.mailbox_recreate_preallocated),
+            "team_pre_fill_count": env_config.team_pre_fill_count,
+            "team_member_count": env_config.team_member_count,
+            "team_workspace_selector": env_config.team_workspace_selector,
+            "free_workspace_selector": env_config.free_workspace_selector,
+            "free_oauth_delay_seconds": env_config.free_oauth_delay_seconds,
+            "free_stop_after_validate": free_stop_after_validate,
+            "free_stop_after_validate_cleanup_enabled": not free_stop_after_validate,
+            "platform": str(plan.platform or "").strip(),
+            "flow_id": str(plan.flow_id or "").strip(),
+            "flow_path": resolved_flow_path,
+            "mailbox_business_key": resolved_mailbox_business_key,
+            "taskAttempt": task_attempt,
+            "errorCode": "",
+            "errorStep": "",
+            "avoidProxyUrls": list(failed_task_proxy_urls),
         }
+        if failed_task_mailbox_emails:
+            task_state["avoidMailboxEmails"] = list(failed_task_mailbox_emails)
+        if failed_task_mailbox_domains:
+            task_state["avoidMailboxDomains"] = list(failed_task_mailbox_domains)
+        if failed_task_mailbox_providers:
+            task_state["avoidMailboxProviders"] = list(failed_task_mailbox_providers)
+        if failed_task_mailbox_reason:
+            task_state["avoidMailboxReason"] = failed_task_mailbox_reason
+        state = {"task": task_state}
         result = DstExecutionResult(
             ok=False,
             task_attempts=task_attempt,
@@ -761,6 +878,11 @@ def run_dst_flow_once(
                         task_retry_retained_outputs[retained_save_as] = step_output
                     break
                 except Exception as exc:
+                    _collect_openai_oauth_artifact_after_step_nonfatal(
+                        statement=statement,
+                        state=state,
+                        result=result,
+                    )
                     error_details = step_error_details(step_type=statement.step_type, exc=exc)
                     result.step_errors[statement.step_id] = error_details
                     if cleanup_failure_is_nonfatal(statement=statement, flow_failed=flow_failed):
@@ -818,6 +940,12 @@ def run_dst_flow_once(
                         result.error_step = statement.step_id
                         state["task"]["errorCode"] = str(error_details.get("code") or "").strip()
                         state["task"]["errorStep"] = statement.step_id
+                        _prepare_task_retry_mailbox_context(
+                            statement=statement,
+                            state=state,
+                            result=result,
+                            error_details=error_details,
+                        )
                         state["task"]["willRetry"] = should_retry_task(
                             plan=plan,
                             error_step=statement.step_id,
@@ -845,6 +973,24 @@ def run_dst_flow_once(
             proxy_url = str(proxy_chain_output.get("proxy_url") or "").strip().lower()
             if proxy_url and proxy_url not in failed_task_proxy_urls:
                 failed_task_proxy_urls.append(proxy_url)
+        task_state_after_failure = state.get("task")
+        if isinstance(task_state_after_failure, dict):
+            failed_task_mailbox_emails = _merge_unique_text_values(
+                failed_task_mailbox_emails,
+                task_state_after_failure.get("avoidMailboxEmails"),
+            )
+            failed_task_mailbox_domains = _merge_unique_text_values(
+                failed_task_mailbox_domains,
+                task_state_after_failure.get("avoidMailboxDomains"),
+            )
+            failed_task_mailbox_providers = _merge_unique_text_values(
+                failed_task_mailbox_providers,
+                task_state_after_failure.get("avoidMailboxProviders"),
+            )
+            failed_task_mailbox_reason = (
+                str(task_state_after_failure.get("avoidMailboxReason") or "").strip()
+                or failed_task_mailbox_reason
+            )
         backoff_seconds = task_retry_backoff_seconds(plan)
         if backoff_seconds > 0:
             time.sleep(backoff_seconds)

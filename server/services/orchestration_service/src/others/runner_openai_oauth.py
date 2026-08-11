@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from errors import ErrorCodes
+from others.artifact_pool_claim_recovery import load_openai_oauth_seed_validation
 from others.artifact_transfer import copy_artifact_to_dir, move_artifact_to_dir
 from others.common import (
     ensure_directory,
@@ -467,6 +468,7 @@ def copy_openai_oauth_artifacts_to_pool(
     task_index: int,
     result_or_payload: Any | None = None,
     delete_protocol_bridge_source: bool = True,
+    allow_protocol_small_seed: bool = False,
 ) -> list[str]:
     source_paths = _iter_openai_oauth_artifacts(
         run_output_dir=run_output_dir,
@@ -480,12 +482,11 @@ def copy_openai_oauth_artifacts_to_pool(
     discarded_paths: list[dict[str, str]] = []
     for source_path in source_paths:
         resolved_source = Path(source_path).resolve()
-        try:
-            payload = load_json_payload(resolved_source)
-        except Exception as exc:
-            discarded_paths.append({"source_path": str(resolved_source), "reason": f"load_failed:{exc}"})
-            continue
-        valid, reason = validate_openai_oauth_seed_payload(payload, enforce_max_age=False)
+        valid, reason, payload = load_openai_oauth_seed_validation(
+            resolved_source,
+            enforce_max_age=False,
+            allow_protocol_small_seed=allow_protocol_small_seed,
+        )
         if not valid:
             discarded_paths.append({"source_path": str(resolved_source), "reason": reason})
             if delete_protocol_bridge_source:
@@ -629,22 +630,55 @@ def route_openai_oauth_artifact(
     }
 
 
+def openai_oauth_failure_needs_phone_follow_up(result_payload_value: dict[str, Any]) -> bool:
+    error_code = str(result_payload_value.get("errorCode") or "").strip()
+    step_error = (
+        (result_payload_value.get("stepErrors") or {}).get(str(result_payload_value.get("errorStep") or ""))
+        or {}
+    )
+    if not error_code:
+        error_code = str(step_error.get("code") or "").strip()
+    normalized_error_code = str(error_code or "").strip().lower()
+    continue_error_text = " ".join(
+        str(value or "").strip().lower()
+        for value in (
+            result_payload_value.get("error"),
+            step_error.get("message"),
+            step_error.get("detail"),
+        )
+        if str(value or "").strip()
+    )
+    return normalized_error_code in {
+        ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS,
+        ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS,
+    } or any(
+        marker in continue_error_text
+        for marker in (
+            "phone_wall",
+            "page_type=add_phone",
+            "add_phone",
+            "phone_verification_attempted_small_success",
+            "phone_verification_submitted_small_success",
+        )
+    )
+
+
 def openai_oauth_failure_target_pool_dir(*, output_root: Path, result_payload_value: dict[str, Any]) -> Path:
     instance_role = str(result_payload_value.get("instanceRole") or "").strip().lower()
     error_code = str(result_payload_value.get("errorCode") or "").strip()
+    step_error = (
+        (result_payload_value.get("stepErrors") or {}).get(str(result_payload_value.get("errorStep") or ""))
+        or {}
+    )
     if not error_code:
-        error_code = str(
-            (
-                (result_payload_value.get("stepErrors") or {}).get(str(result_payload_value.get("errorStep") or ""))
-                or {}
-            ).get("code")
-            or ""
-        ).strip()
+        error_code = str(step_error.get("code") or "").strip()
     if free_manual_oauth_preserve_enabled() and error_code in free_manual_oauth_preserve_codes():
         return resolve_free_manual_oauth_pool_dir(output_root=output_root)
     if instance_role == "continue":
+        if not openai_oauth_failure_needs_phone_follow_up(result_payload_value):
+            return resolve_openai_oauth_continue_pool_dir(output_root=output_root)
         return resolve_openai_oauth_need_phone_pool_dir(output_root=output_root)
-    return resolve_openai_oauth_continue_pool_dir(output_root=output_root)
+    return resolve_openai_oauth_pool_dir(output_root=output_root)
 
 
 def drain_openai_oauth_wait_pool(
@@ -756,15 +790,10 @@ def backfill_openai_oauth_continue_pool(
             continue
         if min_age_seconds > 0 and age_seconds < min_age_seconds:
             continue
-        try:
-            payload = load_json_payload(source_path)
-        except Exception as exc:
-            source_path.unlink(missing_ok=True)
-            discarded.append({"source_path": str(source_path), "reason": f"load_failed:{exc}"})
-            continue
-        valid, reason = validate_openai_oauth_seed_payload(
-            payload,
+        valid, reason, payload = load_openai_oauth_seed_validation(
+            source_path,
             enforce_max_age=False,
+            allow_protocol_small_seed=True,
         )
         if not valid:
             source_path.unlink(missing_ok=True)

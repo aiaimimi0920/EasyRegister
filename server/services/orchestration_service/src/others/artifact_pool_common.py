@@ -7,6 +7,7 @@ from others.artifact_pool_claim_recovery import recover_stale_team_claims
 from others.artifact_pool_claim_recovery import restore_to_pool
 from others.artifact_pool_claim_recovery import safe_count
 from others.artifact_pool_claim_recovery import sort_paths_newest_first
+from others.artifact_pool_claim_recovery import strip_generated_claim_prefixes
 from others.artifact_pool_claim_recovery import team_stale_claim_seconds
 from others.artifact_pool_paths import artifact_routing_config_for_step_input
 from others.artifact_pool_paths import derive_output_root_from_run_dir
@@ -71,6 +72,7 @@ __all__ = [
     "restore_to_pool",
     "safe_count",
     "sort_paths_newest_first",
+    "strip_generated_claim_prefixes",
     "team_auth_runtime_config_for_step_input",
     "team_expand_progress_from_payload",
     "team_expand_progress_is_completed",

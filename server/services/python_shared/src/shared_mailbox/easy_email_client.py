@@ -1001,8 +1001,6 @@ def wait_openai_code(
         session_id=effective_session_id,
         min_mail_id=requested_min_mail_id,
     )
-    allow_auto_floor_equal = requested_min_mail_id <= 0 and code_floor > 0
-
     try:
         base_url = _mail_service_base_url()
     except Exception:
@@ -1038,7 +1036,6 @@ def wait_openai_code(
                 if code and (
                     code_floor <= 0
                     or code_marker > code_floor
-                    or (allow_auto_floor_equal and code_marker == code_floor)
                 ):
                     print(
                         "[mailbox] wait_openai_code received "
@@ -1055,14 +1052,11 @@ def wait_openai_code(
                     "session_id": effective_session_id,
                     "min_mail_id": code_floor,
                 }
-                if allow_auto_floor_equal:
-                    snapshot_kwargs["allow_min_mail_id_equal"] = True
                 snapshot_code, snapshot_marker = _snapshot_session_openai_code(**snapshot_kwargs)
                 if snapshot_code and (
                     snapshot_marker <= 0
                     or code_floor <= 0
                     or snapshot_marker > code_floor
-                    or (allow_auto_floor_equal and snapshot_marker == code_floor)
                 ):
                     print(
                         "[mailbox] wait_openai_code snapshot_fallback "

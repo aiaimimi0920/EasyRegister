@@ -327,7 +327,7 @@ def _cleanup_stale_production_claims(*, output_root: Path, now: datetime | None 
         try:
             candidate.unlink()
             removed += 1
-        except FileNotFoundError:
+        except OSError:
             continue
     return removed
 

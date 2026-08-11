@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,7 @@ from others.artifact_pool_common import (
     restore_to_pool,
     safe_count,
     sort_paths_newest_first,
+    strip_generated_claim_prefixes,
     team_expand_progress_from_payload,
     team_expand_progress_is_in_progress,
     team_expand_target_count,
@@ -48,6 +50,7 @@ from others.common import (
     free_manual_oauth_preserve_codes,
     free_manual_oauth_preserve_enabled,
     json_log,
+    write_json_atomic,
 )
 from others.openai_oauth_conversion_guard import (
     acquire_conversion_lock,
@@ -56,8 +59,48 @@ from others.openai_oauth_conversion_guard import (
     prune_stale_conversion_lock,
     release_conversion_lock,
 )
-from others.runner_openai_oauth import route_openai_oauth_artifact
+from others.runner_openai_oauth import openai_oauth_failure_needs_phone_follow_up, route_openai_oauth_artifact
 from others.storage import load_json_payload
+
+
+ROUTING_HISTORY_KEY = "routingHistory"
+ROUTING_HISTORY_MAX_ENTRIES = 20
+
+
+def stamp_routing_history(
+    *,
+    artifact_path: Path,
+    pool: str,
+    error_code: str,
+    worker_label: str,
+    task_index: int,
+) -> bool:
+    """Append one routing decision to the artifact payload.
+
+    Best-effort: a malformed or unreadable artifact must never block routing,
+    so every failure is swallowed and reported via the return value.
+    """
+    try:
+        payload = load_json_payload(artifact_path)
+    except Exception:
+        return False
+    existing = payload.get(ROUTING_HISTORY_KEY)
+    history = [entry for entry in existing if isinstance(entry, dict)] if isinstance(existing, list) else []
+    history.append(
+        {
+            "at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "pool": str(pool or "").strip(),
+            "errorCode": str(error_code or "").strip(),
+            "workerLabel": str(worker_label or "").strip(),
+            "taskIndex": int(task_index or 0),
+        }
+    )
+    payload[ROUTING_HISTORY_KEY] = history[-ROUTING_HISTORY_MAX_ENTRIES:]
+    try:
+        write_json_atomic(artifact_path, payload, include_pid=True, cleanup_temp=True)
+    except Exception:
+        return False
+    return True
 
 
 def sleep_seconds(*, step_input: dict[str, Any]) -> dict[str, Any]:
@@ -146,7 +189,8 @@ def claim_configured_input_file(*, step_input: dict[str, Any]) -> dict[str, Any]
         if not email:
             missing_email_candidates.append(str(candidate))
             continue
-        claim_name = f"{uuid.uuid4().hex[:8]}-{candidate.name}"
+        original_name = strip_generated_claim_prefixes(candidate.name)
+        claim_name = f"{uuid.uuid4().hex[:8]}-{original_name}"
         try:
             claimed_path = Path(
                 move_artifact_to_dir(
@@ -164,7 +208,7 @@ def claim_configured_input_file(*, step_input: dict[str, Any]) -> dict[str, Any]
             "claimed_path": str(claimed_path),
             "input_source_dir": str(source_dir),
             "input_claims_dir": str(claims_dir),
-            "original_name": candidate.name,
+            "original_name": original_name,
             "email": email,
             "mailbox_ref": str(payload.get("mailbox_ref") or payload.get("mailboxRef") or "").strip(),
             "session_id": str(payload.get("session_id") or payload.get("sessionId") or "").strip(),
@@ -201,7 +245,10 @@ def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]
     skipped_locked: list[dict[str, Any]] = []
 
     for candidate in sort_paths_newest_first([path for path in pool_dir.glob("*.json") if path.is_file()]):
-        valid, _, payload = load_openai_oauth_seed_validation(candidate)
+        valid, _, payload = load_openai_oauth_seed_validation(
+            candidate,
+            allow_protocol_small_seed=True,
+        )
         if not valid:
             candidate.unlink(missing_ok=True)
             continue
@@ -231,7 +278,8 @@ def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]
                 }
             )
             continue
-        claim_name = f"{uuid.uuid4().hex[:8]}-{candidate.name}"
+        original_name = strip_generated_claim_prefixes(candidate.name)
+        claim_name = f"{uuid.uuid4().hex[:8]}-{original_name}"
         try:
             claimed_path = Path(
                 move_artifact_to_dir(
@@ -255,7 +303,7 @@ def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]
             restore_to_pool(
                 claimed_path=claimed_path,
                 pool_dir=pool_dir,
-                preferred_name=candidate.name,
+                preferred_name=original_name,
             )
             skipped_locked.append(
                 {
@@ -271,7 +319,7 @@ def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]
             "claimed_path": str(claimed_path),
             "pool_dir": str(pool_dir),
             "claims_dir": str(claims_dir),
-            "original_name": candidate.name,
+            "original_name": original_name,
             "email": email,
             "mailboxRef": str(payload.get("mailboxRef") or payload.get("mailbox_ref") or "").strip(),
             "mailboxSessionId": str(
@@ -358,10 +406,19 @@ def finalize_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, A
     ):
         pool_dir = resolve_free_manual_oauth_pool(step_input)
         ensure_directory(pool_dir)
+        stamp_routing_history(
+            artifact_path=claimed_path,
+            pool="others/free-manual-oauth-pool",
+            error_code=task_error_code,
+            worker_label=str(step_input.get("worker_label") or "").strip(),
+            task_index=int(step_input.get("task_index") or 0),
+        )
         restored_path = restore_to_pool(
             claimed_path=claimed_path,
             pool_dir=pool_dir,
-            preferred_name=str(artifact.get("original_name") or claimed_path.name).strip() or claimed_path.name,
+            preferred_name=strip_generated_claim_prefixes(
+                str(artifact.get("original_name") or claimed_path.name).strip() or claimed_path.name
+            ),
         )
         release_conversion_lock(
             shared_root=shared_root,
@@ -379,8 +436,16 @@ def finalize_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, A
             "task_error_code": task_error_code,
             "email": str(artifact.get("email") or "").strip(),
         }
+    continue_needs_phone_follow_up = False
     if continue_source:
-        pool_dir = resolve_openai_oauth_need_phone_pool(step_input)
+        continue_needs_phone_follow_up = openai_oauth_failure_needs_phone_follow_up(
+            {"errorCode": task_error_code}
+        )
+        pool_dir = (
+            resolve_openai_oauth_need_phone_pool(step_input)
+            if continue_needs_phone_follow_up
+            else original_pool_dir
+        )
     elif task_error_code == ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING:
         pool_dir = resolve_openai_oauth_wait_pool(step_input)
     else:
@@ -389,13 +454,22 @@ def finalize_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, A
 
     if not task_error_code:
         success_pool_dir = resolve_openai_oauth_success_pool(step_input)
+        stamp_routing_history(
+            artifact_path=claimed_path,
+            pool="openai/converted",
+            error_code="",
+            worker_label=str(step_input.get("worker_label") or "").strip(),
+            task_index=int(step_input.get("task_index") or 0),
+        )
         route_result = route_openai_oauth_artifact(
             source_path=claimed_path,
             destination_dir=success_pool_dir,
             output_root=shared_root,
             target_folder="openai/converted",
             upload_percent=routing_config.openai_upload_percent,
-            preferred_name=str(artifact.get("original_name") or claimed_path.name).strip() or claimed_path.name,
+            preferred_name=strip_generated_claim_prefixes(
+                str(artifact.get("original_name") or claimed_path.name).strip() or claimed_path.name
+            ),
             move_local=True,
         )
         if not bool(route_result.get("ok")):
@@ -438,13 +512,23 @@ def finalize_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, A
             "task_error_code": task_error_code,
         }
 
+    failure_target_folder = "openai/failed-twice" if continue_needs_phone_follow_up else "openai/failed-once"
+    stamp_routing_history(
+        artifact_path=claimed_path,
+        pool=failure_target_folder,
+        error_code=task_error_code,
+        worker_label=str(step_input.get("worker_label") or "").strip(),
+        task_index=int(step_input.get("task_index") or 0),
+    )
     route_result = route_openai_oauth_artifact(
         source_path=claimed_path,
         destination_dir=pool_dir,
         output_root=shared_root,
-        target_folder="openai/failed-twice" if continue_source else "openai/failed-once",
-        upload_percent=routing_config.openai_upload_percent if continue_source else 0.0,
-        preferred_name=str(artifact.get("original_name") or claimed_path.name).strip() or claimed_path.name,
+        target_folder=failure_target_folder,
+        upload_percent=routing_config.openai_upload_percent if continue_needs_phone_follow_up else 0.0,
+        preferred_name=strip_generated_claim_prefixes(
+            str(artifact.get("original_name") or claimed_path.name).strip() or claimed_path.name
+        ),
         move_local=True,
     )
     if not bool(route_result.get("ok")):
@@ -708,12 +792,13 @@ def claim_team_mother_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]:
             busy.append(busy_state)
             continue
         claim_name = f"{uuid.uuid4().hex[:8]}-{candidate.name}"
+        original_name = strip_generated_claim_prefixes(candidate.name)
         try:
             claimed_path = Path(
                 move_artifact_to_dir(
                     source_path=candidate,
                     destination_dir=claims_dir,
-                    preferred_name=claim_name,
+                    preferred_name=f"{uuid.uuid4().hex[:8]}-{original_name}",
                 )
             )
         except FileNotFoundError:
@@ -733,7 +818,7 @@ def claim_team_mother_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]:
             "pool_dir": str(pool_dir),
             "claims_dir": str(claims_dir),
             "cooldowns_dir": str(cooldown_dir),
-            "original_name": candidate.name,
+            "original_name": original_name,
             "recovered_claims": recovered,
             "cooling": cooling,
             "busy": busy,
@@ -837,7 +922,8 @@ def claim_team_member_candidates(*, step_input: dict[str, Any]) -> dict[str, Any
                 }
             )
             continue
-        claim_name = f"{uuid.uuid4().hex[:8]}-{candidate.name}"
+        original_name = strip_generated_claim_prefixes(candidate.name)
+        claim_name = f"{uuid.uuid4().hex[:8]}-{original_name}"
         try:
             claimed_path = Path(
                 move_artifact_to_dir(
@@ -861,7 +947,7 @@ def claim_team_member_candidates(*, step_input: dict[str, Any]) -> dict[str, Any
             restore_to_pool(
                 claimed_path=claimed_path,
                 pool_dir=team_pre_pool_dir,
-                preferred_name=candidate.name,
+                preferred_name=original_name,
             )
             skipped_locked.append(
                 {
@@ -877,7 +963,7 @@ def claim_team_member_candidates(*, step_input: dict[str, Any]) -> dict[str, Any
                 "claimed_path": str(claimed_path),
                 "pool_dir": str(team_pre_pool_dir),
                 "claims_dir": str(claims_dir),
-                "original_name": candidate.name,
+                "original_name": original_name,
                 "email": email,
                 "password": str(payload.get("password") or "").strip(),
                 "conversion_claim": conversion_claim or {},

@@ -14,6 +14,7 @@ from others.runner_artifacts import (
     backfill_openai_oauth_continue_pool as _backfill_openai_oauth_continue_pool,
     drain_oauth_pool_backlog as _drain_oauth_pool_backlog,
     drain_openai_oauth_wait_pool as _drain_openai_oauth_wait_pool,
+    resolve_openai_oauth_pool_dir as _resolve_openai_oauth_pool_dir,
     resolve_openai_oauth_continue_pool_dir as _resolve_openai_oauth_continue_pool_dir,
     resolve_openai_oauth_wait_pool_dir as _resolve_openai_oauth_wait_pool_dir,
     openai_oauth_continue_prefill_count as _openai_oauth_continue_prefill_count,
@@ -75,7 +76,7 @@ def process_worker_maintenance(
     continue_prefill_result: dict[str, Any] | None = None
     if "continue" in active_roles:
         continue_prefill_result = _backfill_openai_oauth_continue_pool(
-            source_pool_dir=_resolve_openai_oauth_continue_pool_dir(output_root=output_root),
+            source_pool_dir=_resolve_openai_oauth_pool_dir(output_root=output_root),
             continue_pool_dir=_resolve_openai_oauth_continue_pool_dir(output_root=output_root),
             max_move_count=_openai_oauth_continue_prefill_count(),
             target_count=_openai_oauth_continue_prefill_target_count(),

@@ -23,6 +23,8 @@ from others.runner_worker_loop import worker_loop
 
 
 DEFAULT_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS = 420.0
+DEFAULT_FLOW_SLOT_UNINTERRUPTIBLE_CONFIRM_SECONDS = 30.0
+_UNINTERRUPTIBLE_SINCE_ATTRIBUTE = "_easyregister_uninterruptible_since_utc"
 
 
 def flow_slot_uninterruptible_stale_seconds() -> float:
@@ -41,6 +43,13 @@ def _env_float(*, name: str, default: float) -> float:
         return max(0.0, float(raw_value))
     except ValueError:
         return float(default)
+
+
+def flow_slot_uninterruptible_confirm_seconds() -> float:
+    return _env_float(
+        name="REGISTER_FLOW_SLOT_UNINTERRUPTIBLE_CONFIRM_SECONDS",
+        default=DEFAULT_FLOW_SLOT_UNINTERRUPTIBLE_CONFIRM_SECONDS,
+    )
 
 
 def _worker_uninterruptible_stale_threshold_seconds(
@@ -185,6 +194,13 @@ def _read_linux_process_state(*, pid: int, proc_root: Path = Path("/proc")) -> s
     return ""
 
 
+def _clear_uninterruptible_observation(process: Any) -> None:
+    try:
+        delattr(process, _UNINTERRUPTIBLE_SINCE_ATTRIBUTE)
+    except (AttributeError, TypeError):
+        pass
+
+
 def _parse_utc_timestamp(value: Any) -> datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -245,6 +261,7 @@ def recover_stale_uninterruptible_worker_slots(
         except (TypeError, ValueError):
             pid = 0
         if _read_linux_process_state(pid=pid, proc_root=proc_root) != "D":
+            _clear_uninterruptible_observation(process)
             continue
         worker_label = _worker_label_from_id(worker_id)
         try:
@@ -270,6 +287,22 @@ def recover_stale_uninterruptible_worker_slots(
         )
         if age_seconds < effective_threshold_seconds:
             continue
+        first_uninterruptible_at = getattr(process, _UNINTERRUPTIBLE_SINCE_ATTRIBUTE, None)
+        if not isinstance(first_uninterruptible_at, datetime):
+            try:
+                setattr(process, _UNINTERRUPTIBLE_SINCE_ATTRIBUTE, now_utc)
+            except (AttributeError, TypeError):
+                continue
+            uninterruptible_seconds = 0.0
+        else:
+            if first_uninterruptible_at.tzinfo is None:
+                first_uninterruptible_at = first_uninterruptible_at.replace(tzinfo=timezone.utc)
+            else:
+                first_uninterruptible_at = first_uninterruptible_at.astimezone(timezone.utc)
+            uninterruptible_seconds = max(0.0, (now_utc - first_uninterruptible_at).total_seconds())
+        confirm_seconds = flow_slot_uninterruptible_confirm_seconds()
+        if uninterruptible_seconds < confirm_seconds:
+            continue
         released_slot_key = release_flow_slot_for_owner(
             owner_id=worker_label,
             active_flow_counts=active_flow_counts,
@@ -294,12 +327,15 @@ def recover_stale_uninterruptible_worker_slots(
             "staleSeconds": age_seconds,
             "thresholdSeconds": effective_threshold_seconds,
             "defaultThresholdSeconds": threshold_seconds,
+            "uninterruptibleSeconds": uninterruptible_seconds,
+            "confirmSeconds": confirm_seconds,
             "terminateSignalSent": terminate_signal_sent,
             "currentTaskRole": str(worker_state.get("currentTaskRole") or ""),
             "currentFlowName": str(worker_state.get("currentFlowName") or ""),
             "currentOutputDir": str(worker_state.get("currentOutputDir") or ""),
             "updatedAt": str(worker_state.get("updatedAt") or ""),
         }
+        _clear_uninterruptible_observation(process)
         recovered.append(recovery)
         _json_log({"event": "register_worker_flow_slot_recovered_from_uninterruptible_state", **recovery})
     return recovered

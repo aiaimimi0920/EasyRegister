@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -10,10 +12,24 @@ from others.common import validate_openai_oauth_seed_payload
 from others.storage import load_json_payload
 
 
+def strip_generated_claim_prefixes(name: str) -> str:
+    current_name = str(name or "").strip()
+    while True:
+        prefix, separator, remainder = current_name.partition("-")
+        if not separator or len(prefix) != 8:
+            return current_name
+        try:
+            int(prefix, 16)
+        except ValueError:
+            return current_name
+        current_name = remainder
+
+
 def load_openai_oauth_seed_validation(
     path: Path,
     *,
     enforce_max_age: bool = False,
+    allow_protocol_small_seed: bool = False,
 ) -> tuple[bool, str, dict[str, Any]]:
     try:
         payload = load_json_payload(path)
@@ -23,7 +39,69 @@ def load_openai_oauth_seed_validation(
         payload,
         enforce_max_age=enforce_max_age,
     )
+    if (not ok) and allow_protocol_small_seed:
+        ok, reason = _validate_protocol_small_success_seed_payload(
+            payload,
+            enforce_max_age=enforce_max_age,
+        )
     return ok, reason, payload
+
+
+def _validate_protocol_small_success_seed_payload(
+    payload: dict[str, Any],
+    *,
+    enforce_max_age: bool = False,
+) -> tuple[bool, str]:
+    if not isinstance(payload, dict):
+        return False, "payload_not_object"
+    if str(payload.get("outcome") or "").strip().lower() != "small_success":
+        return False, "protocol_small_success_missing_outcome"
+    if str(payload.get("source") or "").strip().lower() != "protocol_small_success":
+        return False, "protocol_small_success_missing_source"
+    if not str(payload.get("email") or "").strip():
+        return False, "missing_email"
+    if not str(payload.get("mailboxRef") or "").strip():
+        return False, "missing_mailbox_ref"
+    if not str(payload.get("mailboxSessionId") or "").strip():
+        return False, "missing_mailbox_session_id"
+    created_at_text = str(payload.get("createdAt") or "").strip()
+    if not created_at_text:
+        return False, "missing_created_at"
+    try:
+        parsed_created_at = datetime.fromisoformat(created_at_text.replace("Z", "+00:00"))
+        if parsed_created_at.tzinfo is None:
+            parsed_created_at = parsed_created_at.replace(tzinfo=timezone.utc)
+        parsed_created_at = parsed_created_at.astimezone(timezone.utc)
+    except Exception:
+        return False, "invalid_created_at"
+    if enforce_max_age:
+        max_age_raw = str(
+            os.environ.get("REGISTER_OPENAI_OAUTH_SEED_MAX_AGE_SECONDS")
+            or os.environ.get("REGISTER_SMALL_SUCCESS_SEED_MAX_AGE_SECONDS")
+            or "900"
+        ).strip()
+        try:
+            max_age_seconds = max(0, int(float(max_age_raw)))
+        except Exception:
+            max_age_seconds = 900
+        if max_age_seconds > 0:
+            age_seconds = max(0.0, (datetime.now(timezone.utc) - parsed_created_at).total_seconds())
+            if age_seconds > max_age_seconds:
+                return False, f"openai_oauth_seed_too_old:{int(age_seconds)}"
+    platform_auth = payload.get("platformAuth")
+    if not isinstance(platform_auth, dict):
+        return False, "missing_platform_auth"
+    required_platform_auth_fields = (
+        "clientId",
+        "redirectUri",
+        "codeVerifier",
+        "state",
+        "nonce",
+    )
+    for field_name in required_platform_auth_fields:
+        if not str(platform_auth.get(field_name) or "").strip():
+            return False, f"missing_platform_auth_{field_name.lower()}"
+    return True, ""
 
 
 def restore_to_pool(*, claimed_path: Path, pool_dir: Path, preferred_name: str) -> str:
@@ -35,11 +113,7 @@ def restore_to_pool(*, claimed_path: Path, pool_dir: Path, preferred_name: str) 
 
 
 def derive_original_name_from_claim(path: Path) -> str:
-    name = path.name
-    prefix, separator, remainder = name.partition("-")
-    if separator and len(prefix) == 8:
-        return remainder
-    return name
+    return strip_generated_claim_prefixes(path.name)
 
 
 def recover_stale_team_claims(

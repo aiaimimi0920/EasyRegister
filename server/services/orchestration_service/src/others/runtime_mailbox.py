@@ -414,6 +414,23 @@ def _mailbox_provider_stats(provider: str, state_payload: dict[str, Any], *, bus
     return stats if isinstance(stats, dict) else {}
 
 
+def _mailbox_provider_should_stay_excluded_under_relaxed_fallback(
+    provider: str,
+    state_payload: dict[str, Any],
+    *,
+    business_key: str | None = None,
+) -> bool:
+    stats = _mailbox_provider_stats(provider, state_payload, business_key=business_key)
+    if not stats:
+        return False
+    try:
+        attempts = max(0, int(stats.get("attempts") or 0))
+        successes = max(0, int(stats.get("successes") or 0))
+    except Exception:
+        return False
+    return attempts > 0 and successes <= 0
+
+
 def _mailbox_domain_is_business_blacklisted(domain: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> bool:
     if domain in set(_resolve_mailbox_explicit_blacklist_domains(business_key=business_key)):
         return True
@@ -561,6 +578,7 @@ def _resolve_mailbox_auto_excluded_provider_type_keys(
     business_key: str | None = None,
     avoid_providers: Any = None,
     exclude_moemail: bool = False,
+    include_dynamic: bool = True,
 ) -> tuple[str, ...]:
     state_payload = _load_mailbox_domain_state()
     excluded: list[str] = []
@@ -574,22 +592,49 @@ def _resolve_mailbox_auto_excluded_provider_type_keys(
         _append(provider)
     for provider in _resolve_mailbox_explicit_blacklist_providers(business_key=business_key):
         _append(provider)
-    for provider in _state_mailbox_provider_keys(state_payload, business_key=business_key):
-        if _mailbox_provider_is_business_blacklisted(provider, state_payload, business_key=business_key):
-            _append(provider)
+    if include_dynamic:
+        for provider in _state_mailbox_provider_keys(state_payload, business_key=business_key):
+            if _mailbox_provider_is_business_blacklisted(provider, state_payload, business_key=business_key):
+                _append(provider)
     if exclude_moemail:
         _append("moemail")
     return tuple(excluded)
 
 
-def _select_business_mailbox_domain(*, business_key: str | None = None) -> tuple[str, str]:
+def _mailbox_domain_provider(
+    domain: str,
+    state_payload: dict[str, Any],
+    *,
+    business_key: str | None = None,
+) -> str:
+    stats = _mailbox_domain_stats(
+        str(domain or "").strip().lower(),
+        state_payload,
+        business_key=business_key,
+    )
+    provider = _normalize_mailbox_provider(str(stats.get("provider") or ""))
+    return provider or "moemail"
+
+
+def _select_business_mailbox_domain(
+    *,
+    business_key: str | None = None,
+    avoid_domains: Any = None,
+    avoid_providers: Any = None,
+) -> tuple[str, str]:
     domain_pool = _resolve_business_mailbox_domain_pool(business_key=business_key)
     if not domain_pool:
         return "", "not_configured"
     explicit_blacklist = set(_resolve_mailbox_explicit_blacklist_domains(business_key=business_key))
-    candidates = tuple(domain for domain in domain_pool if domain and domain not in explicit_blacklist)
+    attempt_avoided_domains = set(_normalize_mailbox_avoid_values(avoid_domains, kind="domain"))
+    attempt_avoided_providers = set(_normalize_mailbox_avoid_values(avoid_providers, kind="provider"))
+    candidates = tuple(
+        domain
+        for domain in domain_pool
+        if domain and domain not in explicit_blacklist and domain not in attempt_avoided_domains
+    )
     if not candidates:
-        return "", "all_explicitly_blacklisted"
+        return "", "all_explicitly_or_attempt_blacklisted"
     state_payload = _load_mailbox_domain_state()
     eligible = tuple(
         domain
@@ -599,10 +644,101 @@ def _select_business_mailbox_domain(*, business_key: str | None = None) -> tuple
             state_payload,
             business_key=business_key,
         )
+        and _mailbox_domain_provider(
+            domain,
+            state_payload,
+            business_key=business_key,
+        )
+        not in attempt_avoided_providers
     )
     if eligible:
         return random.choice(eligible), "eligible"
+    if (
+        _dynamic_blacklist_exhausted_fallback_enabled()
+        and attempt_avoided_domains
+        and attempt_avoided_providers
+    ):
+        relaxed_provider_avoidance = tuple(
+            domain
+            for domain in candidates
+            if not _mailbox_domain_is_business_blacklisted(
+                domain,
+                state_payload,
+                business_key=business_key,
+            )
+        )
+        if relaxed_provider_avoidance:
+            return random.choice(relaxed_provider_avoidance), "fallback_attempt_provider_exhausted"
     return "", "dynamic_blacklist_exhausted"
+
+
+def _select_business_mailbox_domain_for_provider(
+    provider: str,
+    *,
+    business_key: str | None = None,
+    avoid_domains: Any = None,
+    avoid_providers: Any = None,
+) -> tuple[str, str]:
+    normalized_provider = _normalize_mailbox_provider(provider)
+    if not normalized_provider:
+        return "", "provider_not_configured"
+    attempt_avoided_providers = set(_normalize_mailbox_avoid_values(avoid_providers, kind="provider"))
+    if normalized_provider in attempt_avoided_providers:
+        return "", "provider_attempt_avoided"
+    domain_pool = _resolve_business_mailbox_domain_pool(business_key=business_key)
+    if not domain_pool:
+        return "", "not_configured"
+    explicit_blacklist = set(_resolve_mailbox_explicit_blacklist_domains(business_key=business_key))
+    attempt_avoided_domains = set(_normalize_mailbox_avoid_values(avoid_domains, kind="domain"))
+    candidates = tuple(
+        domain
+        for domain in domain_pool
+        if domain and domain not in explicit_blacklist and domain not in attempt_avoided_domains
+    )
+    if not candidates:
+        return "", "all_explicitly_or_attempt_blacklisted"
+    state_payload = _load_mailbox_domain_state()
+    eligible = tuple(
+        domain
+        for domain in candidates
+        if (
+            not _mailbox_domain_is_business_blacklisted(
+                domain,
+                state_payload,
+                business_key=business_key,
+            )
+            and _normalize_mailbox_provider(
+                str(
+                    _mailbox_domain_stats(
+                        domain,
+                        state_payload,
+                        business_key=business_key,
+                    ).get("provider")
+                    or ""
+                )
+            )
+            == normalized_provider
+        )
+    )
+    if eligible:
+        return random.choice(eligible), "planned_provider_match"
+    return "", "provider_mismatch"
+
+
+def _selected_business_mailbox_provider(
+    domain: str,
+    *,
+    business_key: str | None = None,
+) -> str:
+    normalized_domain = str(domain or "").strip().lower()
+    if not normalized_domain:
+        return "moemail"
+    state_payload = _load_mailbox_domain_state()
+    return _mailbox_domain_provider(
+        normalized_domain,
+        state_payload,
+        business_key=business_key,
+    )
 
 
 def _resolve_mailbox_business_retry_attempts() -> int:
@@ -810,6 +946,7 @@ def _create_mailbox_with_business_policy(
     avoid_domains: Any = None,
     avoid_providers: Any = None,
     avoid_reason: str = "",
+    accept_dynamic_violation_fallback_immediately: bool = False,
 ) -> Mailbox:
     max_attempts = _resolve_mailbox_business_retry_attempts()
     last_violation: dict[str, Any] | None = None
@@ -826,6 +963,25 @@ def _create_mailbox_with_business_policy(
         if violation is None:
             return mailbox
         last_violation = violation
+        if (
+            accept_dynamic_violation_fallback_immediately
+            and _mailbox_policy_violation_is_dynamic(violation)
+            and _dynamic_blacklist_exhausted_fallback_enabled()
+        ):
+            json_log(
+                {
+                    "event": "register_mailbox_business_dynamic_blacklist_exhausted_fallback",
+                    "attempt": attempt_index,
+                    "maxAttempts": max_attempts,
+                    "reason": str(violation.get("reason") or ""),
+                    "businessKey": str(violation.get("business_key") or ""),
+                    "provider": str(violation.get("provider") or ""),
+                    "domain": str(violation.get("domain") or ""),
+                    "email": str(violation.get("email") or ""),
+                    "mode": "immediate_accept",
+                }
+            )
+            return mailbox
         if (
             attempt_index >= max_attempts
             and _mailbox_policy_violation_is_dynamic(violation)
@@ -1106,13 +1262,54 @@ def resolve_mailbox(
         if planned_provider == "moemail" or planned_provider_blocked:
             selected_domain, domain_selection_reason = _select_business_mailbox_domain(
                 business_key=resolved_business_key,
+                avoid_domains=avoid_domains,
+                avoid_providers=avoid_providers,
             )
             if planned_provider_blocked:
                 domain_selection_reason = f"planned_provider_blacklisted:{domain_selection_reason}"
         else:
             selected_domain = ""
             domain_selection_reason = "planned_provider_not_moemail" if planned_provider else "no_planned_provider"
+            if planned_provider:
+                matched_domain, matched_reason = _select_business_mailbox_domain_for_provider(
+                    planned_provider,
+                    business_key=resolved_business_key,
+                    avoid_domains=avoid_domains,
+                    avoid_providers=avoid_providers,
+                )
+                if matched_domain:
+                    selected_domain = matched_domain
+                    domain_selection_reason = matched_reason
+                elif matched_reason in {
+                    "provider_attempt_avoided",
+                    "all_explicitly_or_attempt_blacklisted",
+                }:
+                    domain_selection_reason = matched_reason
+            if (
+                not planned_provider
+                and _dynamic_blacklist_exhausted_fallback_enabled()
+                and _resolve_business_mailbox_domain_pool(business_key=resolved_business_key)
+            ):
+                fallback_domain, fallback_reason = _select_business_mailbox_domain(
+                    business_key=resolved_business_key,
+                    avoid_domains=avoid_domains,
+                    avoid_providers=avoid_providers,
+                )
+                if fallback_domain:
+                    selected_domain = fallback_domain
+                    domain_selection_reason = f"fallback_no_planned_provider:{fallback_reason}"
         if selected_domain:
+            selected_provider = _selected_business_mailbox_provider(
+                selected_domain,
+                business_key=resolved_business_key,
+            )
+            selected_policy_avoid_providers = avoid_providers
+            if domain_selection_reason == "fallback_attempt_provider_exhausted":
+                selected_policy_avoid_providers = tuple(
+                    provider
+                    for provider in _normalize_mailbox_avoid_values(avoid_providers, kind="provider")
+                    if provider != selected_provider
+                )
             selected_excluded_domains = _resolve_mailbox_excluded_domains(
                 business_key=resolved_business_key,
                 avoid_domains=avoid_domains,
@@ -1130,14 +1327,21 @@ def resolve_mailbox(
                 {
                     "event": "register_mailbox_business_domain_selected",
                     "businessKey": resolved_business_key,
-                    "provider": "moemail",
+                    "provider": selected_provider,
                     "domain": selected_domain,
                     "reason": domain_selection_reason,
                 }
             )
+            accept_selected_domain_dynamic_fallback_immediately = (
+                _dynamic_blacklist_exhausted_fallback_enabled()
+                and (
+                    domain_selection_reason.startswith("fallback_")
+                    or domain_selection_reason.startswith("planned_provider_blacklisted:")
+                )
+            )
             return _create_mailbox_with_business_policy(
                 create_fn=lambda: create_mailbox(
-                    provider="moemail",
+                    provider=selected_provider,
                     default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
                     prefer_raw_self_hosted_ref=True,
                     ttl_seconds=ttl_seconds,
@@ -1150,8 +1354,9 @@ def resolve_mailbox(
                 business_key=resolved_business_key,
                 avoid_emails=avoid_emails,
                 avoid_domains=avoid_domains,
-                avoid_providers=avoid_providers,
+                avoid_providers=selected_policy_avoid_providers,
                 avoid_reason=avoid_reason,
+                accept_dynamic_violation_fallback_immediately=accept_selected_domain_dynamic_fallback_immediately,
             )
         if _resolve_business_mailbox_domain_pool(business_key=resolved_business_key):
             json_log(
@@ -1162,10 +1367,13 @@ def resolve_mailbox(
                     "reason": domain_selection_reason,
                 }
             )
+        auto_exclusion_exclude_moemail = bool(
+            _resolve_business_mailbox_domain_pool(business_key=resolved_business_key)
+        )
         auto_excluded_provider_type_keys = _resolve_mailbox_auto_excluded_provider_type_keys(
             business_key=resolved_business_key,
             avoid_providers=avoid_providers,
-            exclude_moemail=bool(_resolve_business_mailbox_domain_pool(business_key=resolved_business_key)),
+            exclude_moemail=auto_exclusion_exclude_moemail,
         )
         auto_excluded_domains = _resolve_mailbox_excluded_domains(
             business_key=resolved_business_key,
@@ -1174,6 +1382,47 @@ def resolve_mailbox(
         auto_excluded_email_addresses = _resolve_mailbox_excluded_email_addresses(
             avoid_emails=avoid_emails,
         )
+        immediate_dynamic_fallback = False
+        if (
+            _dynamic_blacklist_exhausted_fallback_enabled()
+            and not selected_domain
+            and (not planned_provider or planned_provider_blocked)
+        ):
+            state_payload = _load_mailbox_domain_state()
+            relaxed_auto_excluded_provider_type_keys = _resolve_mailbox_auto_excluded_provider_type_keys(
+                business_key=resolved_business_key,
+                avoid_providers=avoid_providers,
+                exclude_moemail=auto_exclusion_exclude_moemail,
+                include_dynamic=False,
+            )
+            zero_success_provider_exclusions: list[str] = list(relaxed_auto_excluded_provider_type_keys)
+            for provider in _state_mailbox_provider_keys(state_payload, business_key=resolved_business_key):
+                if _mailbox_provider_should_stay_excluded_under_relaxed_fallback(
+                    provider,
+                    state_payload,
+                    business_key=resolved_business_key,
+                ):
+                    normalized_provider = _normalize_mailbox_provider(provider)
+                    if normalized_provider and normalized_provider not in zero_success_provider_exclusions:
+                        zero_success_provider_exclusions.append(normalized_provider)
+            relaxed_auto_excluded_provider_type_keys = tuple(zero_success_provider_exclusions)
+            if (
+                relaxed_auto_excluded_provider_type_keys != auto_excluded_provider_type_keys
+            ):
+                json_log(
+                    {
+                        "event": "register_mailbox_dynamic_blacklist_exhausted_relax_auto_exclusions",
+                        "businessKey": resolved_business_key,
+                        "plannedProvider": planned_provider,
+                        "plannedProviderBlocked": planned_provider_blocked,
+                        "providerExclusionsBefore": list(auto_excluded_provider_type_keys),
+                        "providerExclusionsAfter": list(relaxed_auto_excluded_provider_type_keys),
+                        "domainExclusionsBefore": list(auto_excluded_domains),
+                        "domainExclusionsAfter": list(auto_excluded_domains),
+                    }
+                )
+                auto_excluded_provider_type_keys = relaxed_auto_excluded_provider_type_keys
+                immediate_dynamic_fallback = True
         auto_avoid = _mailbox_avoid_payload(
             excluded_provider_type_keys=auto_excluded_provider_type_keys,
             excluded_domains=auto_excluded_domains,
@@ -1197,6 +1446,7 @@ def resolve_mailbox(
             avoid_domains=avoid_domains,
             avoid_providers=avoid_providers,
             avoid_reason=avoid_reason,
+            accept_dynamic_violation_fallback_immediately=immediate_dynamic_fallback,
         )
     except Exception as exc:
         raise ensure_protocol_runtime_error(

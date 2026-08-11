@@ -30,6 +30,7 @@ class ErrorProfilesTests(unittest.TestCase):
     def test_main_flow_retry_profiles_match_expected_steps(self) -> None:
         flow_path = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows" / "codex-openai-account-v1.semantic-flow.json"
         payload = json.loads(flow_path.read_text(encoding="utf-8"))
+        task_retry = payload["definition"]["metadata"]["taskRetry"]
         steps = payload["definition"]["steps"]
         by_id = {str(step.get("id") or ""): step for step in steps}
         self.assertEqual(
@@ -53,17 +54,19 @@ class ErrorProfilesTests(unittest.TestCase):
             by_id["obtain-codex-oauth"]["metadata"]["retry"]["retryProfile"],
         )
         self.assertEqual(
-            3,
+            1,
             by_id["obtain-codex-oauth"]["metadata"]["retry"]["maxAttempts"],
         )
         self.assertEqual(
             ["proxy_chain", "initialize_chatgpt_login_session"],
             by_id["obtain-codex-oauth"]["metadata"]["retry"]["refreshSavedStates"],
         )
+        self.assertNotIn("obtain-codex-oauth", task_retry["retryOnSteps"])
 
     def test_continue_flow_obtain_oauth_retries_after_login_refresh(self) -> None:
         flow_path = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows" / "codex-openai-oauth-continue-v1.semantic-flow.json"
         payload = json.loads(flow_path.read_text(encoding="utf-8"))
+        task_retry = payload["definition"]["metadata"]["taskRetry"]
         steps = payload["definition"]["steps"]
         by_id = {str(step.get("id") or ""): step for step in steps}
 
@@ -79,6 +82,7 @@ class ErrorProfilesTests(unittest.TestCase):
             ["proxy_chain", "initialize_chatgpt_login_session"],
             by_id["obtain-codex-oauth"]["metadata"]["retry"]["refreshSavedStates"],
         )
+        self.assertIn("obtain-codex-oauth", task_retry["retryOnSteps"])
 
     def test_build_error_details_classifies_team_auth_token_invalidated(self) -> None:
         details = build_error_details(
@@ -106,6 +110,29 @@ class ErrorProfilesTests(unittest.TestCase):
         )
         self.assertEqual(ErrorCodes.MAILBOX_UNAVAILABLE, details["code"])
         self.assertEqual("flow_error", details["category"])
+
+    def test_build_error_details_classifies_im215_mailbox_provider_unavailable(self) -> None:
+        for message in (
+            (
+                "mail service POST /mail/mailboxes/open failed: HTTP 500 "
+                '[code=No available 215.im credentials for poll.]: '
+                '{"error":"No available 215.im credentials for poll."}'
+            ),
+            (
+                "mail service POST /mail/mailboxes/open failed: HTTP 500 "
+                "[code=215.im createMailbox failed with status 403. This shared domain is currently "
+                "restricted and not accepting new public addresses]: "
+                '{"error":"215.im createMailbox failed with status 403. This shared domain is currently '
+                'restricted and not accepting new public addresses"}'
+            ),
+        ):
+            with self.subTest(message=message):
+                details = build_error_details(
+                    step_type="acquire_mailbox",
+                    message=message,
+                )
+                self.assertEqual(ErrorCodes.MAILBOX_UNAVAILABLE, details["code"])
+                self.assertEqual("flow_error", details["category"])
 
     def test_resolve_retry_codes_uses_profile(self) -> None:
         self.assertEqual(

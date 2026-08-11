@@ -278,6 +278,23 @@ def classify_error_code(
     ):
         return ErrorCodes.MAILBOX_UNAVAILABLE
 
+    if (
+        normalized_step_type == "acquire_mailbox"
+        and "/mail/mailboxes/open" in combined
+        and "mail service post" in combined
+        and (
+            ("no available" in combined and "credentials for poll" in combined)
+            or (
+                "createmailbox failed" in combined
+                and (
+                    "shared domain is currently restricted" in combined
+                    or "not accepting new public addresses" in combined
+                )
+            )
+        )
+    ):
+        return ErrorCodes.MAILBOX_UNAVAILABLE
+
     if normalized_code:
         return normalized_code
 
