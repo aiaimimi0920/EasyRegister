@@ -95,25 +95,26 @@ def _wait_easy_proxy_ready(base_url: str, *, api_key: str = "") -> None:
     filtered_probe_url = f"{base_url.rstrip('/')}/api/nodes?only_available=1&prefer_available=1"
     fallback_probe_url = f"{base_url.rstrip('/')}/api/nodes"
     while time.time() < deadline:
-        for probe_url, allow_local_filter in (
-            (filtered_probe_url, False),
-            (fallback_probe_url, True),
-        ):
+        try:
+            req = urllib.request.Request(filtered_probe_url, headers=headers, method="GET")
+            payload = _read_json_response(opener, req)
+            available_nodes = int(payload.get("available_nodes") or 0)
+            if available_nodes > 0:
+                return
+            last_error = RuntimeError(f"EasyProxy not ready: available_nodes={available_nodes}")
+        except Exception as exc:
+            last_error = exc
             try:
-                req = urllib.request.Request(probe_url, headers=headers, method="GET")
+                req = urllib.request.Request(fallback_probe_url, headers=headers, method="GET")
                 payload = _read_json_response(opener, req)
                 available_nodes = int(payload.get("available_nodes") or 0)
-                if allow_local_filter and available_nodes <= 0:
+                if available_nodes <= 0:
                     available_nodes = len(_normalize_node_list(payload, only_available=True, prefer_available=True))
                 if available_nodes > 0:
                     return
                 last_error = RuntimeError(f"EasyProxy not ready: available_nodes={available_nodes}")
-                if allow_local_filter:
-                    break
-            except Exception as exc:
-                last_error = exc
-                if allow_local_filter:
-                    break
+            except Exception as fallback_exc:
+                last_error = fallback_exc
         time.sleep(interval)
     raise RuntimeError(f"EasyProxy not ready after wait: {last_error}") from last_error
 
@@ -219,7 +220,17 @@ def list_available_nodes(
     path = f"/api/nodes{suffix}"
     fallback_used = False
     try:
-        payload = _api_request("GET", path, base_url=base_url, api_key=api_key)
+        payload = _api_request(
+            "GET",
+            path,
+            base_url=base_url,
+            api_key=api_key,
+            wait_for_ready=False,
+        )
+        if suffix:
+            filtered_nodes = payload.get("nodes")
+            if filtered_nodes is not None and not isinstance(filtered_nodes, list):
+                raise TypeError("EasyProxy nodes response must be a list")
     except Exception:
         if not suffix:
             raise
@@ -231,12 +242,13 @@ def list_available_nodes(
             wait_for_ready=False,
         )
         fallback_used = True
+    normalized_nodes = _normalize_node_list(
+        payload,
+        only_available=only_available,
+        prefer_available=prefer_available,
+    )
     if fallback_used:
-        return _normalize_node_list(
-            payload,
-            only_available=only_available,
-            prefer_available=prefer_available,
-        )
+        return normalized_nodes
     nodes = payload.get("nodes") or []
     if not isinstance(nodes, list):
         return []
