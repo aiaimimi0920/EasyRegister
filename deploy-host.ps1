@@ -15,8 +15,9 @@ param(
     [string]$ProtocolRegisterOutputContainerPath = "/shared/register-output",
     [string]$ProtocolOutputMirrorContainerPath = "/shared/protocol-register-output",
     [string]$ProtocolBridgeSubdir = "easyregister-bridge",
+    [string]$ProtocolBridgeDockerVolume = "",
     [string]$MailboxServiceBaseUrl = "http://easy-email:8080",
-    [string]$MailboxServiceApiKey = "J7L+RCwLIBEcMZHzz0rXjm4oyR9rymq9",
+    [string]$MailboxServiceApiKey = "",
     [string]$MailboxDomainPool = "",
     [string]$MailboxDomainBlacklist = "",
     [string]$MailboxProviderBlacklist = "",
@@ -43,7 +44,7 @@ param(
     [string]$SmsBusinessPoliciesJson = "",
     [string]$SmsTerminalInvalidPhoneBlacklistSeconds = "",
     [string]$EasyProxyBaseUrl = "http://easy-proxy:29888",
-    [string]$EasyProxyApiKey = "YP9l2DecuS_MRhARQu5v829VFOWKar7S",
+    [string]$EasyProxyApiKey = "",
     [string]$TeamAuthDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
     [string]$CodexFreeDirHost = "C:\Users\vmjcv\.cli-proxy-api\free",
     [string]$CodexTeamDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
@@ -393,31 +394,57 @@ function New-ProtocolBridgeMountOverrideFile {
         [Parameter(Mandatory = $true)]
         [string]$ProtocolOutputMirrorContainerPath,
         [Parameter(Mandatory = $true)]
+        [string]$ProtocolBridgeSubdir,
+        [string]$ProtocolBridgeDockerVolume = "",
+        [Parameter(Mandatory = $true)]
         [string]$OverridePath
     )
 
-    if ([string]::IsNullOrWhiteSpace($ProtocolRegisterOutputDirHost)) {
+    $hasBindMount = -not [string]::IsNullOrWhiteSpace($ProtocolRegisterOutputDirHost)
+    $hasBridgeVolume = -not [string]::IsNullOrWhiteSpace($ProtocolBridgeDockerVolume)
+    if (-not $hasBindMount -and -not $hasBridgeVolume) {
         if (Test-Path -LiteralPath $OverridePath) {
             Remove-Item -LiteralPath $OverridePath -Force
         }
         return $null
     }
 
-    $resolvedSource = [System.IO.Path]::GetFullPath($ProtocolRegisterOutputDirHost)
-    New-Item -ItemType Directory -Force -Path $resolvedSource | Out-Null
+    $resolvedSource = ""
+    if ($hasBindMount) {
+        $resolvedSource = [System.IO.Path]::GetFullPath($ProtocolRegisterOutputDirHost)
+        New-Item -ItemType Directory -Force -Path $resolvedSource | Out-Null
+    }
+    $normalizedBridgeVolume = $ProtocolBridgeDockerVolume.Trim()
+    if ($hasBridgeVolume -and $normalizedBridgeVolume -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$') {
+        throw "Invalid protocol bridge Docker volume name: $normalizedBridgeVolume"
+    }
+    $mirrorTarget = $ProtocolOutputMirrorContainerPath.TrimEnd('/', '\')
+    $bridgeTarget = Join-ContainerPath -Root $mirrorTarget -Child $ProtocolBridgeSubdir
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add('services:')
     $lines.Add('  easy-register:')
     $lines.Add('    volumes:')
-    $lines.Add('      - type: bind')
-    $lines.Add(("        source: ""{0}""" -f (Convert-HostPathToComposeSource -Path $resolvedSource)))
-    $lines.Add(("        target: ""{0}""" -f $ProtocolOutputMirrorContainerPath.TrimEnd('/', '\')))
+    if ($hasBindMount) {
+        $lines.Add('      - type: bind')
+        $lines.Add(("        source: ""{0}""" -f (Convert-HostPathToComposeSource -Path $resolvedSource)))
+        $lines.Add(("        target: ""{0}""" -f $mirrorTarget))
+    }
+    if ($hasBridgeVolume) {
+        $lines.Add('      - type: volume')
+        $lines.Add(("        source: ""{0}""" -f $normalizedBridgeVolume))
+        $lines.Add(("        target: ""{0}""" -f $bridgeTarget))
+        $lines.Add('volumes:')
+        $lines.Add(("  {0}:" -f $normalizedBridgeVolume))
+        $lines.Add('    external: true')
+    }
     Set-Content -LiteralPath $OverridePath -Value $lines -Encoding ASCII
 
     return [pscustomobject]@{
         SourcePath = $resolvedSource
-        TargetPath = $ProtocolOutputMirrorContainerPath.TrimEnd('/', '\')
+        TargetPath = $mirrorTarget
+        BridgeVolume = $normalizedBridgeVolume
+        BridgeTargetPath = $bridgeTarget
     }
 }
 
@@ -849,7 +876,7 @@ function Resolve-EnvValue {
 }
 
 $resolvedMailboxServiceBaseUrl = Resolve-EnvValue -ParameterName 'MailboxServiceBaseUrl' -RuntimeKey 'MAILBOX_SERVICE_BASE_URL' -Fallback 'http://easy-email:8080'
-$resolvedMailboxServiceApiKey = Resolve-EnvValue -ParameterName 'MailboxServiceApiKey' -RuntimeKey 'MAILBOX_SERVICE_API_KEY' -Fallback 'J7L+RCwLIBEcMZHzz0rXjm4oyR9rymq9'
+$resolvedMailboxServiceApiKey = Resolve-EnvValue -ParameterName 'MailboxServiceApiKey' -RuntimeKey 'MAILBOX_SERVICE_API_KEY' -Fallback ''
 $resolvedMailboxDomainPool = Resolve-EnvValue -ParameterName 'MailboxDomainPool' -RuntimeKey 'REGISTER_MAILBOX_DOMAIN_POOL' -Fallback ''
 $resolvedMailboxDomainBlacklist = Resolve-EnvValue -ParameterName 'MailboxDomainBlacklist' -RuntimeKey 'REGISTER_MAILBOX_DOMAIN_BLACKLIST' -Fallback $defaultMailboxDomainBlacklistCsv
 $resolvedMailboxProviderBlacklist = Resolve-EnvValue -ParameterName 'MailboxProviderBlacklist' -RuntimeKey 'REGISTER_MAILBOX_PROVIDER_BLACKLIST' -Fallback $defaultMailboxProviderBlacklistCsv
@@ -876,7 +903,7 @@ $resolvedSmsSelectionMode = Resolve-EnvValue -ParameterName 'SmsSelectionMode' -
 $resolvedSmsBusinessPoliciesJson = Resolve-EnvValue -ParameterName 'SmsBusinessPoliciesJson' -RuntimeKey 'REGISTER_SMS_BUSINESS_POLICIES_JSON' -Fallback $defaultSmsBusinessPoliciesJson -UseFallbackWhenBlank
 $resolvedSmsTerminalInvalidPhoneBlacklistSeconds = Resolve-EnvValue -ParameterName 'SmsTerminalInvalidPhoneBlacklistSeconds' -RuntimeKey 'REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS' -Fallback $defaultSmsTerminalInvalidPhoneBlacklistSeconds -UseFallbackWhenBlank
 $resolvedEasyProxyBaseUrl = Resolve-EnvValue -ParameterName 'EasyProxyBaseUrl' -RuntimeKey 'EASY_PROXY_BASE_URL' -Fallback 'http://easy-proxy:29888'
-$resolvedEasyProxyApiKey = Resolve-EnvValue -ParameterName 'EasyProxyApiKey' -RuntimeKey 'EASY_PROXY_API_KEY' -Fallback 'YP9l2DecuS_MRhARQu5v829VFOWKar7S'
+$resolvedEasyProxyApiKey = Resolve-EnvValue -ParameterName 'EasyProxyApiKey' -RuntimeKey 'EASY_PROXY_API_KEY' -Fallback ''
 $resolvedWorkerCount = Resolve-EnvValue -ParameterName 'WorkerCount' -RuntimeKey 'REGISTER_WORKER_COUNT' -Fallback '10'
 $resolvedMainConcurrencyLimit = Resolve-EnvValue -ParameterName 'MainConcurrencyLimit' -RuntimeKey 'REGISTER_MAIN_CONCURRENCY_LIMIT' -Fallback '5'
 $resolvedContinueConcurrencyLimit = Resolve-EnvValue -ParameterName 'ContinueConcurrencyLimit' -RuntimeKey 'REGISTER_CONTINUE_CONCURRENCY_LIMIT' -Fallback '2'
@@ -892,6 +919,7 @@ $resolvedCodexRootDockerSource = Resolve-EnvValue -ParameterName 'CodexRootDocke
 $resolvedOpenaiRootDockerSource = Resolve-EnvValue -ParameterName 'OpenaiRootDockerSource' -RuntimeKey 'REGISTER_OPENAI_ROOT_DOCKER_SOURCE' -Fallback ''
 $resolvedCodexRootDockerVolume = Resolve-EnvValue -ParameterName 'CodexRootDockerVolume' -RuntimeKey 'REGISTER_CODEX_ROOT_DOCKER_VOLUME' -Fallback ''
 $resolvedOpenaiRootDockerVolume = Resolve-EnvValue -ParameterName 'OpenaiRootDockerVolume' -RuntimeKey 'REGISTER_OPENAI_ROOT_DOCKER_VOLUME' -Fallback ''
+$resolvedProtocolBridgeDockerVolume = Resolve-EnvValue -ParameterName 'ProtocolBridgeDockerVolume' -RuntimeKey 'REGISTER_PROTOCOL_BRIDGE_DOCKER_VOLUME' -Fallback ''
 if (-not [string]::IsNullOrWhiteSpace($resolvedCredentialRootHost)) {
     $resolvedCredentialRootHost = Resolve-AbsolutePath -Path $resolvedCredentialRootHost -BaseDir $launcherRoot
 }
@@ -1081,6 +1109,9 @@ if (-not [string]::IsNullOrWhiteSpace($resolvedCodexRootDockerVolume)) {
 if (-not [string]::IsNullOrWhiteSpace($resolvedOpenaiRootDockerVolume)) {
     $env:REGISTER_OPENAI_ROOT_DOCKER_VOLUME = $resolvedOpenaiRootDockerVolume
 }
+if (-not [string]::IsNullOrWhiteSpace($resolvedProtocolBridgeDockerVolume)) {
+    $env:REGISTER_PROTOCOL_BRIDGE_DOCKER_VOLUME = $resolvedProtocolBridgeDockerVolume
+}
 if (-not [string]::IsNullOrWhiteSpace($effectiveCodexFreeDirHost)) {
     $env:REGISTER_CODEX_FREE_DIR_HOST = $effectiveCodexFreeDirHost
 }
@@ -1156,6 +1187,7 @@ foreach ($entry in @{
     REGISTER_OPENAI_ROOT_DOCKER_SOURCE        = $env:REGISTER_OPENAI_ROOT_DOCKER_SOURCE
     REGISTER_CODEX_ROOT_DOCKER_VOLUME         = $env:REGISTER_CODEX_ROOT_DOCKER_VOLUME
     REGISTER_OPENAI_ROOT_DOCKER_VOLUME        = $env:REGISTER_OPENAI_ROOT_DOCKER_VOLUME
+    REGISTER_PROTOCOL_BRIDGE_DOCKER_VOLUME    = $env:REGISTER_PROTOCOL_BRIDGE_DOCKER_VOLUME
     REGISTER_CODEX_FREE_DIR_HOST              = $env:REGISTER_CODEX_FREE_DIR_HOST
     REGISTER_CODEX_TEAM_DIR_HOST              = $env:REGISTER_CODEX_TEAM_DIR_HOST
     REGISTER_CODEX_TEAM_INPUT_DIR_HOST        = $env:REGISTER_CODEX_TEAM_INPUT_DIR_HOST
@@ -1213,6 +1245,8 @@ $protocolBridgeOverridePath = Join-Path $launcherRoot '.deploy-compose.protocol-
 $protocolBridgeMount = New-ProtocolBridgeMountOverrideFile `
     -ProtocolRegisterOutputDirHost $resolvedProtocolRegisterOutputDirHost `
     -ProtocolOutputMirrorContainerPath $resolvedProtocolOutputMirrorContainerPath `
+    -ProtocolBridgeSubdir $resolvedProtocolBridgeSubdir `
+    -ProtocolBridgeDockerVolume $resolvedProtocolBridgeDockerVolume `
     -OverridePath $protocolBridgeOverridePath
 
 if ($MaterializeOnly) {

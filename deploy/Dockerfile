@@ -17,6 +17,7 @@ RUN python -c "import curl_cffi" \
         && python -m pip install --no-cache-dir --retries 10 --timeout 300 \
             --index-url https://mirrors.aliyun.com/pypi/simple \
             --trusted-host mirrors.aliyun.com \
-            curl-cffi)
+            curl-cffi \
+            typing-extensions)
 
 CMD ["python", "-m", "infinite_runner"]

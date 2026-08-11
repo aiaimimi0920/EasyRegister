@@ -6,9 +6,16 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-ghcr-image.yml"
+RUNTIME_DOCKERFILE = REPO_ROOT / "deploy" / "Dockerfile"
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_runtime_image_installs_python310_typing_extensions_fallback(self) -> None:
+        dockerfile = RUNTIME_DOCKERFILE.read_text(encoding="utf-8")
+
+        self.assertIn("curl-cffi", dockerfile)
+        self.assertIn("typing-extensions", dockerfile)
+
     def test_publish_workflow_passes_sms_runtime_secrets_to_materializer(self) -> None:
         workflow = PUBLISH_WORKFLOW.read_text(encoding="utf-8")
 

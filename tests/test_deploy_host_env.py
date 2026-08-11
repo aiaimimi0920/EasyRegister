@@ -24,6 +24,59 @@ def _read_dotenv(path: Path) -> dict[str, str]:
 
 
 class DeployHostEnvTests(unittest.TestCase):
+    def test_materialize_only_keeps_service_api_keys_empty_without_explicit_input(self) -> None:
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        if not powershell:
+            self.skipTest("PowerShell not available")
+
+        with tempfile.TemporaryDirectory(prefix="easyregister-deploy-host-") as temp:
+            launcher_root = Path(temp)
+            script_path = launcher_root / "deploy-host.ps1"
+            shutil.copyfile(DEPLOY_HOST, script_path)
+
+            command = [powershell, "-NoProfile"]
+            if Path(powershell).name.lower().startswith("powershell"):
+                command.extend(["-ExecutionPolicy", "Bypass"])
+            command.extend(
+                [
+                    "-File",
+                    str(script_path),
+                    "-RepoCacheRoot",
+                    str(REPO_ROOT),
+                    "-OutputDirHost",
+                    str(launcher_root / "runtime" / "register-output"),
+                    "-CodexFreeDirHost",
+                    str(launcher_root / "codex" / "free"),
+                    "-CodexTeamDirHost",
+                    str(launcher_root / "codex" / "team"),
+                    "-CodexTeamInputDirHost",
+                    str(launcher_root / "codex" / "team-input"),
+                    "-CodexTeamMotherInputDirHost",
+                    str(launcher_root / "codex" / "team-mother-input"),
+                    "-Image",
+                    "ghcr.io/example/easyregister:test",
+                    "-MaterializeOnly",
+                    "-NoBuild",
+                ]
+            )
+
+            result = subprocess.run(
+                command,
+                cwd=launcher_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                0,
+                result.returncode,
+                msg=(result.stderr or result.stdout).strip(),
+            )
+
+            env_values = _read_dotenv(launcher_root / ".deploy-compose.env")
+            self.assertEqual("", env_values.get("MAILBOX_SERVICE_API_KEY"))
+            self.assertEqual("", env_values.get("EASY_PROXY_API_KEY"))
+
     def test_materialize_only_exports_sms_policy_and_dashboard_default(self) -> None:
         powershell = shutil.which("powershell") or shutil.which("pwsh")
         if not powershell:
@@ -247,6 +300,77 @@ class DeployHostEnvTests(unittest.TestCase):
             self.assertIn("easyregister_codex_pool:", override_payload)
             self.assertIn("external: true", override_payload)
             self.assertIn("easyregister_openai_pool:", override_payload)
+
+    def test_materialize_only_can_mount_protocol_bridge_from_external_docker_volume(self) -> None:
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        if not powershell:
+            self.skipTest("PowerShell not available")
+
+        with tempfile.TemporaryDirectory(prefix="easyregister-deploy-host-") as temp:
+            launcher_root = Path(temp)
+            script_path = launcher_root / "deploy-host.ps1"
+            shutil.copyfile(DEPLOY_HOST, script_path)
+            protocol_output = launcher_root / "protocol" / "register-output"
+
+            command = [powershell, "-NoProfile"]
+            if Path(powershell).name.lower().startswith("powershell"):
+                command.extend(["-ExecutionPolicy", "Bypass"])
+            command.extend(
+                [
+                    "-File",
+                    str(script_path),
+                    "-RepoCacheRoot",
+                    str(REPO_ROOT),
+                    "-OutputDirHost",
+                    str(launcher_root / "runtime" / "register-output"),
+                    "-ProtocolRegisterOutputDirHost",
+                    str(protocol_output),
+                    "-ProtocolBridgeDockerVolume",
+                    "easyregister_protocol_bridge",
+                    "-MailboxServiceApiKey",
+                    "mailbox-test-key",
+                    "-EasyProxyApiKey",
+                    "proxy-test-key",
+                    "-SmsServiceApiKey",
+                    "sms-test-key",
+                    "-Image",
+                    "ghcr.io/example/easyregister:test",
+                    "-MaterializeOnly",
+                    "-NoBuild",
+                ]
+            )
+
+            result = subprocess.run(
+                command,
+                cwd=launcher_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                0,
+                result.returncode,
+                msg=(result.stderr or result.stdout).strip(),
+            )
+
+            env_values = _read_dotenv(launcher_root / ".deploy-compose.env")
+            self.assertEqual(
+                "easyregister_protocol_bridge",
+                env_values.get("REGISTER_PROTOCOL_BRIDGE_DOCKER_VOLUME"),
+            )
+
+            override_payload = (launcher_root / ".deploy-compose.protocol-bridge.generated.yaml").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(str(protocol_output).replace("\\", "/"), override_payload)
+            self.assertIn('type: volume', override_payload)
+            self.assertIn('source: "easyregister_protocol_bridge"', override_payload)
+            self.assertIn(
+                'target: "/shared/protocol-register-output/easyregister-bridge"',
+                override_payload,
+            )
+            self.assertIn("easyregister_protocol_bridge:", override_payload)
+            self.assertIn("external: true", override_payload)
 
     def test_materialize_only_autodetects_majority_easyprotocol_provider_output_mount(self) -> None:
         powershell = shutil.which("powershell") or shutil.which("pwsh")
