@@ -282,6 +282,7 @@ def choose_runnable_flow_spec(
             "skipped": skipped,
         }
 
+    all_ready_specs = list(ready_specs)
     continue_ready_specs = [
         (spec, state)
         for spec, state in ready_specs
@@ -293,18 +294,26 @@ def choose_runnable_flow_spec(
             for spec, state in ready_specs
             if normalize_flow_role(spec.instance_role) == "main"
         ]
-        ready_specs = (
-            main_ready_specs
-            if normalize_flow_role(previous_flow_role) == "continue" and main_ready_specs
-            else continue_ready_specs
-        )
+        other_ready_specs = [
+            (spec, state)
+            for spec, state in ready_specs
+            if normalize_flow_role(spec.instance_role) not in {"continue", "main"}
+        ]
+        normalized_previous_role = normalize_flow_role(previous_flow_role)
+        if normalized_previous_role == "continue":
+            ready_specs = main_ready_specs or other_ready_specs or continue_ready_specs
+        elif normalized_previous_role == "main" and other_ready_specs:
+            ready_specs = continue_ready_specs + other_ready_specs
+        else:
+            ready_specs = continue_ready_specs
 
     total_weight = sum(max(0.0, float(spec.weight or 0.0)) for spec, _ in ready_specs)
     if total_weight <= 0.0:
         selected_spec, selected_state = ready_specs[0]
         return selected_spec, {
             "selected": selected_state,
-            "ready": [state for _, state in ready_specs],
+            "ready": [state for _, state in all_ready_specs],
+            "candidates": [state for _, state in ready_specs],
             "skipped": skipped,
         }
 
@@ -320,6 +329,7 @@ def choose_runnable_flow_spec(
             break
     return selected_spec, {
         "selected": selected_state,
-        "ready": [state for _, state in ready_specs],
+        "ready": [state for _, state in all_ready_specs],
+        "candidates": [state for _, state in ready_specs],
         "skipped": skipped,
     }

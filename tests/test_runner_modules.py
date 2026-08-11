@@ -1381,6 +1381,152 @@ class RunnerFlowSchedulerTests(unittest.TestCase):
         self.assertEqual("main-openai", selected.name)
         self.assertEqual("main", selection["selected"]["instanceRole"])
 
+    def test_choose_runnable_flow_spec_gives_other_ready_roles_weighted_access_after_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            shared_root = output_root / "shared"
+            pending_dir = shared_root / "openai" / "pending"
+            continue_pool_dir = shared_root / "openai" / "failed-once"
+            team_mother_dir = shared_root / "codex" / "team-mother-input"
+            pending_dir.mkdir(parents=True, exist_ok=True)
+            continue_pool_dir.mkdir(parents=True, exist_ok=True)
+            team_mother_dir.mkdir(parents=True, exist_ok=True)
+            (continue_pool_dir / "seed.json").write_text("{}", encoding="utf-8")
+            (team_mother_dir / "mother.json").write_text("{}", encoding="utf-8")
+
+            main_spec = RunnerFlowSpec(
+                name="main-openai",
+                flow_path="main-flow.json",
+                instance_role="main",
+                weight=5.0,
+                team_auth_path="",
+                task_max_attempts=0,
+                openai_oauth_pool_dir=pending_dir,
+                mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
+            )
+            continue_spec = RunnerFlowSpec(
+                name="continue-openai",
+                flow_path="continue-flow.json",
+                instance_role="continue",
+                weight=2.0,
+                team_auth_path="",
+                task_max_attempts=0,
+                openai_oauth_pool_dir=continue_pool_dir,
+                mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
+            )
+            audit_spec = RunnerFlowSpec(
+                name="openai-account-availability-audit",
+                flow_path="audit-flow.json",
+                instance_role="account-audit",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=0,
+                openai_oauth_pool_dir=output_root / "openai" / "unused",
+                mailbox_business_key="openai-account-audit",
+                input_source_dir=str(output_root),
+                input_claims_dir="",
+            )
+            team_spec = RunnerFlowSpec(
+                name="codex-team-expand",
+                flow_path="team-flow.json",
+                instance_role="team",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=0,
+                openai_oauth_pool_dir=output_root / "openai" / "unused",
+                mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
+            )
+            specs = (main_spec, continue_spec, audit_spec, team_spec)
+
+            with mock.patch.object(
+                runner_flow_scheduler.random.SystemRandom,
+                "random",
+                return_value=0.6,
+            ):
+                selected_audit, audit_selection = runner_flow_scheduler.choose_runnable_flow_spec(
+                    flow_specs=specs,
+                    output_root=output_root,
+                    shared_root=shared_root,
+                    previous_flow_role="main",
+                )
+            with mock.patch.object(
+                runner_flow_scheduler.random.SystemRandom,
+                "random",
+                return_value=0.9,
+            ):
+                selected_team, _ = runner_flow_scheduler.choose_runnable_flow_spec(
+                    flow_specs=specs,
+                    output_root=output_root,
+                    shared_root=shared_root,
+                    previous_flow_role="main",
+                )
+
+        self.assertIsNotNone(selected_audit)
+        self.assertEqual("account-audit", selected_audit.instance_role)
+        self.assertIsNotNone(selected_team)
+        self.assertEqual("team", selected_team.instance_role)
+        self.assertEqual(
+            ["main", "continue", "account-audit", "team"],
+            [state["instanceRole"] for state in audit_selection["ready"]],
+        )
+        self.assertEqual(
+            ["continue", "account-audit", "team"],
+            [state["instanceRole"] for state in audit_selection["candidates"]],
+        )
+
+    def test_choose_runnable_flow_spec_yields_to_other_role_when_main_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            shared_root = output_root / "shared"
+            continue_pool_dir = shared_root / "openai" / "failed-once"
+            continue_pool_dir.mkdir(parents=True, exist_ok=True)
+            (continue_pool_dir / "seed.json").write_text("{}", encoding="utf-8")
+
+            continue_spec = RunnerFlowSpec(
+                name="continue-openai",
+                flow_path="continue-flow.json",
+                instance_role="continue",
+                weight=2.0,
+                team_auth_path="",
+                task_max_attempts=0,
+                openai_oauth_pool_dir=continue_pool_dir,
+                mailbox_business_key="openai",
+                input_source_dir="",
+                input_claims_dir="",
+            )
+            audit_spec = RunnerFlowSpec(
+                name="openai-account-availability-audit",
+                flow_path="audit-flow.json",
+                instance_role="account-audit",
+                weight=1.0,
+                team_auth_path="",
+                task_max_attempts=0,
+                openai_oauth_pool_dir=output_root / "openai" / "unused",
+                mailbox_business_key="openai-account-audit",
+                input_source_dir=str(output_root),
+                input_claims_dir="",
+            )
+
+            selected, selection = runner_flow_scheduler.choose_runnable_flow_spec(
+                flow_specs=(continue_spec, audit_spec),
+                output_root=output_root,
+                shared_root=shared_root,
+                previous_flow_role="continue",
+            )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual("account-audit", selected.instance_role)
+        self.assertEqual(
+            ["account-audit"],
+            [state["instanceRole"] for state in selection["candidates"]],
+        )
+
     def test_choose_runnable_flow_spec_skips_flow_when_concurrency_limit_reached(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"
