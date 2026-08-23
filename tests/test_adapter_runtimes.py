@@ -215,7 +215,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         )
         self.assertEqual("complete", result["requestedAction"])
 
-    def test_easy_sms_client_preserves_supported_paid_selection_mode(self) -> None:
+    def test_easy_sms_client_preserves_paid_selection_mode_country_id_and_max_price(self) -> None:
         with mock.patch.object(
             easy_sms_client,
             "_wait_sms_service_ready",
@@ -243,6 +243,8 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 max_bindings_per_phone=1,
                 country_codes=(),
                 selection_mode="balanced",
+                country_id=2,
+                max_price=0.605,
             )
 
         payload = post_json.call_args.args[1]
@@ -250,6 +252,8 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("paid", payload["costTier"])
         self.assertTrue(payload["allowReuse"])
         self.assertEqual("balanced", payload["selectionMode"])
+        self.assertEqual(2, payload["country"])
+        self.assertEqual(0.605, payload["maxPrice"])
         self.assertEqual("hero_sms", session.provider_key)
 
     def test_easy_sms_client_retries_next_provider_when_selected_candidate_is_unavailable(self) -> None:
@@ -3166,9 +3170,13 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 encoding="utf-8",
             )
             captured_blacklists: list[tuple[str, ...]] = []
+            captured_country_ids: list[int | None] = []
+            captured_max_prices: list[float | None] = []
 
             def _open_sms_session(**kwargs):
                 captured_blacklists.append(tuple(kwargs["provider_blacklist"]))
+                captured_country_ids.append(kwargs["country_id"])
+                captured_max_prices.append(kwargs["max_price"])
                 if len(captured_blacklists) == 1:
                     return easy_sms_client.SmsSession(
                         session_id="sms_1",
@@ -3188,7 +3196,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                     "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
                         '{"openai":{"enabled":true,"providerBlacklist":["hero_sms"],'
                         '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
-                        '"countryCodes":[],"selectionMode":"balanced"}}'
+                        '"countryCodes":[],"countryId":2,"selectionMode":"balanced","maxPrice":0.605}}'
                     ),
                 },
                 clear=False,
@@ -3208,6 +3216,8 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("smstome", session["providerKey"])
         self.assertEqual(("hero_sms",), captured_blacklists[0])
         self.assertEqual(("hero_sms", "onlinesim"), captured_blacklists[1])
+        self.assertEqual([2, 2], captured_country_ids)
+        self.assertEqual([0.605, 0.605], captured_max_prices)
         report_sms_outcome.assert_called_once_with(
             session_id="sms_1",
             outcome="failure",
@@ -4917,6 +4927,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             {
                 "REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS": "1",
                 "REGISTER_PHONE_VERIFICATION_SAME_SESSION_CODE_RETRY_ATTEMPTS": "1",
+                "REGISTER_PHONE_VERIFICATION_SMS_CODE_WAIT_TIMEOUT_SECONDS": "420",
             },
             clear=False,
         ), mock.patch.object(
@@ -4966,8 +4977,8 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         open_phone_session.assert_called_once()
         self.assertEqual(
             [
-                mock.call(session_id="sms_hero_1", timeout_seconds=180),
-                mock.call(session_id="sms_hero_1", timeout_seconds=180),
+                mock.call(session_id="sms_hero_1", timeout_seconds=420),
+                mock.call(session_id="sms_hero_1", timeout_seconds=420),
             ],
             wait_phone_code.call_args_list,
         )

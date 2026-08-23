@@ -980,6 +980,8 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
                 max_bindings_per_phone=policy.max_bindings_per_phone,
                 country_codes=policy.country_codes,
                 selection_mode=policy.selection_mode,
+                country_id=policy.country_id,
+                max_price=policy.max_price,
                 phone_blacklist=tuple(sorted(blocked_phones)),
                 provider_phone_blacklist=provider_phone_blacklist,
                 provider_country_blacklist=provider_country_blacklist,
@@ -1108,7 +1110,9 @@ def build_phone_verification_step_input(*, business_key: str | None = None) -> d
         "allow_reuse": bool(policy.allow_reuse),
         "max_bindings_per_phone": int(policy.max_bindings_per_phone),
         "country_codes": list(policy.country_codes),
+        "country_id": policy.country_id,
         "selection_mode": str(policy.selection_mode or "").strip(),
+        "max_price": policy.max_price,
     }
 
 

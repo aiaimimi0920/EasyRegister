@@ -31,10 +31,26 @@ DEFAULT_PROTOCOL_BRIDGE_SUBDIR = "easyregister-bridge"
 DEFAULT_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS = 5
 DEFAULT_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS = 1
 DEFAULT_PHONE_VERIFICATION_SAME_SESSION_CODE_RETRY_ATTEMPTS = 2
+DEFAULT_PHONE_VERIFICATION_SMS_CODE_WAIT_TIMEOUT_SECONDS = 180
 MAX_HEROSMS_REFUND_CANCEL_WAIT_SECONDS = 5 * 60
 PHONE_VERIFICATION_SAME_SESSION_CODE_RETRY_PROVIDERS = {
     "hero_sms",
 }
+
+
+def _phone_verification_sms_code_wait_timeout_seconds() -> int:
+    try:
+        value = int(
+            str(
+                os.environ.get("REGISTER_PHONE_VERIFICATION_SMS_CODE_WAIT_TIMEOUT_SECONDS")
+                or DEFAULT_PHONE_VERIFICATION_SMS_CODE_WAIT_TIMEOUT_SECONDS
+            ).strip()
+        )
+    except (TypeError, ValueError):
+        value = DEFAULT_PHONE_VERIFICATION_SMS_CODE_WAIT_TIMEOUT_SECONDS
+    return max(30, min(600, value))
+
+
 PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
     "invalid_phone_number",
     "phone_number_in_use",
@@ -1014,7 +1030,7 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
                 phone_failure_stage = "wait_sms_code"
                 sms_code = runtime_sms.wait_phone_code_for_session(
                     session_id=phone_session["sessionId"],
-                    timeout_seconds=180,
+                    timeout_seconds=_phone_verification_sms_code_wait_timeout_seconds(),
                 )
                 sms_code_received = True
                 phone_failure_stage = "submit_phone_verification_code"

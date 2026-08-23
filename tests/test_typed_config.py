@@ -87,7 +87,7 @@ class TypedConfigTests(unittest.TestCase):
                     '{"default":{"enabled":false,"providerBlacklist":["hero_sms"],"allowPaid":false},'
                     '"openai":{"enabled":true,"providerBlacklist":["hero_sms","paid_backup"],'
                     '"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,'
-                    '"countryCodes":["US"],"selectionMode":"balanced"}}'
+                    '"countryCodes":[],"countryId":2,"selectionMode":"balanced","maxPrice":0.605}}'
                 ),
             },
             clear=False,
@@ -100,8 +100,10 @@ class TypedConfigTests(unittest.TestCase):
         self.assertFalse(policy.allow_paid)
         self.assertFalse(policy.allow_reuse)
         self.assertEqual(1, policy.max_bindings_per_phone)
-        self.assertEqual(("us",), policy.country_codes)
+        self.assertEqual((), policy.country_codes)
+        self.assertEqual(2, policy.country_id)
         self.assertEqual("balanced", policy.selection_mode)
+        self.assertEqual(0.605, policy.max_price)
 
     def test_sms_runtime_config_falls_back_to_default_policy(self) -> None:
         with mock.patch.dict(
@@ -113,7 +115,7 @@ class TypedConfigTests(unittest.TestCase):
                 "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
                     '{"default":{"enabled":true,"providerBlacklist":["hero_sms"],'
                     '"allowPaid":false,"allowReuse":true,"maxBindingsPerPhone":2,'
-                    '"countryCodes":["CA"],"selectionMode":"balanced"}}'
+                    '"countryCodes":["CA"],"selectionMode":"balanced","maxPrice":0.7}}'
                 ),
             },
             clear=False,
@@ -129,6 +131,7 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual(2, policy.max_bindings_per_phone)
         self.assertEqual(("ca",), policy.country_codes)
         self.assertEqual("balanced", policy.selection_mode)
+        self.assertEqual(0.7, policy.max_price)
 
     def test_sms_runtime_config_empty_business_country_codes_inherit_global_countries(self) -> None:
         with mock.patch.dict(
@@ -136,6 +139,8 @@ class TypedConfigTests(unittest.TestCase):
             {
                 "REGISTER_SMS_BUSINESS_KEY": "openai",
                 "REGISTER_SMS_COUNTRY_CODES": "+44,+358,+1",
+                "REGISTER_SMS_COUNTRY_ID": "16",
+                "REGISTER_SMS_MAX_PRICE": "0.605",
                 "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
                     '{"default":{"enabled":false,"providerBlacklist":["hero_sms"],"allowPaid":false},'
                     '"openai":{"enabled":true,"providerBlacklist":["hero_sms"],'
@@ -149,6 +154,8 @@ class TypedConfigTests(unittest.TestCase):
 
         policy = config.resolve_business_policy("openai")
         self.assertEqual(("+44", "+358", "+1"), policy.country_codes)
+        self.assertEqual(16, policy.country_id)
+        self.assertEqual(0.605, policy.max_price)
 
     def test_sms_runtime_config_ignores_invalid_selection_mode(self) -> None:
         with mock.patch.dict(

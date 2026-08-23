@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -840,7 +841,9 @@ class SmsBusinessPolicy:
     allow_reuse: bool
     max_bindings_per_phone: int
     country_codes: tuple[str, ...]
+    country_id: int | None
     selection_mode: str
+    max_price: float | None
 
 
 def _normalize_sms_selection_mode(value: Any) -> str:
@@ -848,6 +851,24 @@ def _normalize_sms_selection_mode(value: Any) -> str:
     if normalized in {"price-first", "success-first", "stock-first", "balanced"}:
         return normalized
     return ""
+
+
+def _normalize_sms_max_price(value: Any) -> float | None:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(normalized) or normalized <= 0:
+        return None
+    return normalized
+
+
+def _normalize_sms_country_id(value: Any) -> int | None:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized >= 0 else None
 
 
 def _parse_sms_business_policies(raw: str) -> tuple[SmsBusinessPolicy, ...]:
@@ -891,9 +912,15 @@ def _parse_sms_business_policies(raw: str) -> tuple[SmsBusinessPolicy, ...]:
                     or raw_policy.get("country_codes")
                     or raw_policy.get("countries")
                 ),
+                country_id=_normalize_sms_country_id(
+                    raw_policy.get("countryId", raw_policy.get("country_id", raw_policy.get("country")))
+                ),
                 selection_mode=_normalize_sms_selection_mode(
                     raw_policy.get("selectionMode")
                     or raw_policy.get("selection_mode")
+                ),
+                max_price=_normalize_sms_max_price(
+                    raw_policy.get("maxPrice", raw_policy.get("max_price"))
                 ),
             )
         )
@@ -908,7 +935,9 @@ class SmsRuntimeConfig:
     allow_reuse: bool
     max_bindings_per_phone: int
     country_codes: tuple[str, ...]
+    country_id: int | None
     selection_mode: str
+    max_price: float | None
     business_policies: tuple[SmsBusinessPolicy, ...]
     state_path: Path
 
@@ -923,7 +952,9 @@ class SmsRuntimeConfig:
             allow_reuse=env_bool("REGISTER_SMS_ALLOW_REUSE", False),
             max_bindings_per_phone=max(1, env_int("REGISTER_SMS_MAX_BINDINGS_PER_PHONE", 1)),
             country_codes=tuple(item.lower() for item in split_csv(env_text("REGISTER_SMS_COUNTRY_CODES"))),
+            country_id=_normalize_sms_country_id(env_text("REGISTER_SMS_COUNTRY_ID")),
             selection_mode=_normalize_sms_selection_mode(env_text("REGISTER_SMS_SELECTION_MODE")),
+            max_price=_normalize_sms_max_price(env_text("REGISTER_SMS_MAX_PRICE")),
             business_policies=_parse_sms_business_policies(env_text("REGISTER_SMS_BUSINESS_POLICIES_JSON")),
             state_path=state_path,
         )
@@ -942,8 +973,15 @@ class SmsRuntimeConfig:
         business_key: str | None = None,
     ) -> SmsBusinessPolicy:
         resolved_country_codes = policy.country_codes or self.country_codes
+        resolved_country_id = policy.country_id if policy.country_id is not None else self.country_id
+        resolved_max_price = policy.max_price if policy.max_price is not None else self.max_price
         resolved_business_key = business_key or policy.business_key
-        if resolved_business_key == policy.business_key and resolved_country_codes == policy.country_codes:
+        if (
+            resolved_business_key == policy.business_key
+            and resolved_country_codes == policy.country_codes
+            and resolved_country_id == policy.country_id
+            and resolved_max_price == policy.max_price
+        ):
             return policy
         return SmsBusinessPolicy(
             business_key=resolved_business_key,
@@ -953,7 +991,9 @@ class SmsRuntimeConfig:
             allow_reuse=policy.allow_reuse,
             max_bindings_per_phone=policy.max_bindings_per_phone,
             country_codes=resolved_country_codes,
+            country_id=resolved_country_id,
             selection_mode=policy.selection_mode,
+            max_price=resolved_max_price,
         )
 
     def resolve_business_policy(self, business_key: str | None = None) -> SmsBusinessPolicy:
@@ -975,7 +1015,9 @@ class SmsRuntimeConfig:
             allow_reuse=self.allow_reuse,
             max_bindings_per_phone=self.max_bindings_per_phone,
             country_codes=self.country_codes,
+            country_id=self.country_id,
             selection_mode=self.selection_mode,
+            max_price=self.max_price,
         )
 
 

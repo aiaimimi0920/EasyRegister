@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import os
 import re
 import socket
@@ -613,6 +614,8 @@ def open_sms_session(
     max_bindings_per_phone: int,
     country_codes: tuple[str, ...],
     selection_mode: str,
+    country_id: int | None = None,
+    max_price: float | None = None,
     phone_blacklist: tuple[str, ...] = (),
     provider_phone_blacklist: tuple[str, ...] = (),
     provider_country_blacklist: tuple[str, ...] = (),
@@ -636,6 +639,12 @@ def open_sms_session(
         "allowReuse": bool(allow_reuse),
         "maxBindingsPerPhone": max(1, int(max_bindings_per_phone or 1)),
     }
+    if max_price is not None:
+        normalized_max_price = float(max_price)
+        if math.isfinite(normalized_max_price) and normalized_max_price > 0:
+            base_payload["maxPrice"] = normalized_max_price
+    if country_id is not None and int(country_id) >= 0:
+        base_payload["country"] = int(country_id)
     candidate_provider_keys = _dedupe_provider_keys(selection_plan_provider_country_candidates)
     if not candidate_provider_keys:
         candidate_provider_keys = _query_provider_catalog_candidates(
