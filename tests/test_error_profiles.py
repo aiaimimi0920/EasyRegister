@@ -216,6 +216,20 @@ class ErrorProfilesTests(unittest.TestCase):
         self.assertEqual(ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS, details["code"])
         self.assertEqual("flow_error", details["category"])
 
+    def test_build_error_details_preserves_phone_attempt_over_nested_proxy_error(self) -> None:
+        details = build_error_details(
+            step_type="obtain_codex_oauth",
+            code=ErrorCodes.PROXY_CONNECT_FAILED,
+            message=(
+                "phone_verification_attempted_small_success: "
+                "submit_phone_verification_number "
+                "<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] "
+                "EOF occurred in violation of protocol>"
+            ),
+        )
+        self.assertEqual(ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS, details["code"])
+        self.assertEqual("flow_error", details["category"])
+
     def test_resolve_retry_codes_uses_proxy_refresh_profile(self) -> None:
         self.assertEqual(
             {
@@ -457,6 +471,37 @@ class ErrorProfilesTests(unittest.TestCase):
                 attempt_index=1,
             )
         )
+
+    def test_dst_flow_oauth_retry_stops_only_after_phone_side_effect(self) -> None:
+        statement = dst_flow.DstStatement(
+            step_id="obtain-codex-oauth",
+            step_type="obtain_codex_oauth",
+            metadata={
+                "retry": {
+                    "maxAttempts": 3,
+                    "retryProfile": "step-oauth-recover",
+                }
+            },
+        )
+        self.assertTrue(
+            dst_flow._should_retry_step(
+                statement=statement,
+                error_details={"code": ErrorCodes.PROXY_CONNECT_FAILED},
+                attempt_index=1,
+            )
+        )
+        for error_code in (
+            ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS,
+            ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS,
+        ):
+            with self.subTest(error_code=error_code):
+                self.assertFalse(
+                    dst_flow._should_retry_step(
+                        statement=statement,
+                        error_details={"code": error_code},
+                        attempt_index=1,
+                    )
+                )
 
     def test_dst_flow_task_retry_uses_retry_profile(self) -> None:
         plan = dst_flow.DstPlan(

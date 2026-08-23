@@ -297,13 +297,15 @@ def classify_error_code(
     ):
         return ErrorCodes.MAILBOX_UNAVAILABLE
 
+    if ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS in combined:
+        return ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS
+    if ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS in combined:
+        return ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS
     if normalized_code:
         return normalized_code
 
     if ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING in combined:
         return ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING
-    if ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS in combined:
-        return ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS
     if ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION in combined:
         return ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION
     if (
@@ -443,6 +445,4 @@ def classify_error_code(
         return ErrorCodes.FLOW_TIMEOUT_EXCEEDED
     if "curl" in lowered or "connect" in lowered or "tls" in lowered:
         return ErrorCodes.TRANSPORT_ERROR
-    if ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS in combined:
-        return ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS
     return normalize_error_code(f"{normalized_step_type}_failed")

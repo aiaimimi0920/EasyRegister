@@ -1348,7 +1348,7 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertLess(call_order.index("acquire_mailbox"), call_order.index("initialize_chatgpt_login_session"))
         self.assertEqual("seed@example.com", result.outputs["acquire-mailbox"]["email"])
 
-    def test_continue_flow_task_retry_reuses_claimed_artifact_instead_of_empty_pool(self) -> None:
+    def test_continue_flow_does_not_retry_claimed_artifact_after_phone_attempt(self) -> None:
         flows_dir = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
         flow_path = flows_dir / "codex-openai-oauth-continue-v1.semantic-flow.json"
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1463,9 +1463,12 @@ class DstFlowIntegrationTests(unittest.TestCase):
 
         self.assertFalse(result.ok)
         self.assertEqual("obtain-codex-oauth", result.error_step)
-        self.assertEqual(ErrorCodes.FLOW_TIMEOUT_EXCEEDED, result.step_errors["obtain-codex-oauth"]["code"])
+        self.assertEqual(
+            ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS,
+            result.step_errors["obtain-codex-oauth"]["code"],
+        )
         self.assertEqual(1, acquire_call_count)
-        self.assertGreaterEqual(obtain_call_count, 2)
+        self.assertEqual(1, obtain_call_count)
         self.assertFalse(seed_path.exists())
         self.assertEqual(0, len(list(source_pool_dir.glob("*.json"))))
 
@@ -2670,7 +2673,7 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertEqual(ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS, result.step_errors["obtain-codex-oauth"]["code"])
         self.assertEqual("skipped", result.steps["validate-free-personal-oauth"])
 
-    def test_run_dst_flow_once_retries_obtain_after_phone_attempt_fails_before_submission(self) -> None:
+    def test_run_dst_flow_once_does_not_retry_obtain_after_phone_attempt_fails_before_submission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             flow_path = Path(tmp_dir) / "temp-flow.json"
             oauth_path = Path(tmp_dir) / "oauth.json"
@@ -2745,30 +2748,22 @@ class DstFlowIntegrationTests(unittest.TestCase):
                     return {"ok": True, "session": f"login-{login_calls}"}
                 if step_type == "obtain_codex_oauth":
                     obtain_calls += 1
-                    if obtain_calls == 1:
-                        return {
-                            "ok": True,
-                            "status": "phone_verification_attempted_small_success",
-                            "successPath": str(oauth_path),
-                            "phoneVerificationAttempted": True,
-                            "phoneVerificationSubmitted": False,
-                            "phoneVerificationAccepted": False,
-                            "phoneVerificationFailureStage": "submit_phone_verification_number",
-                            "phoneVerificationFailureDetail": (
-                                "<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] "
-                                "EOF occurred in violation of protocol>"
-                            ),
-                        }
                     return {
                         "ok": True,
-                        "status": "completed",
+                        "status": "phone_verification_attempted_small_success",
                         "successPath": str(oauth_path),
+                        "phoneVerificationAttempted": True,
+                        "phoneVerificationSubmitted": False,
+                        "phoneVerificationAccepted": False,
+                        "phoneVerificationFailureStage": "submit_phone_verification_number",
+                        "phoneVerificationFailureDetail": (
+                            "<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] "
+                            "EOF occurred in violation of protocol>"
+                        ),
                     }
                 if step_type == "validate_free_personal_oauth":
                     validate_calls += 1
-                    if bool(step_input.get("oauth_result", {}).get("phoneVerificationAttempted")):
-                        raise AssertionError("validate should not run for pre-submission phone attempt failures")
-                    return {"ok": True, "status": "personal_oauth_confirmed"}
+                    raise AssertionError("validate should not run for pre-submission phone attempt failures")
                 raise AssertionError(step_type)
 
             with mock.patch.dict(
@@ -2785,12 +2780,16 @@ class DstFlowIntegrationTests(unittest.TestCase):
                     flow_path=flow_path,
                 )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(2, obtain_calls)
-        self.assertEqual(2, proxy_calls)
-        self.assertEqual(2, login_calls)
-        self.assertEqual(1, validate_calls)
-        self.assertEqual(2, result.step_attempts["obtain-codex-oauth"])
+        self.assertFalse(result.ok)
+        self.assertEqual(1, obtain_calls)
+        self.assertEqual(1, proxy_calls)
+        self.assertEqual(1, login_calls)
+        self.assertEqual(0, validate_calls)
+        self.assertEqual(1, result.step_attempts["obtain-codex-oauth"])
+        self.assertEqual(
+            ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS,
+            result.step_errors["obtain-codex-oauth"]["code"],
+        )
 
     def test_run_dst_flow_once_retries_chatgpt_login_after_proxy_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

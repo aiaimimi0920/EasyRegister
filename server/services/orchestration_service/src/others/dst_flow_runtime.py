@@ -313,9 +313,15 @@ def should_retry_step(*, statement: DstStatement, error_details: dict[str, Any],
         max_attempts = 1
     if attempt_index >= max_attempts:
         return False
+    error_code = str(error_details.get("code") or "").strip().lower()
+    if str(statement.step_type or "").strip() == "obtain_codex_oauth" and error_code in {
+        ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS,
+        ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS,
+    }:
+        return False
     retry_codes = resolve_retry_codes(retry)
     if retry_codes:
-        return str(error_details.get("code") or "").strip().lower() in retry_codes
+        return error_code in retry_codes
     return False
 
 
