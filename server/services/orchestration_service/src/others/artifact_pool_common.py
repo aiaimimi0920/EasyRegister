@@ -3,6 +3,8 @@ from __future__ import annotations
 from others.artifact_pool_claim_recovery import choose_random_files
 from others.artifact_pool_claim_recovery import derive_original_name_from_claim
 from others.artifact_pool_claim_recovery import load_openai_oauth_seed_validation
+from others.artifact_pool_claim_recovery import openai_oauth_stale_claim_seconds
+from others.artifact_pool_claim_recovery import recover_stale_openai_oauth_claims
 from others.artifact_pool_claim_recovery import recover_stale_team_claims
 from others.artifact_pool_claim_recovery import restore_to_pool
 from others.artifact_pool_claim_recovery import safe_count
@@ -51,8 +53,10 @@ __all__ = [
     "extract_free_oauth_plan_type",
     "has_free_personal_oauth_claims",
     "load_openai_oauth_seed_validation",
+    "openai_oauth_stale_claim_seconds",
     "load_team_expand_progress_from_artifact",
     "path_is_inside_directory",
+    "recover_stale_openai_oauth_claims",
     "recover_stale_team_claims",
     "reset_claimed_team_expand_cycle_payload",
     "resolve_free_manual_oauth_pool",

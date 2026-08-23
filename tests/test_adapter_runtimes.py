@@ -58,6 +58,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 "id": "sms_123",
                 "phoneNumber": "+15551234567",
                 "providerKey": "sms24",
+                "refundableCancelAvailableAtIso": "2026-08-23T00:10:00Z",
             }
         },
     ) as post_json:
@@ -84,6 +85,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms_123", session.session_id)
         self.assertEqual("+15551234567", session.phone_number)
         self.assertEqual("sms24", session.provider_key)
+        self.assertEqual(
+            "2026-08-23T00:10:00Z",
+            session.refundable_cancel_available_at_iso,
+        )
 
     def test_easy_sms_client_sends_phone_blacklist_to_open_request(self) -> None:
         with mock.patch.object(
@@ -177,6 +182,38 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("easyregister", payload["source"])
         self.assertIn("observedAt", payload)
         self.assertEqual({"recorded": True}, result)
+
+    def test_easy_sms_client_update_session_action_uses_native_payload(self) -> None:
+        with mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            return_value={"result": {"requestedAction": "cancel", "refundEligible": True}},
+        ) as post_json:
+            result = easy_sms_client.update_sms_session_action(
+                session_id="sms_123",
+                action="cancel",
+            )
+
+        self.assertEqual("/sms/sessions/sms_123/actions", post_json.call_args.args[0])
+        self.assertEqual({"action": "cancel"}, post_json.call_args.args[1])
+        self.assertEqual({"requestedAction": "cancel", "refundEligible": True}, result)
+
+    def test_runtime_sms_complete_phone_session_uses_complete_action(self) -> None:
+        with mock.patch.object(
+            runtime_sms,
+            "update_sms_session_action",
+            return_value={"requestedAction": "complete", "resultText": "ACCESS_ACTIVATION"},
+        ) as update_session_action:
+            result = runtime_sms.complete_phone_session_for_session(
+                session_id="sms_hero_1",
+                reason="codex_oauth_completed",
+            )
+
+        update_session_action.assert_called_once_with(
+            session_id="sms_hero_1",
+            action="complete",
+        )
+        self.assertEqual("complete", result["requestedAction"])
 
     def test_easy_sms_client_preserves_supported_paid_selection_mode(self) -> None:
         with mock.patch.object(
@@ -353,6 +390,35 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 session_id="sms_session_000042",
                 outcome="invalid_phone_number",
                 detail="openai rejected phone",
+            )
+
+        self.assertEqual(
+            {
+                "accepted": False,
+                "ignored": True,
+                "reason": "sms_session_not_found",
+            },
+            result,
+        )
+
+    def test_easy_sms_client_ignores_missing_session_when_updating_action(self) -> None:
+        def _post(path: str, payload: dict[str, object]) -> dict[str, object]:
+            self.assertEqual("/sms/sessions/sms_session_000042/actions", path)
+            self.assertEqual("cancel", payload["action"])
+            raise RuntimeError(
+                "sms service POST /sms/sessions/sms_session_000042/actions failed: "
+                "HTTP 404 [code=SMS session not found: sms_session_000042]: "
+                '{"error":"SMS session not found: sms_session_000042"}'
+            )
+
+        with mock.patch.object(
+            easy_sms_client,
+            "_post_json",
+            side_effect=_post,
+        ):
+            result = easy_sms_client.update_sms_session_action(
+                session_id="sms_session_000042",
+                action="cancel",
             )
 
         self.assertEqual(
@@ -1500,11 +1566,18 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         ), mock.patch.object(
             easyprotocol_runtime.runtime_sms,
             "report_phone_outcome_for_session",
-            return_value={"ok": True},
-        ):
+            side_effect=RuntimeError("sms_outcome_report_failed"),
+        ) as report_phone_outcome, mock.patch.object(
+            easyprotocol_runtime,
+            "json_log",
+        ) as json_log:
             result = easyprotocol_runtime.dispatch_easyprotocol_step(
                 step_type="obtain_codex_oauth",
-                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+                step_input={
+                    "source_path": "C:/tmp/small.json",
+                    "output_dir": "C:/tmp/out",
+                    "proxy_url": "http://easy-proxy:25054",
+                },
             )
 
         self.assertTrue(result["ok"])
@@ -1519,6 +1592,21 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("balanced", captured_inputs[0]["sms_verification"]["selection_mode"])
         self.assertEqual("resume_123", captured_inputs[1]["resume_context"]["token"])
         self.assertEqual("resume_123_step2", captured_inputs[2]["resume_context"]["token"])
+        self.assertEqual("http://easy-proxy:25054", captured_inputs[1]["proxy_url"])
+        self.assertEqual("http://easy-proxy:25054", captured_inputs[2]["proxy_url"])
+        report_phone_outcome.assert_called_once_with(
+            session_id="sms_123",
+            outcome="success",
+            detail="codex_oauth_completed",
+        )
+        self.assertTrue(
+            any(
+                call.args
+                and isinstance(call.args[0], dict)
+                and call.args[0].get("event") == "register_sms_outcome_report_failed"
+                for call in json_log.call_args_list
+            )
+        )
 
     def test_dispatch_obtain_codex_oauth_completes_raw_phone_wall_artifact_result(self) -> None:
         captured_calls: list[dict[str, object]] = []
@@ -1565,7 +1653,11 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         ):
             result = easyprotocol_runtime.dispatch_easyprotocol_step(
                 step_type="obtain_codex_oauth",
-                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+                step_input={
+                    "source_path": "C:/tmp/small.json",
+                    "output_dir": "C:/tmp/out",
+                    "proxy_url": "http://easy-proxy:25049",
+                },
             )
 
         self.assertTrue(result["ok"])
@@ -1577,6 +1669,8 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         )
         self.assertEqual("resume_raw_phone_wall", captured_calls[1]["resume_context"]["token"])
         self.assertEqual("resume_after_number", captured_calls[2]["resume_context"]["token"])
+        self.assertEqual("http://easy-proxy:25049", captured_calls[1]["proxy_url"])
+        self.assertEqual("http://easy-proxy:25049", captured_calls[2]["proxy_url"])
 
     def test_dispatch_obtain_codex_oauth_recovers_phone_wall_artifact_after_protocol_timeout(self) -> None:
         captured_inputs: list[dict[str, object]] = []
@@ -1634,7 +1728,11 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             ):
                 result = easyprotocol_runtime.dispatch_easyprotocol_step(
                     step_type="obtain_codex_oauth",
-                    step_input={"source_path": "C:/tmp/small.json", "output_dir": str(output_dir)},
+                    step_input={
+                        "source_path": "C:/tmp/small.json",
+                        "output_dir": str(output_dir),
+                        "proxy_url": "http://easy-proxy:25048",
+                    },
                 )
 
         self.assertTrue(result["ok"])
@@ -1645,6 +1743,12 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             next(item for item in captured_inputs if item["step_type"] == "submit_phone_verification_number")[
                 "resume_context"
             ]["token"],
+        )
+        self.assertEqual(
+            "http://easy-proxy:25048",
+            next(item for item in captured_inputs if item["step_type"] == "submit_phone_verification_number")[
+                "proxy_url"
+            ],
         )
 
     def test_dispatch_obtain_codex_oauth_uses_short_initial_protocol_timeout_for_phone_wall_recovery(self) -> None:
@@ -1717,6 +1821,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 easyprotocol_runtime.runtime_sms,
                 "wait_phone_code_for_session",
                 side_effect=RuntimeError("wait_code_timeout"),
+            ), mock.patch.object(
+                easyprotocol_runtime.runtime_sms,
+                "cancel_phone_session_for_session",
+                return_value={"requestedAction": "cancel", "refundEligible": True},
             ), mock.patch.object(
                 easyprotocol_runtime.runtime_sms,
                 "report_phone_outcome_for_session",
@@ -1974,6 +2082,71 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("sms24", result["phoneProvider"])
         self.assertEqual("sms_123", result["phoneSessionId"])
 
+    def test_dispatch_obtain_codex_oauth_refund_cancels_suspicious_hero_number(self) -> None:
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            if step_type == "obtain_codex_oauth":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_hero"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            if step_type == "submit_phone_verification_number":
+                raise RuntimeError(
+                    "We've detected suspicious behavior from phone numbers similar to yours."
+                )
+            raise AssertionError(f"unexpected invoke: {step_type}")
+
+        with mock.patch.dict(
+            os.environ,
+            {"REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS": "1"},
+            clear=False,
+        ), mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            return_value={
+                "sessionId": "sms_hero_suspicious",
+                "phoneNumber": "+15551234567",
+                "providerKey": "hero_sms",
+                "refundableCancelAvailableAtIso": "2020-01-01T00:00:00Z",
+            },
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={
+                "requestedAction": "cancel",
+                "resultText": "ACCESS_CANCEL",
+                "refundEligible": True,
+            },
+        ) as cancel_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "record_terminal_phone_outcome",
+            return_value={"ok": True},
+        ) as record_terminal_phone_outcome, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ) as report_phone_outcome:
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertEqual("phone_verification_terminal", result["status"])
+        self.assertEqual("invalid_phone_number", result["phoneVerificationTerminalCode"])
+        cancel_phone_session.assert_called_once_with(
+            session_id="sms_hero_suspicious",
+            reason="phone_verification_terminal",
+        )
+        record_terminal_phone_outcome.assert_called_once()
+        report_phone_outcome.assert_called_once()
+
     def test_dispatch_obtain_codex_oauth_treats_terminal_phone_verification_as_intermediate_result(self) -> None:
         captured_inputs: list[dict[str, object]] = []
 
@@ -2013,6 +2186,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             "wait_phone_code_for_session",
         ) as wait_phone_code, mock.patch.object(
             easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": True},
+        ) as cancel_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
             "record_terminal_phone_outcome",
             return_value={"ok": True},
         ) as record_terminal_phone_outcome, mock.patch.object(
@@ -2038,6 +2215,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             terminal_code="unsupported_phone_region",
             terminal_message="Phone region is not supported.",
             business_key="openai",
+        )
+        cancel_phone_session.assert_called_once_with(
+            session_id="sms_123",
+            reason="phone_verification_terminal",
         )
         report_phone_outcome.assert_called_once()
 
@@ -2098,6 +2279,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             side_effect=RuntimeError("wait_code_timeout"),
         ) as wait_phone_code, mock.patch.object(
             easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": True},
+        ) as cancel_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
             "record_terminal_phone_outcome",
             return_value={"ok": True},
         ) as record_terminal_phone_outcome, mock.patch.object(
@@ -2143,6 +2328,13 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 ),
             ],
             record_terminal_phone_outcome.call_args_list,
+        )
+        self.assertEqual(
+            [
+                mock.call(session_id="sms_1", reason="phone_verification_terminal"),
+                mock.call(session_id="sms_2", reason="wait_sms_code_timeout"),
+            ],
+            cancel_phone_session.call_args_list,
         )
         self.assertEqual(2, report_phone_outcome.call_count)
 
@@ -2203,6 +2395,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             side_effect=RuntimeError("wait_code_timeout"),
         ) as wait_phone_code, mock.patch.object(
             easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": True},
+        ) as cancel_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
             "record_terminal_phone_outcome",
             return_value={"ok": True},
         ) as record_terminal_phone_outcome, mock.patch.object(
@@ -2248,6 +2444,13 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 ),
             ],
             record_terminal_phone_outcome.call_args_list,
+        )
+        self.assertEqual(
+            [
+                mock.call(session_id="sms_1", reason="phone_verification_terminal"),
+                mock.call(session_id="sms_2", reason="wait_sms_code_timeout"),
+            ],
+            cancel_phone_session.call_args_list,
         )
         self.assertEqual(2, report_phone_outcome.call_count)
 
@@ -2297,6 +2500,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             "wait_phone_code_for_session",
             side_effect=RuntimeError("wait_code_timeout"),
         ) as wait_phone_code, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": True},
+        ), mock.patch.object(
             easyprotocol_runtime.runtime_sms,
             "record_terminal_phone_outcome",
             return_value={"ok": True},
@@ -2391,6 +2598,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             side_effect=RuntimeError("wait_code_timeout"),
         ) as wait_phone_code, mock.patch.object(
             easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": True},
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
             "record_terminal_phone_outcome",
             return_value={"ok": True},
         ) as record_terminal_phone_outcome, mock.patch.object(
@@ -2466,6 +2677,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             "wait_phone_code_for_session",
             side_effect=RuntimeError("wait_code_timeout"),
         ) as wait_phone_code, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": True},
+        ), mock.patch.object(
             easyprotocol_runtime.runtime_sms,
             "record_terminal_phone_outcome",
             return_value={"ok": True},
@@ -2546,6 +2761,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             side_effect=["111111", "222222"],
         ), mock.patch.object(
             easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": True},
+        ) as cancel_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
             "record_terminal_phone_outcome",
             return_value={"ok": True},
         ) as record_terminal_phone_outcome, mock.patch.object(
@@ -2576,6 +2795,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             terminal_code="wrong_otp_code",
             terminal_message=mock.ANY,
             business_key="openai",
+        )
+        cancel_phone_session.assert_called_once_with(
+            session_id="sms_1",
+            reason="submit_phone_verification_code_failed",
         )
         self.assertEqual(
             [mock.call(session_id="sms_1", outcome="failure", detail=mock.ANY), mock.call(session_id="sms_2", outcome="success", detail="codex_oauth_completed")],
@@ -2632,6 +2855,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             side_effect=["111111", "222222"],
         ), mock.patch.object(
             easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": True},
+        ) as cancel_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
             "record_terminal_phone_outcome",
             return_value={"ok": True},
         ) as record_terminal_phone_outcome, mock.patch.object(
@@ -2663,9 +2890,272 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             terminal_message=mock.ANY,
             business_key="openai",
         )
+        cancel_phone_session.assert_called_once_with(
+            session_id="sms_1",
+            reason="submit_phone_verification_code_failed",
+        )
         self.assertEqual(
             [mock.call(session_id="sms_1", outcome="failure", detail=mock.ANY), mock.call(session_id="sms_2", outcome="success", detail="codex_oauth_completed")],
             report_phone_outcome.call_args_list,
+        )
+
+    def test_dispatch_obtain_codex_oauth_trips_paid_provider_and_completes_received_code_session(self) -> None:
+        captured_inputs: list[dict[str, object]] = []
+        submit_attempts = 0
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            nonlocal submit_attempts
+            captured_inputs.append({"step_type": step_type, **dict(step_input)})
+            if step_type == "obtain_codex_oauth":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_hero"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            if step_type == "submit_phone_verification_number":
+                return {
+                    "ok": True,
+                    "status": "phone_number_submitted",
+                    "pageType": "sms_verification",
+                    "resumeContext": {"flow": "oauth", "token": "resume_hero"},
+                }
+            if step_type == "submit_phone_verification_code":
+                submit_attempts += 1
+                raise RuntimeError("phone_code_submit_failed")
+            raise AssertionError(f"unexpected invoke: {step_type} {step_input!r}")
+
+        with mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            return_value={
+                "sessionId": "sms_hero_1",
+                "phoneNumber": "+5588998170219",
+                "providerKey": "hero_sms",
+            },
+        ) as open_phone_session_for_business, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+            return_value="703632",
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "request_phone_code_for_session",
+            return_value={"accepted": True, "requestedAction": "request-code"},
+        ) as request_phone_code_for_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "complete_phone_session_for_session",
+            return_value={"requestedAction": "complete", "resultText": "ACCESS_ACTIVATION"},
+        ) as complete_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": False},
+        ) as cancel_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "record_terminal_phone_outcome",
+            return_value={"ok": True},
+        ) as record_terminal_phone_outcome, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "trip_paid_provider_circuit_breaker",
+            return_value={
+                "tripped": True,
+                "persisted": True,
+                "providerKey": "hero_sms",
+                "reason": "paid_code_without_oauth_completion",
+            },
+        ) as trip_paid_provider_circuit_breaker, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ) as report_phone_outcome:
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("phone_verification_submitted_small_success", result["status"])
+        self.assertEqual("sms_hero_1", result["phoneSessionId"])
+        self.assertTrue(result["phoneProviderCircuitBreakerTripped"])
+        self.assertTrue(result["phoneProviderCircuitBreakerPersisted"])
+        self.assertEqual(1, open_phone_session_for_business.call_count)
+        self.assertEqual(
+            ["sms_hero_1"],
+            [
+                item["phone_session_id"]
+                for item in captured_inputs
+                if item["step_type"] == "submit_phone_verification_code"
+            ],
+        )
+        self.assertEqual(
+            ["703632"],
+            [
+                item["sms_code"]
+                for item in captured_inputs
+                if item["step_type"] == "submit_phone_verification_code"
+            ],
+        )
+        request_phone_code_for_session.assert_not_called()
+        trip_paid_provider_circuit_breaker.assert_called_once_with(
+            provider_key="hero_sms",
+            business_key="openai",
+            session_id="sms_hero_1",
+            failure_stage="submit_phone_verification_code",
+            error_type="RuntimeError",
+        )
+        complete_phone_session.assert_called_once_with(
+            session_id="sms_hero_1",
+            reason="paid_code_without_oauth_completion",
+        )
+        cancel_phone_session.assert_not_called()
+        record_terminal_phone_outcome.assert_not_called()
+        self.assertEqual(
+            [
+                mock.call(
+                    session_id="sms_hero_1",
+                    outcome="failure",
+                    detail="paid_code_without_oauth_completion",
+                )
+            ],
+            report_phone_outcome.call_args_list,
+        )
+
+    def test_phone_oauth_completion_result_requires_completed_artifact(self) -> None:
+        valid_result = {
+            "ok": True,
+            "status": "completed",
+            "successPath": "C:/tmp/codex-free.json",
+        }
+        self.assertIs(
+            valid_result,
+            easyprotocol_runtime._require_completed_phone_oauth_result(valid_result),
+        )
+
+        invalid_results = (
+            ({"ok": False, "status": "incomplete"}, "phone_oauth_completion_result_not_ok"),
+            ({"ok": True, "status": "incomplete"}, "phone_oauth_completion_status_incomplete"),
+            ({"ok": True, "status": "completed"}, "phone_oauth_completion_artifact_missing"),
+        )
+        for invalid_result, expected_error in invalid_results:
+            with self.subTest(expected_error=expected_error), self.assertRaisesRegex(
+                easyprotocol_runtime.PhoneOauthCompletionIncompleteError,
+                expected_error,
+            ):
+                easyprotocol_runtime._require_completed_phone_oauth_result(invalid_result)
+
+    def test_dispatch_obtain_codex_oauth_trips_paid_provider_for_incomplete_result(self) -> None:
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            if step_type == "obtain_codex_oauth":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_paid_incomplete"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            if step_type == "submit_phone_verification_number":
+                return {
+                    "ok": True,
+                    "status": "phone_number_submitted",
+                    "pageType": "sms_verification",
+                    "resumeContext": {"flow": "oauth", "token": "resume_paid_incomplete"},
+                }
+            if step_type == "submit_phone_verification_code":
+                return {
+                    "ok": False,
+                    "status": "incomplete",
+                }
+            raise AssertionError(f"unexpected invoke: {step_type} {step_input!r}")
+
+        with mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            return_value={
+                "sessionId": "sms_paid_incomplete",
+                "phoneNumber": "+15550000000",
+                "providerKey": "hero_sms",
+            },
+        ) as open_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+            return_value="000000",
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "request_phone_code_for_session",
+            return_value={"accepted": True},
+        ) as request_phone_code, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "complete_phone_session_for_session",
+            return_value={"requestedAction": "complete", "resultText": "ACCESS_ACTIVATION"},
+        ) as complete_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": False},
+        ) as cancel_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "trip_paid_provider_circuit_breaker",
+            return_value={
+                "tripped": True,
+                "persisted": True,
+                "providerKey": "hero_sms",
+                "reason": "paid_code_without_oauth_completion",
+            },
+        ) as trip_breaker, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ) as report_phone_outcome:
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("phone_verification_submitted_small_success", result["status"])
+        self.assertEqual(
+            "phone_oauth_completion_result_not_ok",
+            result["phoneVerificationFailureDetail"],
+        )
+        self.assertTrue(result["phoneProviderCircuitBreakerTripped"])
+        self.assertTrue(result["phoneProviderCircuitBreakerPersisted"])
+        open_phone_session.assert_called_once()
+        request_phone_code.assert_not_called()
+        trip_breaker.assert_called_once_with(
+            provider_key="hero_sms",
+            business_key="openai",
+            session_id="sms_paid_incomplete",
+            failure_stage="submit_phone_verification_code",
+            error_type="PhoneOauthCompletionIncompleteError",
+        )
+        complete_phone_session.assert_called_once_with(
+            session_id="sms_paid_incomplete",
+            reason="paid_code_without_oauth_completion",
+        )
+        cancel_phone_session.assert_not_called()
+        report_phone_outcome.assert_called_once_with(
+            session_id="sms_paid_incomplete",
+            outcome="failure",
+            detail="paid_code_without_oauth_completion",
+        )
+
+    def test_phone_oauth_completion_challenge_is_not_treated_as_an_otp_error(self) -> None:
+        self.assertFalse(
+            easyprotocol_runtime._is_retryable_phone_code_submission_error(
+                RuntimeError(
+                    "authenticated_codex_oauth_no_redirect status=403 "
+                    "url=https://auth.openai.com/oauth/authorize body=Just a moment"
+                )
+            )
         )
 
     def test_open_phone_session_for_business_skips_blacklisted_phone_by_rotating_provider(self) -> None:
@@ -3424,6 +3914,67 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             payload["providers"]["onlinesim"]["reason"],
         )
 
+    def test_open_phone_session_for_business_retries_hero_sms_banned_in_same_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+            captured_blacklists: list[tuple[str, ...]] = []
+
+            def _open_sms_session(**kwargs):
+                provider_blacklist = tuple(kwargs["provider_blacklist"])
+                captured_blacklists.append(provider_blacklist)
+                if len(captured_blacklists) == 1:
+                    raise RuntimeError(
+                        'sms service POST /sms/sessions/open failed: HTTP 502 '
+                        '[code=Activation provider "hero_sms" failed: BANNED: '
+                        'Account temporarily suspended for this specific country/service pair.]: '
+                        '{"error":"Activation provider \\"hero_sms\\" failed: BANNED: '
+                        'Account temporarily suspended for this specific country/service pair."}'
+                    )
+                return easy_sms_client.SmsSession(
+                    session_id="sms_2",
+                    phone_number="+15557654321",
+                    provider_key="hero_sms",
+                )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_SESSION_LOCAL_RETRY_ATTEMPTS": "2",
+                    "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"enabled":true,"providerBlacklist":[],"allowPaid":true,'
+                        '"allowReuse":false,"maxBindingsPerPhone":1,'
+                        '"countryCodes":[],"selectionMode":"balanced"}}'
+                    ),
+                },
+                clear=False,
+            ), mock.patch.object(
+                runtime_sms,
+                "open_sms_session",
+                side_effect=_open_sms_session,
+            ), mock.patch.object(runtime_sms, "json_log") as json_log:
+                session = runtime_sms.open_phone_session_for_business(business_key="openai")
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual("sms_2", session["sessionId"])
+        self.assertEqual("hero_sms", session["providerKey"])
+        self.assertEqual(tuple(), captured_blacklists[0])
+        self.assertEqual(tuple(), captured_blacklists[1])
+        self.assertEqual(
+            "provider_capacity_unavailable",
+            payload["providers"]["hero_sms"]["reason"],
+        )
+        self.assertTrue(
+            any(
+                call.args
+                and isinstance(call.args[0], dict)
+                and call.args[0].get("event") == "register_sms_provider_capacity_same_attempt_retry"
+                and call.args[0].get("providerKey") == "hero_sms"
+                for call in json_log.call_args_list
+            )
+        )
+
     def test_open_phone_session_for_business_ignores_persistent_capacity_provider_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state_path = Path(tmp_dir) / "register-sms-state.json"
@@ -3487,6 +4038,112 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 and call.args[0].get("event") == "register_sms_capacity_provider_blacklist_relaxed"
                 for call in json_log.call_args_list
             )
+        )
+
+    def test_paid_provider_circuit_breaker_persists_without_phone_or_code_until_manual_clear(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+            with mock.patch.dict(
+                os.environ,
+                {"REGISTER_SMS_STATE_PATH": str(state_path)},
+                clear=False,
+            ), mock.patch.object(runtime_sms, "json_log"):
+                result = runtime_sms.trip_paid_provider_circuit_breaker(
+                    provider_key="hero_sms",
+                    business_key="openai",
+                    session_id="sms_paid_guard_1",
+                    failure_stage="submit_phone_verification_code",
+                    error_type="RuntimeError",
+                )
+                payload = json.loads(state_path.read_text(encoding="utf-8"))
+                pruned = runtime_sms._prune_sms_state(payload=payload)
+                cleared = runtime_sms.clear_paid_provider_circuit_breaker(
+                    provider_key="hero_sms",
+                )
+                cleared_payload = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["tripped"])
+        record = payload["providerCircuitBreakers"]["hero_sms"]
+        self.assertEqual("tripped", record["state"])
+        self.assertEqual("paid_code_without_oauth_completion", record["reason"])
+        self.assertTrue(record["manualResetRequired"])
+        self.assertEqual("sms_paid_guard_1", record["sessionId"])
+        self.assertNotIn("phoneNumber", record)
+        self.assertNotIn("smsCode", record)
+        self.assertNotIn("detail", record)
+        self.assertIn("hero_sms", pruned["providerCircuitBreakers"])
+        self.assertTrue(cleared["cleared"])
+        self.assertNotIn("hero_sms", cleared_payload["providerCircuitBreakers"])
+
+    def test_open_phone_session_never_relaxes_paid_provider_circuit_breaker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "register-sms-state.json"
+            now = datetime.now(timezone.utc)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "phones": {},
+                        "providers": {},
+                        "providerCircuitBreakers": {
+                            "hero_sms": {
+                                "state": "tripped",
+                                "reason": "paid_code_without_oauth_completion",
+                                "manualResetRequired": True,
+                                "trippedAt": now.isoformat(),
+                                "trippedAtTs": now.timestamp(),
+                            }
+                        },
+                        "providerTerminalOutcomes": {
+                            "smstome": [
+                                {
+                                    "reason": "phone_number_in_use",
+                                    "phoneNumber": "+15550000000",
+                                    "at": now.isoformat(),
+                                    "atTs": now.timestamp(),
+                                }
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            captured_blacklists: list[tuple[str, ...]] = []
+
+            def _open_sms_session(**kwargs):
+                provider_blacklist = tuple(kwargs["provider_blacklist"])
+                captured_blacklists.append(provider_blacklist)
+                if len(captured_blacklists) == 1:
+                    raise RuntimeError("sms_no_selection_plan_candidates")
+                return easy_sms_client.SmsSession(
+                    session_id="sms_free_after_relax",
+                    phone_number="+15557654321",
+                    provider_key="onlinesim",
+                )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_STATE_PATH": str(state_path),
+                    "REGISTER_SMS_SESSION_LOCAL_RETRY_ATTEMPTS": "2",
+                    "REGISTER_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD": "1",
+                    "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"enabled":true,"providerBlacklist":[],'
+                        '"allowPaid":true,"allowReuse":false,"maxBindingsPerPhone":1,'
+                        '"countryCodes":[],"selectionMode":"balanced"}}'
+                    ),
+                },
+                clear=False,
+            ), mock.patch.object(
+                runtime_sms,
+                "open_sms_session",
+                side_effect=_open_sms_session,
+            ):
+                session = runtime_sms.open_phone_session_for_business(business_key="openai")
+
+        self.assertEqual("sms_free_after_relax", session["sessionId"])
+        self.assertEqual(
+            [("hero_sms", "smstome"), ("hero_sms",)],
+            captured_blacklists,
         )
 
     def test_open_phone_session_for_business_keeps_current_capacity_block_when_relaxing_dynamic_block(self) -> None:
@@ -4106,6 +4763,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             side_effect=RuntimeError("wait_code_timeout"),
         ) as wait_phone_code, mock.patch.object(
             easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": True},
+        ) as cancel_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
             "report_phone_outcome_for_session",
             return_value={"ok": True},
         ) as report_phone_outcome:
@@ -4121,6 +4782,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         self.assertEqual("wait_sms_code", result["phoneVerificationFailureStage"])
         self.assertEqual("sms24", result["phoneProvider"])
         wait_phone_code.assert_called_once()
+        cancel_phone_session.assert_called_once_with(
+            session_id="sms_123",
+            reason="wait_sms_code_timeout",
+        )
         report_phone_outcome.assert_called_once()
 
     def test_dispatch_obtain_codex_oauth_does_not_retry_sms_code_wait_timeout_by_default(self) -> None:
@@ -4171,6 +4836,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             side_effect=RuntimeError("timeout waiting for sms verification code"),
         ) as wait_phone_code, mock.patch.object(
             easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": True},
+        ) as cancel_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
             "record_terminal_phone_outcome",
             return_value={"ok": True},
         ) as record_terminal_phone_outcome, mock.patch.object(
@@ -4196,6 +4865,10 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             terminal_message="timeout waiting for sms verification code",
             business_key="openai",
         )
+        cancel_phone_session.assert_called_once_with(
+            session_id="sms_1",
+            reason="wait_sms_code_timeout",
+        )
         report_phone_outcome.assert_called_once_with(
             session_id="sms_1",
             outcome="failure",
@@ -4210,11 +4883,131 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             ],
         )
 
-    def test_dispatch_obtain_codex_oauth_retries_after_sms_code_wait_timeout(self) -> None:
+    def test_dispatch_obtain_codex_oauth_retries_hero_sms_wait_timeout_in_same_session(self) -> None:
+        captured_calls: list[dict[str, object]] = []
+
+        def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
+            captured_calls.append({"step_type": step_type, **dict(step_input)})
+            if step_type == "obtain_codex_oauth":
+                return {
+                    "ok": True,
+                    "status": "phone_verification_required",
+                    "phoneVerificationRequired": True,
+                    "pageType": "add_phone",
+                    "resumeContext": {"flow": "oauth", "token": "resume_hero"},
+                    "successPath": "C:/tmp/openai-oauth.json",
+                }
+            if step_type == "submit_phone_verification_number":
+                return {
+                    "ok": True,
+                    "status": "phone_number_submitted",
+                    "pageType": "sms_verification",
+                    "resumeContext": {"flow": "oauth", "token": "resume_hero_phone"},
+                }
+            if step_type == "submit_phone_verification_code":
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "successPath": "C:/tmp/codex-free.json",
+                }
+            raise AssertionError(f"unexpected invoke: {step_type} {step_input!r}")
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS": "1",
+                "REGISTER_PHONE_VERIFICATION_SAME_SESSION_CODE_RETRY_ATTEMPTS": "1",
+            },
+            clear=False,
+        ), mock.patch.object(
+            easyprotocol_runtime,
+            "invoke_easyprotocol",
+            side_effect=_invoke,
+        ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "open_phone_session_for_business",
+            return_value={
+                "sessionId": "sms_hero_1",
+                "phoneNumber": "+15550000011",
+                "providerKey": "hero_sms",
+            },
+        ) as open_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "wait_phone_code_for_session",
+            side_effect=[RuntimeError("timeout waiting for sms verification code"), "123456"],
+        ) as wait_phone_code, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "request_phone_code_for_session",
+            return_value={"accepted": True, "requestedAction": "request-code"},
+        ) as request_phone_code, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "complete_phone_session_for_session",
+            return_value={"requestedAction": "complete", "resultText": "ACCESS_ACTIVATION"},
+        ) as complete_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={"requestedAction": "cancel", "refundEligible": False},
+        ) as cancel_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "record_terminal_phone_outcome",
+            return_value={"ok": True},
+        ) as record_terminal_phone_outcome, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "report_phone_outcome_for_session",
+            return_value={"ok": True},
+        ) as report_phone_outcome:
+            result = easyprotocol_runtime.dispatch_easyprotocol_step(
+                step_type="obtain_codex_oauth",
+                step_input={"source_path": "C:/tmp/small.json", "output_dir": "C:/tmp/out"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("completed", result["status"])
+        open_phone_session.assert_called_once()
+        self.assertEqual(
+            [
+                mock.call(session_id="sms_hero_1", timeout_seconds=180),
+                mock.call(session_id="sms_hero_1", timeout_seconds=180),
+            ],
+            wait_phone_code.call_args_list,
+        )
+        request_phone_code.assert_called_once_with(
+            session_id="sms_hero_1",
+            reason="wait_sms_code_timeout",
+        )
+        self.assertEqual(
+            ["sms_hero_1"],
+            [
+                str(item["phone_session_id"])
+                for item in captured_calls
+                if item["step_type"] == "submit_phone_verification_number"
+            ],
+        )
+        self.assertEqual(
+            ["123456"],
+            [
+                str(item["sms_code"])
+                for item in captured_calls
+                if item["step_type"] == "submit_phone_verification_code"
+            ],
+        )
+        complete_phone_session.assert_called_once_with(
+            session_id="sms_hero_1",
+            reason="codex_oauth_completed",
+        )
+        cancel_phone_session.assert_not_called()
+        record_terminal_phone_outcome.assert_not_called()
+        report_phone_outcome.assert_called_once_with(
+            session_id="sms_hero_1",
+            outcome="success",
+            detail="codex_oauth_completed",
+        )
+
+    def test_dispatch_obtain_codex_oauth_retries_hero_sms_after_confirmed_refund_cancel(self) -> None:
         captured_calls: list[dict[str, object]] = []
         phone_sessions = [
-            {"sessionId": "sms_1", "phoneNumber": "+15550000011", "providerKey": "freepool"},
-            {"sessionId": "sms_2", "phoneNumber": "+15550000012", "providerKey": "sms24"},
+            {"sessionId": "sms_1", "phoneNumber": "+15550000011", "providerKey": "hero_sms"},
+            {"sessionId": "sms_2", "phoneNumber": "+15550000012", "providerKey": "hero_sms"},
         ]
 
         def _invoke(*, step_type: str, step_input: dict[str, object]) -> dict[str, object]:
@@ -4251,6 +5044,7 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             {
                 "REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS": "2",
                 "REGISTER_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS": "2",
+                "REGISTER_PHONE_VERIFICATION_SAME_SESSION_CODE_RETRY_ATTEMPTS": "0",
             },
             clear=False,
         ), mock.patch.object(
@@ -4266,6 +5060,18 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
             "wait_phone_code_for_session",
             side_effect=[RuntimeError("timeout waiting for sms verification code"), "222222"],
         ), mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "complete_phone_session_for_session",
+            return_value={"requestedAction": "complete", "resultText": "ACCESS_ACTIVATION"},
+        ) as complete_phone_session, mock.patch.object(
+            easyprotocol_runtime.runtime_sms,
+            "cancel_phone_session_for_session",
+            return_value={
+                "requestedAction": "cancel",
+                "resultText": "ACCESS_CANCEL",
+                "refundEligible": True,
+            },
+        ) as cancel_phone_session, mock.patch.object(
             easyprotocol_runtime.runtime_sms,
             "record_terminal_phone_outcome",
             return_value={"ok": True},
@@ -4293,10 +5099,18 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
         )
         record_terminal_phone_outcome.assert_called_once_with(
             phone_number="+15550000011",
-            provider_key="freepool",
+            provider_key="hero_sms",
             terminal_code="sms_code_timeout",
             terminal_message="timeout waiting for sms verification code",
             business_key="openai",
+        )
+        cancel_phone_session.assert_called_once_with(
+            session_id="sms_1",
+            reason="wait_sms_code_timeout",
+        )
+        complete_phone_session.assert_called_once_with(
+            session_id="sms_2",
+            reason="codex_oauth_completed",
         )
         self.assertEqual(
             [
@@ -4304,6 +5118,43 @@ class EasyProtocolRuntimeTests(unittest.TestCase):
                 mock.call(session_id="sms_2", outcome="success", detail="codex_oauth_completed"),
             ],
             report_phone_outcome.call_args_list,
+        )
+
+    def test_hero_sms_next_phone_retry_requires_confirmed_refund_cancel(self) -> None:
+        self.assertTrue(
+            easyprotocol_runtime._can_retry_phone_after_cancel(
+                provider_key="hero_sms",
+                cancel_result={
+                    "requestedAction": "cancel",
+                    "resultText": "ACCESS_CANCEL",
+                    "refundEligible": True,
+                },
+            )
+        )
+        for cancel_result in (
+            {"requestedAction": "cancel", "refundEligible": True},
+            {
+                "requestedAction": "cancel",
+                "resultText": "BAD_STATUS",
+                "refundEligible": True,
+            },
+            {
+                "requestedAction": "cancel",
+                "resultText": "ACCESS_CANCEL",
+                "refundEligible": False,
+            },
+        ):
+            self.assertFalse(
+                easyprotocol_runtime._can_retry_phone_after_cancel(
+                    provider_key="hero_sms",
+                    cancel_result=cancel_result,
+                )
+            )
+        self.assertTrue(
+            easyprotocol_runtime._can_retry_phone_after_cancel(
+                provider_key="sms24",
+                cancel_result={},
+            )
         )
 
     def test_dispatch_obtain_codex_oauth_rejects_missing_login_session_handoff_before_protocol_call(self) -> None:
@@ -4532,10 +5383,25 @@ class EasyEmailRuntimeTests(unittest.TestCase):
 
 class RuntimeProxySupportTests(unittest.TestCase):
     def test_runtime_reachable_proxy_url_rewrites_localhost_when_runtime_host_is_set(self) -> None:
-        with mock.patch.object(runtime_proxy_support, "resolve_easy_proxy_runtime_host", return_value="easy-proxy"):
+        with mock.patch.dict(os.environ, {"EASY_PROXY_RUNTIME_HOST": "easy-proxy"}, clear=False):
             rewritten = runtime_proxy_support.runtime_reachable_proxy_url("http://127.0.0.1:8080")
 
         self.assertEqual("http://easy-proxy:8080", rewritten)
+
+    def test_runtime_reachable_proxy_url_normalizes_remote_mixed_listener(self) -> None:
+        rewritten = runtime_proxy_support.runtime_reachable_proxy_url(
+            "mixed://user%2Bdevice:secret@192.168.15.201:22323"
+        )
+
+        self.assertEqual("http://user%2Bdevice:secret@192.168.15.201:22323", rewritten)
+
+    def test_runtime_reachable_proxy_url_normalizes_and_rewrites_local_mixed_listener(self) -> None:
+        with mock.patch.dict(os.environ, {"EASY_PROXY_RUNTIME_HOST": "192.168.15.201"}, clear=False):
+            rewritten = runtime_proxy_support.runtime_reachable_proxy_url(
+                "mixed://user%2Bdevice:secret@127.0.0.1:22323"
+            )
+
+        self.assertEqual("http://user%2Bdevice:secret@192.168.15.201:22323", rewritten)
 
     def test_flow_network_env_clears_proxy_vars_when_easy_proxy_disabled(self) -> None:
         env = {
@@ -4587,6 +5453,34 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertNotIn("providerRoutingProfileId", payload)
         self.assertNotIn("providerStrategyModeId", payload)
         self.assertNotIn("providerGroupSelections", payload)
+
+    def test_mailbox_request_payload_accepts_temporam_provider_selection(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(easy_email_client, "_wait_mail_service_ready"):
+                payload, provider_key, requested_email = easy_email_client._build_mailbox_request_payload(
+                    provider="auto",
+                    provider_group_selections=["temporam", "temporam"],
+                    default_host_id="python-register-orchestration",
+                    ttl_seconds=90,
+                )
+
+        self.assertEqual("", provider_key)
+        self.assertEqual("", requested_email)
+        self.assertEqual(["temporam"], payload["providerGroupSelections"])
+
+    def test_mailbox_request_payload_accepts_etempmail_provider_selection(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(easy_email_client, "_wait_mail_service_ready"):
+                payload, provider_key, requested_email = easy_email_client._build_mailbox_request_payload(
+                    provider="auto",
+                    provider_group_selections=["im215", "etempmail"],
+                    default_host_id="python-register-orchestration",
+                    ttl_seconds=90,
+                )
+
+        self.assertEqual("", provider_key)
+        self.assertEqual("", requested_email)
+        self.assertEqual(["im215", "etempmail"], payload["providerGroupSelections"])
 
     def test_mailbox_request_payload_defaults_to_recoverable_provider_levels(self) -> None:
         with mock.patch.dict(
@@ -6356,7 +7250,7 @@ class RuntimeMailboxTests(unittest.TestCase):
 
         self.assertEqual("candidate@outside.test", resolved.email)
         self.assertEqual(1, len(create_kwargs))
-        self.assertEqual("auto", create_kwargs[0].get("provider"))
+        self.assertEqual("mail2925", create_kwargs[0].get("provider"))
         self.assertNotIn("mailcreate_domain", create_kwargs[0])
 
     def test_resolve_mailbox_uses_business_domain_pool_when_planned_provider_matches_domain_provider(self) -> None:
@@ -6429,6 +7323,79 @@ class RuntimeMailboxTests(unittest.TestCase):
         self.assertEqual(1, len(create_kwargs))
         self.assertEqual("im215", create_kwargs[0].get("provider"))
         self.assertEqual("d.729406.xyz", create_kwargs[0].get("mailcreate_domain"))
+
+    def test_resolve_mailbox_falls_back_to_auto_when_business_domain_pool_only_maps_to_blacklisted_provider(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="cloudflare_temp_email",
+            email="safe@fallback.test",
+            ref="cloudflare_temp_email:session",
+            session_id="session",
+        )
+        create_kwargs: list[dict[str, object]] = []
+
+        def _create_mailbox(**kwargs):
+            create_kwargs.append(dict(kwargs))
+            return mailbox
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            state_path = output_root / "others" / "register-mailbox-domain-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "businesses": {
+                            "openai": {
+                                "domains": {
+                                    "blocked.test": {
+                                        "provider": "im215",
+                                        "attempts": 4,
+                                        "successes": 2,
+                                        "failures": 2,
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_OUTPUT_ROOT": str(output_root),
+                    "REGISTER_MAILBOX_BUSINESS_KEY": "generic",
+                    "REGISTER_MAILBOX_BUSINESS_RETRY_ATTEMPTS": "1",
+                    "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": (
+                        '{"openai":{"domainPool":["blocked.test"],'
+                        '"providerBlacklist":["im215"]}}'
+                    ),
+                },
+                clear=True,
+            ):
+                with mock.patch.object(
+                    runtime_mailbox,
+                    "_resolve_planned_mailbox_provider",
+                    return_value="moemail",
+                ):
+                    with mock.patch.object(
+                        runtime_mailbox,
+                        "create_mailbox",
+                        side_effect=_create_mailbox,
+                    ):
+                        resolved = runtime_mailbox.resolve_mailbox(
+                            preallocated_email=None,
+                            preallocated_session_id=None,
+                            preallocated_mailbox_ref=None,
+                            business_key="openai",
+                        )
+
+        self.assertEqual("safe@fallback.test", resolved.email)
+        self.assertEqual(1, len(create_kwargs))
+        self.assertEqual("auto", create_kwargs[0].get("provider"))
+        self.assertNotIn("mailcreate_domain", create_kwargs[0])
+        self.assertIn("im215", tuple(create_kwargs[0].get("excluded_provider_type_keys") or ()))
 
     def test_resolve_mailbox_business_domain_selection_skips_attempt_avoided_domain(self) -> None:
         blocked_mailbox = runtime_mailbox.Mailbox(
@@ -6506,7 +7473,7 @@ class RuntimeMailboxTests(unittest.TestCase):
 
         self.assertEqual("alternate@safe.test", resolved.email)
         self.assertEqual(1, len(create_kwargs))
-        self.assertEqual("auto", create_kwargs[0].get("provider"))
+        self.assertEqual("im215", create_kwargs[0].get("provider"))
         self.assertNotIn("mailcreate_domain", create_kwargs[0])
         self.assertIn("blocked.test", tuple(create_kwargs[0].get("excluded_domains") or ()))
 
@@ -6727,7 +7694,7 @@ class RuntimeMailboxTests(unittest.TestCase):
 
         self.assertEqual("candidate@safe-mail.test", resolved.email)
         self.assertEqual(1, len(create_kwargs))
-        self.assertEqual("auto", create_kwargs[0].get("provider"))
+        self.assertEqual("mailtm", create_kwargs[0].get("provider"))
         self.assertEqual(
             ("moemail",),
             tuple(create_kwargs[0].get("excluded_provider_type_keys") or ()),

@@ -24,11 +24,12 @@ from others.paths import resolve_shared_root
 # inside the worker's hard timeout.
 ACCOUNT_AUDIT_NON_PROTOCOL_HEADROOM_SECONDS = 100
 
-DEFAULT_EASY_PROXY_BASE_URL_HOST = "http://localhost:19888"
+DEFAULT_EASY_PROXY_BASE_URL_HOST = "http://localhost:29888"
 DEFAULT_EASY_PROXY_BASE_URL_DOCKER = "http://easy-proxy:29888"
+DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST = "127.0.0.1"
 DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER = "easy-proxy"
 DEFAULT_EASY_PROXY_TTL_MINUTES = 30
-DEFAULT_EASY_PROXY_MODE = "auto"
+DEFAULT_EASY_PROXY_MODE = "lease"
 DEFAULT_MAILBOX_TTL_SECONDS = 1800
 DEFAULT_REGISTER_MOEMAIL_DOMAIN_POOL = (
     "sall.cc",
@@ -55,6 +56,10 @@ def _default_easy_proxy_management_base_url() -> str:
     return DEFAULT_EASY_PROXY_BASE_URL_DOCKER if _running_in_docker() else DEFAULT_EASY_PROXY_BASE_URL_HOST
 
 
+def _default_easy_proxy_runtime_host() -> str:
+    return DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER if _running_in_docker() else DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST
+
+
 def _mailbox_runtime_config() -> MailboxRuntimeConfig:
     output_root_text = str(os.environ.get("REGISTER_OUTPUT_ROOT") or "").strip()
     if output_root_text:
@@ -75,7 +80,7 @@ def _proxy_runtime_config() -> ProxyRuntimeConfig:
     return ProxyRuntimeConfig.from_env(
         default_management_base_url=_default_easy_proxy_management_base_url(),
         default_ttl_minutes=DEFAULT_EASY_PROXY_TTL_MINUTES,
-        default_runtime_host=DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER,
+        default_runtime_host=_default_easy_proxy_runtime_host(),
         default_mode=DEFAULT_EASY_PROXY_MODE,
         running_in_docker=_running_in_docker(),
     )

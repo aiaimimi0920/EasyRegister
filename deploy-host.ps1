@@ -27,6 +27,8 @@ param(
     [int]$MailboxEmailOtpFailureBlacklistThreshold = 6,
     [int]$MailboxEmailOtpProviderFailureBlacklistThreshold = 6,
     [int]$MailboxDynamicBlacklistTtlSeconds = 21600,
+    [ValidateSet("true", "false")]
+    [string]$MailboxDynamicBlacklistExhaustedFallback = "",
     [string]$MailboxBusinessPoliciesJson = "",
     [string]$SmsServiceBaseUrl = "http://easy-sms:8080",
     [string]$SmsServiceApiKey = "",
@@ -44,6 +46,9 @@ param(
     [string]$SmsBusinessPoliciesJson = "",
     [string]$SmsTerminalInvalidPhoneBlacklistSeconds = "",
     [string]$EasyProxyBaseUrl = "http://easy-proxy:29888",
+    [string]$EasyProxyRuntimeHost = "easy-proxy",
+    [string]$EasyProxyManagementUsername = "easyproxy",
+    [string]$EasyProxyManagementPassword = "",
     [string]$EasyProxyApiKey = "",
     [string]$TeamAuthDirHost = "C:\Users\vmjcv\.cli-proxy-api\team",
     [string]$CodexFreeDirHost = "C:\Users\vmjcv\.cli-proxy-api\free",
@@ -131,13 +136,13 @@ $defaultSmsSelectionPlanAttempts = ""
 $defaultPhoneTerminalRetryAttempts = "1"
 $defaultPhoneSmsCodeWaitRetryAttempts = "1"
 $defaultSmsBusinessKey = "openai"
-$defaultSmsProviderBlacklist = "hero_sms"
-$defaultSmsAllowPaid = "false"
+$defaultSmsProviderBlacklist = ""
+$defaultSmsAllowPaid = "true"
 $defaultSmsAllowReuse = "false"
 $defaultSmsMaxBindingsPerPhone = "1"
 $defaultSmsCountryCodes = ""
 $defaultSmsSelectionMode = "balanced"
-$defaultSmsBusinessPoliciesJson = '{"default":{"enabled":false,"providerBlacklist":["hero_sms"],"allowPaid":false},"openai":{"enabled":true,"providerBlacklist":["hero_sms"],"allowPaid":false,"allowReuse":false,"maxBindingsPerPhone":1,"countryCodes":[],"selectionMode":"balanced"}}'
+$defaultSmsBusinessPoliciesJson = '{"default":{"enabled":false,"providerBlacklist":[],"allowPaid":true},"openai":{"enabled":true,"providerBlacklist":[],"allowPaid":true,"allowReuse":false,"maxBindingsPerPhone":1,"countryCodes":[],"selectionMode":"balanced"}}'
 $defaultSmsTerminalInvalidPhoneBlacklistSeconds = "21600"
 
 function Resolve-AbsolutePath {
@@ -886,6 +891,7 @@ $resolvedMailboxDomainBlacklistFailureRate = Resolve-EnvValue -ParameterName 'Ma
 $resolvedMailboxEmailOtpFailureBlacklistThreshold = Resolve-EnvValue -ParameterName 'MailboxEmailOtpFailureBlacklistThreshold' -RuntimeKey 'REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD' -Fallback '6'
 $resolvedMailboxEmailOtpProviderFailureBlacklistThreshold = Resolve-EnvValue -ParameterName 'MailboxEmailOtpProviderFailureBlacklistThreshold' -RuntimeKey 'REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD' -Fallback '6'
 $resolvedMailboxDynamicBlacklistTtlSeconds = Resolve-EnvValue -ParameterName 'MailboxDynamicBlacklistTtlSeconds' -RuntimeKey 'REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS' -Fallback '21600'
+$resolvedMailboxDynamicBlacklistExhaustedFallback = Resolve-EnvValue -ParameterName 'MailboxDynamicBlacklistExhaustedFallback' -RuntimeKey 'REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK' -Fallback 'false' -UseFallbackWhenBlank
 $resolvedMailboxBusinessPoliciesJson = Resolve-EnvValue -ParameterName 'MailboxBusinessPoliciesJson' -RuntimeKey 'REGISTER_MAILBOX_BUSINESS_POLICIES_JSON' -Fallback $defaultMailboxBusinessPoliciesJson
 $resolvedSmsServiceBaseUrl = Resolve-EnvValue -ParameterName 'SmsServiceBaseUrl' -RuntimeKey 'SMS_SERVICE_BASE_URL' -Fallback $defaultSmsServiceBaseUrl -UseFallbackWhenBlank
 $resolvedSmsServiceApiKey = Resolve-EnvValue -ParameterName 'SmsServiceApiKey' -RuntimeKey 'SMS_SERVICE_API_KEY' -Fallback ''
@@ -903,7 +909,10 @@ $resolvedSmsSelectionMode = Resolve-EnvValue -ParameterName 'SmsSelectionMode' -
 $resolvedSmsBusinessPoliciesJson = Resolve-EnvValue -ParameterName 'SmsBusinessPoliciesJson' -RuntimeKey 'REGISTER_SMS_BUSINESS_POLICIES_JSON' -Fallback $defaultSmsBusinessPoliciesJson -UseFallbackWhenBlank
 $resolvedSmsTerminalInvalidPhoneBlacklistSeconds = Resolve-EnvValue -ParameterName 'SmsTerminalInvalidPhoneBlacklistSeconds' -RuntimeKey 'REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS' -Fallback $defaultSmsTerminalInvalidPhoneBlacklistSeconds -UseFallbackWhenBlank
 $resolvedEasyProxyBaseUrl = Resolve-EnvValue -ParameterName 'EasyProxyBaseUrl' -RuntimeKey 'EASY_PROXY_BASE_URL' -Fallback 'http://easy-proxy:29888'
+$resolvedEasyProxyRuntimeHost = Resolve-EnvValue -ParameterName 'EasyProxyRuntimeHost' -RuntimeKey 'EASY_PROXY_RUNTIME_HOST' -Fallback 'easy-proxy' -UseFallbackWhenBlank
 $resolvedEasyProxyApiKey = Resolve-EnvValue -ParameterName 'EasyProxyApiKey' -RuntimeKey 'EASY_PROXY_API_KEY' -Fallback ''
+$resolvedEasyProxyManagementUsername = Resolve-EnvValue -ParameterName 'EasyProxyManagementUsername' -RuntimeKey 'EASY_PROXY_MANAGEMENT_USERNAME' -Fallback 'easyproxy' -UseFallbackWhenBlank
+$resolvedEasyProxyManagementPassword = Resolve-EnvValue -ParameterName 'EasyProxyManagementPassword' -RuntimeKey 'EASY_PROXY_MANAGEMENT_PASSWORD' -Fallback $resolvedEasyProxyApiKey
 $resolvedWorkerCount = Resolve-EnvValue -ParameterName 'WorkerCount' -RuntimeKey 'REGISTER_WORKER_COUNT' -Fallback '10'
 $resolvedMainConcurrencyLimit = Resolve-EnvValue -ParameterName 'MainConcurrencyLimit' -RuntimeKey 'REGISTER_MAIN_CONCURRENCY_LIMIT' -Fallback '5'
 $resolvedContinueConcurrencyLimit = Resolve-EnvValue -ParameterName 'ContinueConcurrencyLimit' -RuntimeKey 'REGISTER_CONTINUE_CONCURRENCY_LIMIT' -Fallback '2'
@@ -1021,6 +1030,7 @@ $env:REGISTER_MAILBOX_DOMAIN_BLACKLIST_FAILURE_RATE = [string]$resolvedMailboxDo
 $env:REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD = [string]$resolvedMailboxEmailOtpFailureBlacklistThreshold
 $env:REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD = [string]$resolvedMailboxEmailOtpProviderFailureBlacklistThreshold
 $env:REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS = [string]$resolvedMailboxDynamicBlacklistTtlSeconds
+$env:REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK = $resolvedMailboxDynamicBlacklistExhaustedFallback
 $env:REGISTER_MAILBOX_BUSINESS_POLICIES_JSON = $resolvedMailboxBusinessPoliciesJson
 $env:SMS_SERVICE_BASE_URL = $resolvedSmsServiceBaseUrl
 $env:SMS_SERVICE_API_KEY = $resolvedSmsServiceApiKey
@@ -1038,6 +1048,9 @@ $env:REGISTER_SMS_SELECTION_MODE = $resolvedSmsSelectionMode
 $env:REGISTER_SMS_BUSINESS_POLICIES_JSON = $resolvedSmsBusinessPoliciesJson
 $env:REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS = $resolvedSmsTerminalInvalidPhoneBlacklistSeconds
 $env:EASY_PROXY_BASE_URL = $resolvedEasyProxyBaseUrl
+$env:EASY_PROXY_RUNTIME_HOST = $resolvedEasyProxyRuntimeHost
+$env:EASY_PROXY_MANAGEMENT_USERNAME = $resolvedEasyProxyManagementUsername
+$env:EASY_PROXY_MANAGEMENT_PASSWORD = $resolvedEasyProxyManagementPassword
 $env:EASY_PROXY_API_KEY = $resolvedEasyProxyApiKey
 
 if ([string]::IsNullOrWhiteSpace($env:EASYREGISTER_TEST_EASY_PROXY_BASE_URL)) {
@@ -1158,6 +1171,7 @@ foreach ($entry in @{
     REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD = $env:REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD
     REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD = $env:REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD
     REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS = $env:REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS
+    REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK = $env:REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK
     REGISTER_MAILBOX_BUSINESS_POLICIES_JSON   = $env:REGISTER_MAILBOX_BUSINESS_POLICIES_JSON
     SMS_SERVICE_BASE_URL                      = $env:SMS_SERVICE_BASE_URL
     SMS_SERVICE_API_KEY                       = $env:SMS_SERVICE_API_KEY
@@ -1175,6 +1189,9 @@ foreach ($entry in @{
     REGISTER_SMS_BUSINESS_POLICIES_JSON       = $env:REGISTER_SMS_BUSINESS_POLICIES_JSON
     REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS = $env:REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS
     EASY_PROXY_BASE_URL                       = $env:EASY_PROXY_BASE_URL
+    EASY_PROXY_RUNTIME_HOST                   = $env:EASY_PROXY_RUNTIME_HOST
+    EASY_PROXY_MANAGEMENT_USERNAME            = $env:EASY_PROXY_MANAGEMENT_USERNAME
+    EASY_PROXY_MANAGEMENT_PASSWORD            = $env:EASY_PROXY_MANAGEMENT_PASSWORD
     EASY_PROXY_API_KEY                        = $env:EASY_PROXY_API_KEY
     REGISTER_OPENAI_UPLOAD_PERCENT            = $env:REGISTER_OPENAI_UPLOAD_PERCENT
     REGISTER_CODEX_FREE_UPLOAD_PERCENT        = $env:REGISTER_CODEX_FREE_UPLOAD_PERCENT

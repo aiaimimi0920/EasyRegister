@@ -70,7 +70,7 @@ def dispatch_easyproxy_step(*, step_type: str, step_input: dict[str, Any]) -> di
         probe_url = str(step_input.get("probe_url") or "").strip() or None
         probe_urls = _coerce_string_list(step_input.get("probe_urls"))
         last_error: Exception | None = None
-        for _ in range(max_acquire_attempts):
+        for attempt_index in range(max_acquire_attempts):
             lease = acquire_flow_proxy_lease(
                 flow_name=str(step_input.get("flow_name") or "").strip() or "codex_openai_account_task",
                 metadata=metadata if isinstance(metadata, dict) else None,
@@ -81,6 +81,10 @@ def dispatch_easyproxy_step(*, step_type: str, step_input: dict[str, Any]) -> di
             )
             if str(lease.proxy_url or "").strip().lower() not in avoid_proxy_urls:
                 return lease.to_payload()
+            if attempt_index + 1 >= max_acquire_attempts:
+                payload = lease.to_payload()
+                payload["reused_avoided_proxy"] = True
+                return payload
             release_flow_proxy_lease(
                 lease,
                 success=False,

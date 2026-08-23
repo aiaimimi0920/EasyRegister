@@ -96,6 +96,42 @@ class ArtifactPoolCommonTests(unittest.TestCase):
             self.assertTrue(restored_path.exists())
             self.assertEqual('{"email":"user@example.com"}', restored_path.read_text(encoding="utf-8"))
 
+    def test_recover_stale_openai_oauth_claims_restores_original_name_and_releases_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            pool_dir = output_root / "openai" / "failed-once"
+            claims_dir = output_root / "others" / "openai-oauth-claims"
+            pool_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            claimed_path = claims_dir / "deadbeef-original.json"
+            claimed_path.write_text('{"email":"user@example.com"}', encoding="utf-8")
+            stale_timestamp = time.time() - 120
+            os.utime(claimed_path, (stale_timestamp, stale_timestamp))
+            artifact_pool_claims.acquire_conversion_lock(
+                shared_root=output_root,
+                email="user@example.com",
+                claimed_path=claimed_path,
+                source_path=claimed_path,
+                stage="continue",
+                worker_label="worker-01",
+                task_index=1,
+            )
+
+            with mock.patch.dict(os.environ, {"REGISTER_OPENAI_OAUTH_STALE_CLAIM_SECONDS": "60"}, clear=False):
+                recovered = artifact_pool_common.recover_stale_openai_oauth_claims(
+                    pool_dir=pool_dir,
+                    claims_dir=claims_dir,
+                    stale_after_seconds=artifact_pool_common.openai_oauth_stale_claim_seconds(),
+                    shared_root=output_root,
+                )
+
+            self.assertEqual(1, len(recovered))
+            self.assertFalse(claimed_path.exists())
+            self.assertTrue((pool_dir / "original.json").exists())
+            self.assertTrue(recovered[0]["lock_released"])
+            lock_dir = output_root / "others" / "openai-oauth-conversion-locks"
+            self.assertEqual([], list(lock_dir.glob("*.json")))
+
     def test_team_expand_progress_normalizes_success_emails(self) -> None:
         progress = artifact_pool_common.team_expand_progress_from_payload(
             {
@@ -442,7 +478,7 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
             artifact["recoveryDataCredential"],
         )
 
-    def test_claim_openai_oauth_artifact_prefers_newer_seed_when_multiple_valid(self) -> None:
+    def test_claim_openai_oauth_artifact_prefers_oldest_seed_for_continue_pool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_root = Path(tmp_dir) / "register-output"
             run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260502-task000001"
@@ -472,10 +508,150 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
                 }
             )
 
+            self.assertEqual("older@example.com", artifact["email"])
+            self.assertEqual("older.json", artifact["original_name"])
+            self.assertFalse(older_seed.exists())
+            self.assertTrue(newer_seed.exists())
+
+    def test_claim_openai_oauth_artifact_prefers_full_seed_over_older_thin_seed_for_continue_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260813-task000001"
+            source_pool_dir = output_root / "openai" / "failed-once"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            older_thin_seed = source_pool_dir / "older-thin.json"
+            newer_full_seed = source_pool_dir / "newer-full.json"
+
+            older_thin_seed.write_text(
+                json.dumps(
+                    {
+                        "outcome": "small_success",
+                        "source": "protocol_small_success",
+                        "email": "older-thin@example.com",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                        "createdAt": "2026-08-13T12:00:00Z",
+                        "platformAuth": {
+                            "clientId": "client",
+                            "redirectUri": "https://chatgpt.com/api/auth/callback/openai",
+                            "codeVerifier": "verifier",
+                            "state": "state",
+                            "nonce": "nonce",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            newer_full_seed.write_text(
+                json.dumps(
+                    {
+                        "email": "newer-full@example.com",
+                        "mailboxRef": "mailbox-ref",
+                        "mailboxSessionId": "session-id",
+                        "createdAt": "2026-08-13T12:01:00Z",
+                        "platformOrganization": {"status": "completed"},
+                        "chatgptLogin": {"status": "completed", "workspaceId": "ws_123"},
+                        "chatgptLoginDetails": {
+                            "clientBootstrap": {"authStatus": "logged_in", "structure": "personal"}
+                        },
+                        "recoveryDataCredential": {"emailAddress": "newer-full@example.com"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            older_ts = time.time() - 3600
+            newer_ts = time.time() - 60
+            os.utime(older_thin_seed, (older_ts, older_ts))
+            os.utime(newer_full_seed, (newer_ts, newer_ts))
+
+            artifact = artifact_pool_claims.claim_openai_oauth_artifact(
+                step_input={
+                    "output_dir": str(run_output_dir),
+                    "pool_dir": str(source_pool_dir),
+                    "worker_label": "worker-01",
+                    "task_index": 1,
+                }
+            )
+
+            self.assertEqual("newer-full@example.com", artifact["email"])
+            self.assertEqual("newer-full.json", artifact["original_name"])
+            self.assertTrue(older_thin_seed.exists())
+            self.assertFalse(newer_full_seed.exists())
+
+    def test_claim_openai_oauth_artifact_prefers_newer_seed_for_pending_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "mixed-runs" / "worker-01" / "run-20260502-task000002"
+            source_pool_dir = output_root / "openai" / "pending"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            older_seed = source_pool_dir / "older.json"
+            newer_seed = source_pool_dir / "newer.json"
+            payload = (
+                '{"mailboxRef":"mailbox-ref","mailboxSessionId":"session-id",'
+                '"createdAt":"2026-05-01T00:00:00Z","platformOrganization":{"status":"completed"},'
+                '"chatgptLogin":{"status":"completed","workspaceId":"ws_123"},'
+                '"chatgptLoginDetails":{"clientBootstrap":{"authStatus":"logged_in","structure":"personal"}}}'
+            )
+            older_seed.write_text('{"email":"older@example.com",' + payload[1:], encoding="utf-8")
+            newer_seed.write_text('{"email":"newer@example.com",' + payload[1:], encoding="utf-8")
+            older_ts = time.time() - 3600
+            newer_ts = time.time() - 60
+            os.utime(older_seed, (older_ts, older_ts))
+            os.utime(newer_seed, (newer_ts, newer_ts))
+
+            artifact = artifact_pool_claims.claim_openai_oauth_artifact(
+                step_input={
+                    "output_dir": str(run_output_dir),
+                    "pool_dir": str(source_pool_dir),
+                    "worker_label": "worker-01",
+                    "task_index": 1,
+                }
+            )
+
             self.assertEqual("newer@example.com", artifact["email"])
             self.assertEqual("newer.json", artifact["original_name"])
             self.assertTrue(older_seed.exists())
             self.assertFalse(newer_seed.exists())
+
+    def test_claim_openai_oauth_artifact_recovers_stale_continue_claim_before_reclaiming(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260814-task000001"
+            source_pool_dir = output_root / "openai" / "failed-once"
+            claims_dir = output_root / "others" / "openai-oauth-claims"
+            source_pool_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            claimed_path = claims_dir / "deadbeef-stale.json"
+            claimed_path.write_text(
+                '{"email":"stale@example.com","mailboxRef":"mailbox-ref","mailboxSessionId":"session-id","createdAt":"2026-08-14T00:00:00Z","platformOrganization":{"status":"completed"},"chatgptLogin":{"status":"completed","workspaceId":"ws_123"},"chatgptLoginDetails":{"clientBootstrap":{"authStatus":"logged_in","structure":"personal"}}}',
+                encoding="utf-8",
+            )
+            stale_timestamp = time.time() - 120
+            os.utime(claimed_path, (stale_timestamp, stale_timestamp))
+            artifact_pool_claims.acquire_conversion_lock(
+                shared_root=output_root,
+                email="stale@example.com",
+                claimed_path=claimed_path,
+                source_path=claimed_path,
+                stage="continue",
+                worker_label="worker-01",
+                task_index=0,
+            )
+
+            with mock.patch.dict(os.environ, {"REGISTER_OPENAI_OAUTH_STALE_CLAIM_SECONDS": "60"}, clear=False):
+                artifact = artifact_pool_claims.claim_openai_oauth_artifact(
+                    step_input={
+                        "output_dir": str(run_output_dir),
+                        "pool_dir": str(source_pool_dir),
+                        "worker_label": "worker-01",
+                        "task_index": 1,
+                    }
+                )
+
+            self.assertEqual("stale@example.com", artifact["email"])
+            self.assertEqual(1, len(artifact["recovered_claims"]))
+            self.assertTrue(Path(artifact["claimed_path"]).exists())
+            self.assertFalse((source_pool_dir / "stale.json").exists())
 
     def test_fill_team_pre_pool_defaults_target_dir_under_others(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -901,6 +1077,65 @@ class ArtifactPoolClaimsTests(unittest.TestCase):
             self.assertEqual(continue_pool_dir.resolve(), Path(result["restore_pool_dir"]).resolve())
             self.assertTrue(failed_once_path.exists())
             self.assertFalse(failed_twice_path.exists())
+
+    def test_finalize_openai_oauth_artifact_deletes_account_deactivated_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260726-task000004"
+            continue_pool_dir = output_root / "openai" / "failed-once"
+            continue_pool_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir = output_root / "others" / "openai-oauth-claims"
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            claimed_path = claims_dir / "claimed.json"
+            claimed_path.write_text('{"email":"retry@example.com"}', encoding="utf-8")
+
+            result = artifact_pool_claims.finalize_openai_oauth_artifact(
+                step_input={
+                    "output_dir": str(run_output_dir),
+                    "artifact": {
+                        "claimed_path": str(claimed_path),
+                        "original_name": "retry.json",
+                        "email": "retry@example.com",
+                        "pool_dir": str(continue_pool_dir),
+                    },
+                    "task_error_code": "deactivated_workspace",
+                    "failure_mode": "delete",
+                }
+            )
+
+            self.assertEqual("deleted_failed_artifact", result["status"])
+            self.assertFalse(claimed_path.exists())
+            self.assertFalse((continue_pool_dir / "retry.json").exists())
+
+    def test_finalize_openai_oauth_artifact_deletes_continue_missing_login_session_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_root = Path(tmp_dir) / "register-output"
+            run_output_dir = output_root / "others" / "continue-runs" / "worker-01" / "run-20260813-task000001"
+            continue_pool_dir = output_root / "openai" / "failed-once"
+            continue_pool_dir.mkdir(parents=True, exist_ok=True)
+            claims_dir = output_root / "others" / "openai-oauth-claims"
+            claims_dir.mkdir(parents=True, exist_ok=True)
+            claimed_path = claims_dir / "claimed.json"
+            claimed_path.write_text('{"email":"retry@example.com"}', encoding="utf-8")
+
+            result = artifact_pool_claims.finalize_openai_oauth_artifact(
+                step_input={
+                    "output_dir": str(run_output_dir),
+                    "artifact": {
+                        "claimed_path": str(claimed_path),
+                        "original_name": "retry.json",
+                        "email": "retry@example.com",
+                        "pool_dir": str(continue_pool_dir),
+                    },
+                    "task_error_code": "authorize_missing_login_session",
+                    "failure_mode": "delete",
+                }
+            )
+
+            self.assertEqual("deleted_failed_artifact", result["status"])
+            self.assertFalse(claimed_path.exists())
+            self.assertFalse((continue_pool_dir / "retry.json").exists())
+            self.assertFalse((output_root / "openai" / "failed-twice" / "retry.json").exists())
 
     def test_finalize_openai_oauth_artifact_routes_transient_continue_failure_without_upload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

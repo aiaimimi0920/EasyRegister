@@ -38,6 +38,7 @@ class SmsSession:
     session_id: str
     phone_number: str
     provider_key: str
+    refundable_cancel_available_at_iso: str = ""
 
 
 @dataclass(frozen=True)
@@ -330,6 +331,9 @@ def _is_retryable_provider_open_error(exc: Exception) -> bool:
             "provider temporarily unavailable",
             "capacity unavailable",
             "sms_capacity_unavailable",
+            "account temporarily suspended",
+            "specific country/service pair",
+            "banned:",
             "timed out",
             "timeout",
         )
@@ -355,7 +359,7 @@ def _is_transient_selection_plan_error(exc: Exception) -> bool:
     )
 
 
-def _is_missing_sms_session_report_error(exc: Exception) -> bool:
+def _is_missing_sms_session_error(exc: Exception) -> bool:
     normalized = str(exc or "").strip().lower()
     return "http 404" in normalized and "sms session not found" in normalized
 
@@ -730,6 +734,9 @@ def open_sms_session(
                     session_id=session_id,
                     phone_number=phone_number,
                     provider_key=effective_provider_key,
+                    refundable_cancel_available_at_iso=str(
+                        session.get("refundableCancelAvailableAtIso") or ""
+                    ).strip(),
                 )
             last_error = RuntimeError("sms service returned invalid sms session")
         return None
@@ -811,7 +818,30 @@ def report_sms_outcome(*, session_id: str, outcome: str, detail: str = "") -> di
             payload,
         )
     except Exception as exc:
-        if _is_missing_sms_session_report_error(exc):
+        if _is_missing_sms_session_error(exc):
+            return {
+                "accepted": False,
+                "ignored": True,
+                "reason": "sms_session_not_found",
+            }
+        raise
+    return dict(response.get("result") or {})
+
+
+def update_sms_session_action(*, session_id: str, action: str) -> dict[str, Any]:
+    effective_session_id = str(session_id or "").strip()
+    normalized_action = str(action or "").strip().lower()
+    if not effective_session_id:
+        raise RuntimeError("sms session_id is required")
+    if normalized_action not in {"request-code", "complete", "cancel"}:
+        raise RuntimeError(f"unsupported sms session action: {normalized_action or '<empty>'}")
+    try:
+        response = _post_json(
+            f"/sms/sessions/{urllib.parse.quote(effective_session_id, safe='')}/actions",
+            {"action": normalized_action},
+        )
+    except Exception as exc:
+        if _is_missing_sms_session_error(exc):
             return {
                 "accepted": False,
                 "ignored": True,

@@ -631,6 +631,10 @@ def _resolve_mailbox_strategy_payload(
                 canonical = "guerrillamail"
             elif value in ("tempmail-lol", "tempmail.lol", "tempmaillol"):
                 canonical = "tempmail-lol"
+            elif value == "temporam":
+                canonical = "temporam"
+            elif value == "etempmail":
+                canonical = "etempmail"
             else:
                 canonical = ""
             if canonical and canonical not in seen:

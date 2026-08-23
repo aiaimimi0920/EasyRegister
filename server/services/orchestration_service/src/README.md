@@ -54,15 +54,25 @@
 - `REGISTER_REQUIRE_EASY_PROXY`
 - `REGISTER_PROXY_HOST_ID`
 - `REGISTER_PROXY_MODE`
-  - 代理链获取模式；当前默认 `auto` 语义会先走 `EasyProxy` 的租约 checkout，再回退到 random-node
-  - 如果要强制只走租约，显式设为 `lease`
-  - 如果要强制只走随机节点，显式设为 `random-node`
+  - 代理链获取模式；当前默认 `lease`，使用新版 `/proxy/leases/checkout` 兼容 API
+  - `auto` 保留为回滚模式：租约失败后回退到旧的 random-node/multi-port 路径
+  - `random-node` 仅用于明确仍启用 legacy multi-port 的 EasyProxy；Local Server 不兼容该路径
 - `REGISTER_PROXY_TTL_MINUTES`
 - `REGISTER_PROXY_UNIQUE_ATTEMPTS`
 - `REGISTER_PROXY_RECENT_WINDOW_SECONDS`
 - `REGISTER_PROXY_FAILURE_WINDOW_SECONDS`
 - `REGISTER_PROXY_LEASE_FAILURE_COOLDOWN_SECONDS`
   - `auto` 模式下，如果租约 checkout 本身超时或临时不可用，会在这个秒数内跳过租约入口，直接走 random-node fallback；默认 `120`
+- `EASY_PROXY_MANAGEMENT_USERNAME`
+  - `/api/auth` 返回 `canonical_pair` 时使用的管理用户名；未设置时使用 EasyProxy 的规范用户名 `easyproxy`
+- `EASY_PROXY_MANAGEMENT_PASSWORD`
+  - EasyProxy 管理密码；优先于旧名称 `EASY_PROXY_API_KEY`
+- `EASY_PROXY_API_TIMEOUT_SECONDS`
+  - 管理 API 单请求超时，默认 `10`
+- `EASY_PROXY_INITIAL_PROBE_MAX_ATTEMPTS`
+  - checkout 返回 `503 INITIAL_PROXY_PROBE_PENDING` 时的最大尝试次数，默认 `4`
+- `EASY_PROXY_INITIAL_PROBE_BACKOFF_SECONDS`
+  - pending 重试的指数退避基数，默认 `1`
 - `REGISTER_TEAM_AUTH_TEMP_BLACKLIST_SECONDS`
   当某个 team / mother 账号在刷新后仍然返回 `token_invalidated` 时，会被临时黑名单隔离的秒数，默认 `3600`
 
@@ -87,9 +97,11 @@ provider 的具体能力差异都由 `EasyEmail` 内部处理。对调度层来�
 - 业务域名池全部命中运行态动态黑名单时，不再强制指定 MoEmail 业务域，而是回到 `EasyEmail` 的 `auto` 路由选择其他可用 provider/domain
 - 如果 `EasyEmail auto` 仍连续返回已被动态黑名单拦截的 provider/domain，默认直接失败并释放邮箱；只有显式设置 `REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK=true` 才会恢复旧的“使用最后一个动态黑名单邮箱兜底”行为
 - `obtain_codex_oauth` 现在默认仍先走无手机号路径；只有当 `EasyProtocol` 返回 `phoneVerificationRequired=true` 时，调度层才会调用 `EasySms`
-- 当前开发默认通过 `REGISTER_SMS_PROVIDER_BLACKLIST=hero_sms` 禁用付费 `hero_sms`
-- `REGISTER_SMS_SELECTION_MODE` 仅在后续显式走 `hero_sms` 这类付费短信 provider 时才有意义；当前默认值使用 `balanced` 以保持与 `EasySms` 原生 API 的合法枚举一致
+- 当前默认允许付费 `hero_sms`；如需回退到免费-only，可重新设置 `REGISTER_SMS_PROVIDER_BLACKLIST=hero_sms` 或 `REGISTER_SMS_ALLOW_PAID=false`
+- `REGISTER_SMS_SELECTION_MODE` 在走 `hero_sms` 这类付费短信 provider 时生效；当前默认值使用 `balanced` 以保持与 `EasySms` 原生 API 的合法枚举一致
 - `REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS` 只影响 OpenAI 明确拒绝某个免费短信号码为 `invalid_phone_number` 后的 provider-phone 黑名单 TTL；默认 `21600` 秒。它不会开启付费短信，也不会放开号码复用。
+- `hero_sms` 收到付费验证码后，如果验证码提交没有完成 OAuth，运行时会写入 `providerCircuitBreakers` 并立即阻止新的 `hero_sms` 会话；该保护没有自动过期时间，也不会被动态 provider 黑名单放宽逻辑绕过。
+- 修复并完成隔离验证前只能查询 breaker：`python scripts/manage-sms-provider-circuit-breaker.py status --provider hero_sms`。人工恢复必须显式执行 `clear --confirm-fixed`，随后再恢复部署侧 provider blacklist。
 
 协议执行能力已经迁出本目录，当前通过下面的服务边界完成：
 

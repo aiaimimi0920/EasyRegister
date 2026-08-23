@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 
@@ -110,6 +111,20 @@ def env_path(name: str, default: str = "") -> Path:
 DEFAULT_EASY_PROTOCOL_TIMEOUT_SECONDS = 900
 DEFAULT_EASY_PROTOCOL_ACCOUNT_AUDIT_TIMEOUT_SECONDS = 300
 DEFAULT_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS = 420.0
+DEFAULT_CONTINUE_WORKER_HARD_TIMEOUT_SECONDS = 900.0
+
+
+def _nonnegative_finite_timeout_seconds(*, name: str, default: float) -> float:
+    raw = env_text(name, "")
+    if not raw:
+        return float(default)
+    try:
+        value = float(raw)
+    except Exception:
+        return float(default)
+    if not math.isfinite(value) or value < 0.0:
+        return float(default)
+    return value
 
 
 def easyprotocol_timeout_seconds() -> int:
@@ -135,13 +150,18 @@ def account_audit_protocol_timeout_seconds() -> int:
 
 def account_audit_worker_hard_timeout_seconds() -> float:
     """Wall clock after which the supervisor kills a stuck account-audit worker."""
-    raw = env_text("REGISTER_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS", "")
-    if raw:
-        try:
-            return float(raw)
-        except Exception:
-            return DEFAULT_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS
-    return DEFAULT_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS
+    return _nonnegative_finite_timeout_seconds(
+        name="REGISTER_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS",
+        default=DEFAULT_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS,
+    )
+
+
+def continue_worker_hard_timeout_seconds() -> float:
+    """Wall clock after which the supervisor replaces a stuck continue worker."""
+    return _nonnegative_finite_timeout_seconds(
+        name="REGISTER_CONTINUE_WORKER_HARD_TIMEOUT_SECONDS",
+        default=DEFAULT_CONTINUE_WORKER_HARD_TIMEOUT_SECONDS,
+    )
 
 
 def resolve_output_root_text(default: str = "/shared/register-output") -> str:

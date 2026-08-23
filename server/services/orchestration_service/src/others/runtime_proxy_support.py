@@ -3,6 +3,7 @@ from __future__ import annotations
 from others.runtime_proxy_env import DEFAULT_EASY_PROXY_BASE_URL_DOCKER
 from others.runtime_proxy_env import DEFAULT_EASY_PROXY_BASE_URL_HOST
 from others.runtime_proxy_env import DEFAULT_EASY_PROXY_MODE
+from others.runtime_proxy_env import DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST
 from others.runtime_proxy_env import DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER
 from others.runtime_proxy_env import DEFAULT_EASY_PROXY_TTL_MINUTES
 from others.runtime_proxy_env import DEFAULT_ORCHESTRATION_HOST_ID
@@ -35,6 +36,7 @@ __all__ = [
     "DEFAULT_EASY_PROXY_BASE_URL_DOCKER",
     "DEFAULT_EASY_PROXY_BASE_URL_HOST",
     "DEFAULT_EASY_PROXY_MODE",
+    "DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST",
     "DEFAULT_EASY_PROXY_PROBE_TIMEOUT_SECONDS",
     "DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER",
     "DEFAULT_EASY_PROXY_TTL_MINUTES",

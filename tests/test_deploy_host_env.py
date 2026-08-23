@@ -75,6 +75,8 @@ class DeployHostEnvTests(unittest.TestCase):
 
             env_values = _read_dotenv(launcher_root / ".deploy-compose.env")
             self.assertEqual("", env_values.get("MAILBOX_SERVICE_API_KEY"))
+            self.assertEqual("easyproxy", env_values.get("EASY_PROXY_MANAGEMENT_USERNAME"))
+            self.assertEqual("", env_values.get("EASY_PROXY_MANAGEMENT_PASSWORD"))
             self.assertEqual("", env_values.get("EASY_PROXY_API_KEY"))
 
     def test_materialize_only_exports_sms_policy_and_dashboard_default(self) -> None:
@@ -142,9 +144,13 @@ class DeployHostEnvTests(unittest.TestCase):
 
             env_values = _read_dotenv(launcher_root / ".deploy-compose.env")
             self.assertEqual("true", env_values.get("REGISTER_DASHBOARD_ENABLED"))
+            self.assertEqual("easyproxy", env_values.get("EASY_PROXY_MANAGEMENT_USERNAME"))
+            self.assertEqual("proxy-test-key", env_values.get("EASY_PROXY_MANAGEMENT_PASSWORD"))
+            self.assertEqual("proxy-test-key", env_values.get("EASY_PROXY_API_KEY"))
             self.assertEqual("6", env_values.get("REGISTER_MAILBOX_EMAIL_OTP_FAILURE_BLACKLIST_THRESHOLD"))
             self.assertEqual("6", env_values.get("REGISTER_MAILBOX_EMAIL_OTP_PROVIDER_FAILURE_BLACKLIST_THRESHOLD"))
             self.assertEqual("21600", env_values.get("REGISTER_MAILBOX_DYNAMIC_BLACKLIST_TTL_SECONDS"))
+            self.assertEqual("false", env_values.get("REGISTER_MAILBOX_DYNAMIC_BLACKLIST_EXHAUSTED_FALLBACK"))
             self.assertEqual("http://easy-sms:8080", env_values.get("SMS_SERVICE_BASE_URL"))
             self.assertEqual("sms-test-key", env_values.get("SMS_SERVICE_API_KEY"))
             self.assertEqual("75", env_values.get("SMS_SERVICE_SELECTION_PLAN_TIMEOUT_SECONDS"))
@@ -152,8 +158,8 @@ class DeployHostEnvTests(unittest.TestCase):
             self.assertEqual("4", env_values.get("REGISTER_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS"))
             self.assertEqual("3", env_values.get("REGISTER_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS"))
             self.assertEqual("openai", env_values.get("REGISTER_SMS_BUSINESS_KEY"))
-            self.assertEqual("hero_sms", env_values.get("REGISTER_SMS_PROVIDER_BLACKLIST"))
-            self.assertEqual("false", env_values.get("REGISTER_SMS_ALLOW_PAID"))
+            self.assertEqual("", env_values.get("REGISTER_SMS_PROVIDER_BLACKLIST"))
+            self.assertEqual("true", env_values.get("REGISTER_SMS_ALLOW_PAID"))
             self.assertEqual("false", env_values.get("REGISTER_SMS_ALLOW_REUSE"))
             self.assertEqual("1", env_values.get("REGISTER_SMS_MAX_BINDINGS_PER_PHONE"))
             self.assertEqual("balanced", env_values.get("REGISTER_SMS_SELECTION_MODE"))
@@ -161,8 +167,8 @@ class DeployHostEnvTests(unittest.TestCase):
 
             policies = env_values.get("REGISTER_SMS_BUSINESS_POLICIES_JSON", "")
             self.assertIn('"openai":{"enabled":true', policies)
-            self.assertIn('"providerBlacklist":["hero_sms"]', policies)
-            self.assertIn('"allowPaid":false', policies)
+            self.assertIn('"providerBlacklist":[]', policies)
+            self.assertIn('"allowPaid":true', policies)
 
     def test_materialize_only_generates_result_pool_mounts_for_credential_root(self) -> None:
         powershell = shutil.which("powershell") or shutil.which("pwsh")

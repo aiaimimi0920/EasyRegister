@@ -42,14 +42,23 @@ def _is_openai_auth_probe_url(probe_url: str) -> bool:
     return False
 
 
-def _is_openai_auth_challenge_probe_response(probe_url: str, status_code: int, body: str) -> bool:
+def _is_openai_auth_challenge_probe_response(
+    probe_url: str,
+    status_code: int,
+    body: str,
+    *,
+    headers: dict[str, object] | None = None,
+) -> bool:
     if int(status_code or 0) != 403:
         return False
     if not _is_openai_auth_probe_url(probe_url):
         return False
+    normalized_headers = {str(key).strip().lower(): str(value or "").strip().lower() for key, value in (headers or {}).items()}
+    if normalized_headers.get("cf-mitigated") == "challenge":
+        return True
     normalized_body = str(body or "").strip().lower()
     if not normalized_body:
-        return True
+        return False
     challenge_markers = (
         "just a moment",
         "cf-mitigated",
@@ -131,10 +140,6 @@ def probe_flow_proxy(
     )
     session.headers.update(
         {
-            "user-agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0"
-            ),
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "accept-language": "en-US,en;q=0.9",
         }
@@ -142,7 +147,7 @@ def probe_flow_proxy(
     try:
         response = session.get(
             probe_url,
-            allow_redirects=False,
+            allow_redirects=True,
             proxies=build_request_proxies(proxy_url),
         )
     finally:
@@ -150,14 +155,26 @@ def probe_flow_proxy(
             session.close()
         except Exception:
             pass
+    response_chain = [
+        *list(getattr(response, "history", None) or []),
+        response,
+    ]
+    for candidate_response in response_chain:
+        candidate_status = int(getattr(candidate_response, "status_code", 0) or 0)
+        candidate_body = str(getattr(candidate_response, "text", "") or "")[:180]
+        if _is_openai_auth_challenge_probe_response(
+            probe_url,
+            candidate_status,
+            candidate_body,
+            headers=dict(getattr(candidate_response, "headers", {}) or {}),
+        ):
+            raise RuntimeError(f"easy_proxy_probe_failed status={candidate_status}")
+
     status_code = int(getattr(response, "status_code", 0) or 0)
     accepted = expected_statuses or {200}
     if status_code in accepted:
         return
-    body_preview = str(getattr(response, "text", "") or "")[:180]
-    if _is_openai_auth_challenge_probe_response(probe_url, status_code, body_preview):
-        return
-    raise RuntimeError(f"easy_proxy_probe_failed status={status_code} url={probe_url} body={body_preview}")
+    raise RuntimeError(f"easy_proxy_probe_failed status={status_code}")
 
 
 def purge_recent_flow_proxy_cache(now_monotonic: float) -> None:
@@ -217,6 +234,7 @@ def classify_easy_proxy_error(exc: Exception, *, probe_url: str | None = None) -
         "connection reset",
         "connection closed",
         "connection refused",
+        "connect tunnel failed",
         "could not connect to server",
         "failed to connect",
         "network unreachable",

@@ -12,6 +12,7 @@ from dst_flow import run_dst_flow_once
 from others.common import ensure_directory as _ensure_directory
 from others.common import json_log as _json_log
 from others.config import CleanupRuntimeConfig
+from others.config import env_float as _env_float
 from others.config import env_int as _env_int
 from others.paths import resolve_shared_root as _shared_root_from_output_root
 from others.runner_artifacts import (
@@ -59,6 +60,10 @@ def account_audit_max_targets() -> int:
     tail rolls over to the next run.
     """
     return max(1, _env_int("REGISTER_ACCOUNT_AUDIT_MAX_TARGETS", DEFAULT_ACCOUNT_AUDIT_MAX_TARGETS))
+
+
+def worker_start_delay_seconds() -> float:
+    return max(0.0, _env_float("REGISTER_WORKER_START_DELAY_SECONDS", 0.0))
 
 
 def build_worker_output_root(*, output_root: Path, worker_id: int) -> Path:
@@ -214,6 +219,23 @@ def worker_loop(
             daemon=True,
             name=f"{worker_label}-team-live-local-sync",
         ).start()
+
+    start_delay_seconds = worker_start_delay_seconds()
+    if start_delay_seconds > 0:
+        _json_log(
+            {
+                "event": "register_worker_start_delayed",
+                "workerId": worker_label,
+                "pid": os.getpid(),
+                "seconds": start_delay_seconds,
+            }
+        )
+        worker_state.sleeping(task_index=int(task_counter.value or 0), seconds=start_delay_seconds)
+        wait_for_stop = getattr(stop_event, "wait", None)
+        if callable(wait_for_stop):
+            wait_for_stop(start_delay_seconds)
+        else:
+            time.sleep(start_delay_seconds)
 
     while not stop_event.is_set():
         if task_slots_exhausted(task_counter=task_counter, max_runs=max_runs):

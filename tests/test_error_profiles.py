@@ -54,7 +54,7 @@ class ErrorProfilesTests(unittest.TestCase):
             by_id["obtain-codex-oauth"]["metadata"]["retry"]["retryProfile"],
         )
         self.assertEqual(
-            1,
+            3,
             by_id["obtain-codex-oauth"]["metadata"]["retry"]["maxAttempts"],
         )
         self.assertEqual(
@@ -404,6 +404,33 @@ class ErrorProfilesTests(unittest.TestCase):
         self.assertTrue(
             result_error_matches(payload, ErrorCodes.TEAM_WORKSPACE_DEACTIVATED, step_id="invite-codex-member")
         )
+
+    def test_result_error_helpers_detect_account_deactivated_as_workspace_deactivated(self) -> None:
+        payload = {
+            "errorStep": "obtain-codex-oauth",
+            "error": "account_deactivated",
+            "stepErrors": {
+                "obtain-codex-oauth": {
+                    "code": "obtain_codex_oauth_failed",
+                    "message": "account_deactivated",
+                }
+            },
+        }
+        self.assertEqual(
+            ErrorCodes.TEAM_WORKSPACE_DEACTIVATED,
+            result_error_code(payload, "obtain-codex-oauth"),
+        )
+        self.assertTrue(
+            result_error_matches(payload, ErrorCodes.TEAM_WORKSPACE_DEACTIVATED, step_id="obtain-codex-oauth")
+        )
+
+    def test_build_error_details_refines_generic_oauth_failed_to_account_deactivated(self) -> None:
+        details = build_error_details(
+            step_type="obtain_codex_oauth",
+            code="obtain_codex_oauth_failed",
+            message="account_deactivated",
+        )
+        self.assertEqual(ErrorCodes.TEAM_WORKSPACE_DEACTIVATED, details["code"])
 
     def test_dst_flow_step_retry_uses_retry_profile(self) -> None:
         statement = dst_flow.DstStatement(

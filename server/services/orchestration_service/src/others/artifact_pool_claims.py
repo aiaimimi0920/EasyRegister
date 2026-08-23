@@ -18,6 +18,8 @@ from others.artifact_pool_common import (
     has_free_personal_oauth_claims,
     load_openai_oauth_seed_validation,
     load_team_expand_progress_from_artifact,
+    openai_oauth_stale_claim_seconds,
+    recover_stale_openai_oauth_claims,
     recover_stale_team_claims,
     reset_claimed_team_expand_cycle_payload,
     resolve_free_manual_oauth_pool,
@@ -50,6 +52,7 @@ from others.common import (
     free_manual_oauth_preserve_codes,
     free_manual_oauth_preserve_enabled,
     json_log,
+    validate_openai_oauth_seed_payload,
     write_json_atomic,
 )
 from others.openai_oauth_conversion_guard import (
@@ -65,6 +68,13 @@ from others.storage import load_json_payload
 
 ROUTING_HISTORY_KEY = "routingHistory"
 ROUTING_HISTORY_MAX_ENTRIES = 20
+
+
+def _continue_failure_should_delete_artifact(*, task_error_code: str) -> bool:
+    normalized = str(task_error_code or "").strip().lower()
+    return normalized in {
+        ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION,
+    }
 
 
 def stamp_routing_history(
@@ -239,12 +249,27 @@ def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]
     shared_root = derive_output_root_from_run_dir(step_input.get("output_dir"))
     pool_dir = resolve_openai_oauth_pool(step_input)
     claims_dir = resolve_openai_oauth_claims(step_input)
+    continue_pool_dir = resolve_openai_oauth_continue_pool(
+        {
+            "output_dir": step_input.get("output_dir"),
+            "openai_oauth_continue_pool_dir": step_input.get("openai_oauth_continue_pool_dir"),
+        }
+    )
     ensure_directory(pool_dir)
     ensure_directory(claims_dir)
+    recovered_claims = recover_stale_openai_oauth_claims(
+        pool_dir=pool_dir,
+        claims_dir=claims_dir,
+        stale_after_seconds=openai_oauth_stale_claim_seconds(),
+        shared_root=shared_root,
+    )
     skipped_existing_codex: list[dict[str, Any]] = []
     skipped_locked: list[dict[str, Any]] = []
+    prefer_oldest = pool_dir.resolve() == continue_pool_dir.resolve()
 
-    for candidate in sort_paths_newest_first([path for path in pool_dir.glob("*.json") if path.is_file()]):
+    candidate_paths = [path for path in pool_dir.glob("*.json") if path.is_file()]
+    validated_candidates: list[tuple[Path, dict[str, Any], bool]] = []
+    for candidate in candidate_paths:
         valid, _, payload = load_openai_oauth_seed_validation(
             candidate,
             allow_protocol_small_seed=True,
@@ -252,6 +277,34 @@ def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]
         if not valid:
             candidate.unlink(missing_ok=True)
             continue
+        full_seed_valid, _ = validate_openai_oauth_seed_payload(
+            payload,
+            enforce_max_age=False,
+        )
+        validated_candidates.append((candidate, payload, full_seed_valid))
+
+    if prefer_oldest:
+        def _continue_candidate_key(item: tuple[Path, dict[str, Any], bool]) -> tuple[int, float, str]:
+            path, _payload, full_seed_valid = item
+            try:
+                modified_at = float(path.stat().st_mtime)
+            except FileNotFoundError:
+                modified_at = float("inf")
+            return (0 if full_seed_valid else 1, modified_at, path.name.lower())
+
+        ordered_candidates = sorted(validated_candidates, key=_continue_candidate_key)
+    else:
+        def _newest_candidate_key(item: tuple[Path, dict[str, Any], bool]) -> tuple[float, str]:
+            path, _payload, _full_seed_valid = item
+            try:
+                modified_at = float(path.stat().st_mtime)
+            except FileNotFoundError:
+                modified_at = 0.0
+            return (-modified_at, path.name.lower())
+
+        ordered_candidates = sorted(validated_candidates, key=_newest_candidate_key)
+
+    for candidate, payload, _full_seed_valid in ordered_candidates:
         email = str(payload.get("email") or "").strip()
         existing_codex = codex_success_lookup(
             shared_root=shared_root,
@@ -335,6 +388,7 @@ def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]
             ).strip(),
             "recoveryDataCredential": _recovery_data_credential_from_payload(payload),
             "conversion_claim": conversion_claim or {},
+            "recovered_claims": recovered_claims,
         }
 
     if skipped_existing_codex or skipped_locked:
@@ -348,6 +402,8 @@ def claim_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, Any]
                 "skippedLockedCount": len(skipped_locked),
                 "skippedExistingCodex": skipped_existing_codex,
                 "skippedLocked": skipped_locked,
+                "recoveredClaimsCount": len(recovered_claims),
+                "recoveredClaims": recovered_claims,
             }
         )
     raise RuntimeError("openai_oauth_pool_empty")
@@ -452,6 +508,12 @@ def finalize_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, A
         pool_dir = original_pool_dir
     ensure_directory(pool_dir)
 
+    should_delete_artifact = failure_mode == "delete" and (
+        not continue_source or _continue_failure_should_delete_artifact(task_error_code=task_error_code)
+    )
+    if task_error_code == ErrorCodes.TEAM_WORKSPACE_DEACTIVATED:
+        should_delete_artifact = True
+
     if not task_error_code:
         success_pool_dir = resolve_openai_oauth_success_pool(step_input)
         stamp_routing_history(
@@ -496,7 +558,7 @@ def finalize_openai_oauth_artifact(*, step_input: dict[str, Any]) -> dict[str, A
             "object_key": str(route_result.get("object_key") or ""),
         }
 
-    if failure_mode == "delete" and not continue_source:
+    if should_delete_artifact:
         claimed_path.unlink(missing_ok=True)
         release_conversion_lock(
             shared_root=shared_root,

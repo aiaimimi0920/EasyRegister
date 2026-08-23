@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from others.config import _resolve_shared_root, env_float
 from others.common import json_log, write_json_atomic
@@ -30,11 +33,30 @@ from others.runtime_proxy_support import (
 )
 
 from shared_proxy import mask_proxy_url
-from shared_proxy.easy_proxy_client import checkout_proxy, checkout_random_node_proxy, release_lease, report_usage
+from shared_proxy.easy_proxy_client import (
+    checkout_proxy,
+    checkout_random_node_proxy,
+    redact_easy_proxy_error,
+    release_lease,
+    report_usage,
+)
 
 
 _COMPAT_CHECKOUT_COOLDOWN_UNTIL: dict[str, float] = {}
 _COMPAT_CHECKOUT_COOLDOWN_STATE_SCHEMA_VERSION = 1
+_EASY_PROXY_DEVICE_ID_MAX_LENGTH = 64
+
+
+def _normalize_random_node_host_id(raw_host_id: object) -> str:
+    normalized = re.sub(r"[^a-z0-9._-]+", "-", str(raw_host_id or "").strip().lower()).strip("._-")
+    if not normalized:
+        normalized = DEFAULT_ORCHESTRATION_HOST_ID
+    if len(normalized) <= _EASY_PROXY_DEVICE_ID_MAX_LENGTH:
+        return normalized
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+    prefix_length = _EASY_PROXY_DEVICE_ID_MAX_LENGTH - len(digest) - 1
+    prefix = normalized[:prefix_length].rstrip("._-") or "host"
+    return f"{prefix}-{digest}"
 
 
 def _normalize_probe_urls(*, probe_url: str | None, probe_urls: object) -> list[str]:
@@ -59,6 +81,50 @@ def _normalize_probe_urls(*, probe_url: str | None, probe_urls: object) -> list[
 
 def _resolve_compat_checkout_failure_cooldown_seconds() -> float:
     return max(0.0, env_float("REGISTER_PROXY_LEASE_FAILURE_COOLDOWN_SECONDS", 120.0))
+
+
+def _default_avoid_recent_success_reuse(stage: str) -> str:
+    override = str(os.environ.get("REGISTER_PROXY_AVOID_RECENT_SUCCESS_REUSE") or "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return "true"
+    if override in {"0", "false", "no", "off"}:
+        return "false"
+    return "false" if str(stage or "").strip().lower() == "registration" else "true"
+
+
+def _openai_probe_kind(probe_url: str) -> str:
+    try:
+        parsed = urlparse(str(probe_url or "").strip())
+    except Exception:
+        return ""
+    host = str(parsed.hostname or "").strip().lower()
+    path = str(parsed.path or "/").strip().lower() or "/"
+    if host == "auth.openai.com" and path.startswith(("/log-in-or-create-account", "/authorize", "/login", "/u/login")):
+        return "auth"
+    if host in {"chatgpt.com", "www.chatgpt.com"} and path.startswith("/auth/"):
+        return "chatgpt"
+    if host == "platform.openai.com" and path.startswith("/login"):
+        return "platform"
+    return ""
+
+
+def _openai_probe_policy_satisfied(
+    probe_results: list[tuple[str, str, bool]],
+) -> bool:
+    if not probe_results:
+        return False
+    kinds = [kind for _, kind, _ in probe_results]
+    if any(not kind for kind in kinds):
+        return False
+    kind_set = set(kinds)
+    if "auth" not in kind_set:
+        return False
+    if "chatgpt" not in kind_set and "platform" not in kind_set:
+        return False
+    success_kinds = {kind for _, kind, success in probe_results if success}
+    return "auth" in success_kinds and (
+        "chatgpt" in success_kinds or "platform" in success_kinds
+    )
 
 
 def _compat_checkout_cooldown_state_path():
@@ -118,7 +184,7 @@ def _write_shared_compat_checkout_cooldown(*, key: str, until_epoch: float) -> N
         json_log(
             {
                 "event": "register_easy_proxy_checkout_cooldown_state_write_failed",
-                "error": str(exc),
+                "error": redact_easy_proxy_error(exc),
             }
         )
 
@@ -161,7 +227,7 @@ def acquire_flow_proxy_lease(
     metadata_text.setdefault("pid", str(os.getpid()))
     metadata_text.setdefault("serviceKey", service_key)
     metadata_text.setdefault("stage", stage)
-    metadata_text.setdefault("avoidRecentSuccessReuse", "true")
+    metadata_text.setdefault("avoidRecentSuccessReuse", _default_avoid_recent_success_reuse(stage))
     metadata_text.setdefault("recentSuccessReuseThreshold", "1")
     metadata_text.setdefault("recentSuccessReuseWindowMinutes", "30")
 
@@ -239,21 +305,100 @@ def acquire_flow_proxy_lease(
 
     def _probe_candidate(raw_proxy_url: str) -> None:
         last_probe_error: Exception | None = None
+        probe_results: list[tuple[str, str, bool]] = []
         for target in probe_targets:
+            kind = _openai_probe_kind(target)
             try:
                 _probe_flow_proxy(
                     proxy_url=raw_proxy_url,
                     probe_url=target,
                     expected_statuses=probe_expected_statuses,
                 )
-                return
+                probe_results.append((target, kind, True))
             except Exception as exc:
+                probe_results.append((target, kind, False))
                 last_probe_error = exc
+        if _openai_probe_policy_satisfied(probe_results):
+            return
+        if probe_results and all(success for _, _, success in probe_results):
+            return
         if last_probe_error is not None:
             raise last_probe_error
 
-    def _try_random_nodes() -> FlowProxyLease | None:
+    def _try_static_proxy() -> FlowProxyLease | None:
         nonlocal last_error
+        raw_proxy_url = str(
+            os.environ.get("REGISTER_STATIC_PROXY_URL")
+            or os.environ.get("REGISTER_PROXY_URL")
+            or ""
+        ).strip()
+        try:
+            proxy_url = runtime_reachable_proxy_url(raw_proxy_url)
+            if not proxy_url:
+                raise RuntimeError("register_static_proxy_url_missing")
+            skip_probe = str(os.environ.get("REGISTER_STATIC_PROXY_SKIP_PROBE") or "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if not skip_probe:
+                static_probe_attempts = max(1, unique_attempts)
+                for probe_attempt in range(1, static_probe_attempts + 1):
+                    try:
+                        _probe_candidate(proxy_url)
+                        break
+                    except Exception as exc:
+                        if probe_attempt >= static_probe_attempts:
+                            raise
+                        json_log(
+                            {
+                                "event": "register_static_proxy_probe_retry",
+                                "flowName": flow_name,
+                                "attempt": probe_attempt,
+                                "maxAttempts": static_probe_attempts,
+                                "error": redact_easy_proxy_error(exc),
+                            }
+                        )
+                        time.sleep(0.1 * probe_attempt)
+            selected = FlowProxyLease(
+                flow_name=flow_name,
+                proxy_url=proxy_url,
+                raw_proxy_url=raw_proxy_url,
+                lease_id="",
+                host_id="",
+                management_base_url="",
+                unique_key="",
+                started_monotonic=time.monotonic(),
+                service_key=service_key,
+                stage=stage,
+                acquisition_mode="static",
+                checked_out=False,
+            )
+            json_log(
+                {
+                    "event": "register_static_proxy_selected",
+                    "flowName": flow_name,
+                    "proxy": mask_proxy_url(proxy_url),
+                    "probeSkipped": skip_probe,
+                }
+            )
+            return selected
+        except Exception as exc:
+            last_error = exc
+            json_log(
+                {
+                    "event": "register_static_proxy_failed",
+                    "flowName": flow_name,
+                    "error": redact_easy_proxy_error(exc),
+                }
+            )
+            return None
+
+    def _try_random_nodes() -> FlowProxyLease | None:
+        nonlocal last_error, host_id
+        if not host_id:
+            host_id = _normalize_random_node_host_id(_build_easy_proxy_host_id(flow_name))
         attempted_proxy_urls: set[str] = set()
         for attempt in range(unique_attempts + 1):
             candidate = None
@@ -272,6 +417,8 @@ def acquire_flow_proxy_lease(
                 candidate = checkout_random_node_proxy(
                     base_url=management_base,
                     api_key=api_key,
+                    runtime_host=getattr(proxy_config, "runtime_host", ""),
+                    host_id=host_id,
                     excluded_proxy_urls=excluded,
                 )
                 raw_proxy_url = str(candidate.get("proxyUrl") or "").strip()
@@ -280,7 +427,7 @@ def acquire_flow_proxy_lease(
                 attempted_proxy_urls.add(unique_key)
                 if not proxy_url:
                     raise RuntimeError("easy_proxy_random_node_missing_proxy_url")
-                _probe_candidate(raw_proxy_url)
+                _probe_candidate(proxy_url)
                 with _ACTIVE_FLOW_PROXY_LOCK:
                     _purge_recent_flow_proxy_cache(time.monotonic())
                     if unique_key in _ACTIVE_FLOW_PROXY_URLS:
@@ -295,7 +442,7 @@ def acquire_flow_proxy_lease(
                     proxy_url=proxy_url,
                     raw_proxy_url=raw_proxy_url,
                     lease_id="",
-                    host_id="",
+                    host_id=host_id,
                     management_base_url=management_base,
                     unique_key=unique_key,
                     started_monotonic=time.monotonic(),
@@ -330,7 +477,7 @@ def acquire_flow_proxy_lease(
                         "attempt": attempt + 1,
                         "nodeTag": node_tag or "unknown",
                         "nodePort": node_port or "unknown",
-                        "error": str(exc),
+                        "error": redact_easy_proxy_error(exc),
                     }
                 )
                 time.sleep(0.1 * (attempt + 1))
@@ -356,7 +503,7 @@ def acquire_flow_proxy_lease(
                 unique_key = proxy_url.lower()
                 if not proxy_url:
                     raise RuntimeError("easy_proxy_checkout_missing_proxy_url")
-                _probe_candidate(raw_proxy_url)
+                _probe_candidate(proxy_url)
                 with _ACTIVE_FLOW_PROXY_LOCK:
                     _purge_recent_flow_proxy_cache(time.monotonic())
                     if unique_key in _ACTIVE_FLOW_PROXY_URLS:
@@ -392,13 +539,14 @@ def acquire_flow_proxy_lease(
                 candidate_lease_id = str((candidate or {}).get("id") or "").strip()
                 candidate_proxy_url = runtime_reachable_proxy_url(str((candidate or {}).get("proxyUrl") or "").strip())
                 local_route_reuse = _is_local_route_reuse_error(str(exc))
+                failure_class = ""
                 json_log(
                     {
                         "event": "register_easy_proxy_checkout_failed",
                         "flowName": flow_name,
                         "attempt": attempt + 1,
                         "proxy": mask_proxy_url(candidate_proxy_url),
-                        "error": str(exc),
+                        "error": redact_easy_proxy_error(exc),
                     }
                 )
                 if candidate_lease_id:
@@ -422,6 +570,9 @@ def acquire_flow_proxy_lease(
                 if _is_local_route_reuse_error(str(exc)) and "recent_route_reuse" in str(exc).strip().lower():
                     time.sleep(0.1 * (attempt + 1))
                     continue
+                if candidate_lease_id and failure_class == "route_failure" and attempt < unique_attempts:
+                    time.sleep(0.1 * (attempt + 1))
+                    continue
                 if _should_abort_compat_retry(exc):
                     if not local_route_reuse and not candidate_lease_id and not candidate_proxy_url:
                         _mark_compat_checkout_cooldown(exc)
@@ -429,6 +580,8 @@ def acquire_flow_proxy_lease(
                 time.sleep(0.1 * (attempt + 1))
         return None
 
+    if mode == "static":
+        lease = _try_static_proxy()
     if mode in {"auto", "lease"}:
         cooldown_remaining = _compat_checkout_cooldown_remaining(time.monotonic())
         if cooldown_remaining > 0:
@@ -447,7 +600,8 @@ def acquire_flow_proxy_lease(
 
     if lease is None:
         if required:
-            raise RuntimeError(f"easy_proxy_checkout_failed flow={flow_name}: {last_error}") from last_error
+            safe_error = redact_easy_proxy_error(last_error)
+            raise RuntimeError(f"easy_proxy_checkout_failed flow={flow_name}: {safe_error}") from last_error
         lease = FlowProxyLease.direct(flow_name=flow_name)
 
     return lease

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import unittest
@@ -107,6 +108,16 @@ class ComposeSmokeTests(unittest.TestCase):
                 audit["workerHardTimeoutSeconds"],
             )
 
+    def test_compose_bounds_continue_worker_runtime(self) -> None:
+        self.assertIn(
+            "REGISTER_CONTINUE_WORKER_HARD_TIMEOUT_SECONDS:-900",
+            MAIN_COMPOSE_PATH.read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "EASYREGISTER_TEST_CONTINUE_WORKER_HARD_TIMEOUT_SECONDS:-900",
+            TEST_COMPOSE_PATH.read_text(encoding="utf-8"),
+        )
+
     def test_deploy_host_generates_protocol_bridge_mount_contract(self) -> None:
         payload = (REPO_ROOT / "deploy-host.ps1").read_text(encoding="utf-8")
         for expected in (
@@ -130,16 +141,41 @@ class ComposeSmokeTests(unittest.TestCase):
         for expected in (
             "easy-register-test",
             "REGISTER_FLOW_SPECS_JSON",
-            "\"role\":\"main\"",
-            "\"role\":\"continue\"",
-            "\"role\":\"account-audit\"",
-            "\"role\":\"team\"",
-            "openai-account-availability-audit-v1.semantic-flow.json",
+            "EASYREGISTER_TEST_FLOW_SPECS_JSON",
+            "EASYREGISTER_TEST_INSTANCE_ROLE",
             "29790",
             "tmp/easyregister-test-output",
             "EasyAiMi",
         ):
             self.assertIn(expected, payload)
+
+    def test_compose_exposes_current_easyproxy_management_contract(self) -> None:
+        for compose_path in (MAIN_COMPOSE_PATH, TEST_COMPOSE_PATH):
+            payload = compose_path.read_text(encoding="utf-8")
+            for expected in (
+                "EASY_PROXY_BASE_URL",
+                "EASY_PROXY_RUNTIME_HOST",
+                "EASY_PROXY_MANAGEMENT_USERNAME",
+                "EASY_PROXY_MANAGEMENT_PASSWORD",
+                "EASY_PROXY_INITIAL_PROBE_MAX_ATTEMPTS",
+                "EASY_PROXY_INITIAL_PROBE_BACKOFF_SECONDS",
+                "REGISTER_PROXY_MODE",
+            ):
+                self.assertIn(expected, payload)
+            self.assertIn("REGISTER_PROXY_MODE:", payload)
+            self.assertIn("PROXY_MODE:-lease", payload)
+
+    def test_compose_allows_runtime_flow_spec_overrides(self) -> None:
+        main_payload = MAIN_COMPOSE_PATH.read_text(encoding="utf-8")
+        test_payload = TEST_COMPOSE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("REGISTER_INSTANCE_ROLE: ${REGISTER_INSTANCE_ROLE:-mixed}", main_payload)
+        self.assertIn("REGISTER_FLOW_PATH: ${REGISTER_FLOW_PATH:-}", main_payload)
+        self.assertIn("REGISTER_FLOW_SPECS_JSON: ${REGISTER_FLOW_SPECS_JSON:-}", main_payload)
+
+        self.assertIn("REGISTER_INSTANCE_ROLE: ${EASYREGISTER_TEST_INSTANCE_ROLE:-mixed}", test_payload)
+        self.assertIn("REGISTER_FLOW_PATH: ${EASYREGISTER_TEST_FLOW_PATH:-}", test_payload)
+        self.assertIn("REGISTER_FLOW_SPECS_JSON: ${EASYREGISTER_TEST_FLOW_SPECS_JSON:-}", test_payload)
 
     def test_test_compose_config_parses_when_docker_is_available(self) -> None:
         docker_path = shutil.which("docker")
@@ -166,6 +202,35 @@ class ComposeSmokeTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(0, result.returncode, msg=result.stderr or result.stdout)
+
+    def test_main_compose_honors_flow_spec_env_override_when_docker_is_available(self) -> None:
+        docker_path = shutil.which("docker")
+        if not docker_path:
+            self.skipTest("docker not available")
+        override = (
+            '[{"name":"override-main","path":"override-main.json","role":"main","weight":9},'
+            '{"name":"override-continue","path":"override-continue.json","role":"continue","weight":4}]'
+        )
+        env = {
+            **os.environ,
+            "REGISTER_OUTPUT_DIR_HOST": str(REPO_ROOT / "tmp" / "compose-smoke-output"),
+            "REGISTER_TEAM_AUTH_DIR_HOST": str(REPO_ROOT / "tmp" / "compose-smoke-team-auth"),
+            "REGISTER_FLOW_SPECS_JSON": override,
+            "REGISTER_INSTANCE_ROLE": "mixed",
+        }
+        result = subprocess.run(
+            [docker_path, "compose", "-f", str(MAIN_COMPOSE_PATH), "config"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(0, result.returncode, msg=result.stderr or result.stdout)
+        self.assertIn("override-main", result.stdout)
+        self.assertIn("override-continue", result.stdout)
+        self.assertNotIn("openai-account-availability-audit", result.stdout)
+        self.assertNotIn("codex-team-expand", result.stdout)
 
 
 if __name__ == "__main__":

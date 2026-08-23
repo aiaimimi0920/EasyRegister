@@ -10,10 +10,11 @@ from typing import Any
 from others.common import json_log
 from others.common_io import write_json_atomic
 from others.config import SmsRuntimeConfig, env_text
+from others.file_lock import release_lock, try_acquire_lock
 from others.local_config import read_easysms_server_api_key
 from others.paths import resolve_shared_root as _shared_root_from_output_root
 
-from shared_sms.easy_sms_client import open_sms_session, report_sms_outcome, wait_sms_code
+from shared_sms.easy_sms_client import open_sms_session, report_sms_outcome, update_sms_session_action, wait_sms_code
 
 
 DEFAULT_EASY_SMS_BASE_URL = "http://localhost:18083"
@@ -26,6 +27,8 @@ DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_THRESHOLD = 5
 DEFAULT_SMS_RATE_LIMIT_PROVIDER_FAILURE_THRESHOLD = 2
 DEFAULT_SMS_PHONE_SCOPED_PROVIDER_FAILURE_WINDOW_SECONDS = 60 * 60
 DEFAULT_SMS_SESSION_LOCAL_RETRY_ATTEMPTS = 6
+DEFAULT_SMS_STATE_LOCK_STALE_SECONDS = 60
+DEFAULT_SMS_STATE_LOCK_TIMEOUT_SECONDS = 5
 PHONE_SCOPED_TERMINAL_CODES = {
     "invalid_phone_number",
     "phone_number_in_use",
@@ -42,6 +45,9 @@ SOFT_SMS_TERMINAL_CODES = {
 }
 PROVIDER_TERMINAL_OUTCOMES_KEY = "providerTerminalOutcomes"
 BUSINESS_PHONE_OUTCOMES_KEY = "businessPhones"
+PROVIDER_CIRCUIT_BREAKERS_KEY = "providerCircuitBreakers"
+PAID_PROVIDER_CIRCUIT_BREAKER_PROVIDERS = {"hero_sms"}
+PAID_CODE_OAUTH_INCOMPLETE_REASON = "paid_code_without_oauth_completion"
 NON_RELAXABLE_PROVIDER_TERMINAL_REASONS = {
     "rate_limit_exceeded",
 }
@@ -49,10 +55,17 @@ SMS_DYNAMIC_PROVIDER_BLACKLIST_RELAXATION_ERRORS = (
     "sms_no_productive_selection_plan_candidates",
     "sms_no_selection_plan_candidates",
 )
+SMS_SAME_ATTEMPT_CAPACITY_RETRY_PROVIDERS = {
+    "hero_sms",
+}
 SMS_PROVIDER_CAPACITY_UNAVAILABLE_MARKERS = (
     "currently unavailable",
+    "has no numbers available",
     "no eligible public numbers",
     "no available public numbers",
+    "account temporarily suspended",
+    "specific country/service pair",
+    "banned:",
 )
 
 
@@ -71,6 +84,7 @@ def _empty_sms_state() -> dict[str, Any]:
         "providers": {},
         BUSINESS_PHONE_OUTCOMES_KEY: {},
         PROVIDER_TERMINAL_OUTCOMES_KEY: {},
+        PROVIDER_CIRCUIT_BREAKERS_KEY: {},
     }
 
 
@@ -97,17 +111,58 @@ def _load_sms_state(*, config: SmsRuntimeConfig | None = None) -> dict[str, Any]
         if isinstance(payload.get(PROVIDER_TERMINAL_OUTCOMES_KEY), dict)
         else {}
     )
+    provider_circuit_breakers = (
+        payload.get(PROVIDER_CIRCUIT_BREAKERS_KEY)
+        if isinstance(payload.get(PROVIDER_CIRCUIT_BREAKERS_KEY), dict)
+        else {}
+    )
     return {
         "phones": dict(phones),
         "providers": dict(providers),
         BUSINESS_PHONE_OUTCOMES_KEY: dict(business_phones),
         PROVIDER_TERMINAL_OUTCOMES_KEY: dict(provider_outcomes),
+        PROVIDER_CIRCUIT_BREAKERS_KEY: dict(provider_circuit_breakers),
     }
 
 
-def _write_sms_state(*, payload: dict[str, Any], config: SmsRuntimeConfig | None = None) -> None:
+def _sms_state_lock_path(config: SmsRuntimeConfig) -> Path:
+    return config.state_path.with_name(f"{config.state_path.name}.lock")
+
+
+def _write_sms_state(
+    *,
+    payload: dict[str, Any],
+    config: SmsRuntimeConfig | None = None,
+    preserve_existing_circuit_breakers: bool = True,
+) -> None:
     resolved_config = config or _sms_runtime_config()
-    write_json_atomic(resolved_config.state_path, payload, include_pid=True, cleanup_temp=True)
+    lock_path = _sms_state_lock_path(resolved_config)
+    deadline = time.monotonic() + DEFAULT_SMS_STATE_LOCK_TIMEOUT_SECONDS
+    acquired = False
+    while time.monotonic() < deadline:
+        if try_acquire_lock(
+            lock_path,
+            stale_after_seconds=DEFAULT_SMS_STATE_LOCK_STALE_SECONDS,
+        ):
+            acquired = True
+            break
+        time.sleep(0.05)
+    if not acquired:
+        raise RuntimeError("sms_state_lock_timeout")
+    try:
+        next_payload = dict(payload)
+        if preserve_existing_circuit_breakers:
+            current_payload = _load_sms_state(config=resolved_config)
+            current_breakers = current_payload.get(PROVIDER_CIRCUIT_BREAKERS_KEY)
+            next_breakers = next_payload.get(PROVIDER_CIRCUIT_BREAKERS_KEY)
+            if isinstance(current_breakers, dict):
+                merged_breakers = dict(current_breakers)
+                if isinstance(next_breakers, dict):
+                    merged_breakers.update(next_breakers)
+                next_payload[PROVIDER_CIRCUIT_BREAKERS_KEY] = merged_breakers
+        write_json_atomic(resolved_config.state_path, next_payload, include_pid=True, cleanup_temp=True)
+    finally:
+        release_lock(lock_path)
 
 
 def _is_phone_scoped_terminal_code(terminal_code: str) -> bool:
@@ -135,6 +190,7 @@ def _prune_sms_state(*, payload: dict[str, Any], now_ts: float | None = None) ->
         "providers": {},
         BUSINESS_PHONE_OUTCOMES_KEY: {},
         PROVIDER_TERMINAL_OUTCOMES_KEY: {},
+        PROVIDER_CIRCUIT_BREAKERS_KEY: {},
     }
     for bucket_key in ("phones", "providers"):
         bucket = payload.get(bucket_key) if isinstance(payload.get(bucket_key), dict) else {}
@@ -251,6 +307,20 @@ def _prune_sms_state(*, payload: dict[str, Any], now_ts: float | None = None) ->
             entries.append(dict(raw_entry))
         if entries:
             normalized[PROVIDER_TERMINAL_OUTCOMES_KEY][provider_key] = entries
+    raw_circuit_breakers = (
+        payload.get(PROVIDER_CIRCUIT_BREAKERS_KEY)
+        if isinstance(payload.get(PROVIDER_CIRCUIT_BREAKERS_KEY), dict)
+        else {}
+    )
+    for raw_provider, raw_value in raw_circuit_breakers.items():
+        provider_key = str(raw_provider or "").strip().lower()
+        if not provider_key or not isinstance(raw_value, dict):
+            continue
+        if str(raw_value.get("state") or "").strip().lower() != "tripped":
+            continue
+        if not bool(raw_value.get("manualResetRequired")):
+            continue
+        normalized[PROVIDER_CIRCUIT_BREAKERS_KEY][provider_key] = dict(raw_value)
     return normalized
 
 
@@ -449,6 +519,104 @@ def _hard_provider_blacklist_from_state(*, payload: dict[str, Any]) -> tuple[str
     return tuple(sorted(hard_blocked))
 
 
+def _provider_circuit_breaker_from_state(*, payload: dict[str, Any]) -> tuple[str, ...]:
+    breakers = (
+        payload.get(PROVIDER_CIRCUIT_BREAKERS_KEY)
+        if isinstance(payload.get(PROVIDER_CIRCUIT_BREAKERS_KEY), dict)
+        else {}
+    )
+    return tuple(
+        sorted(
+            str(provider_key or "").strip().lower()
+            for provider_key, raw_value in breakers.items()
+            if str(provider_key or "").strip()
+            and isinstance(raw_value, dict)
+            and str(raw_value.get("state") or "").strip().lower() == "tripped"
+            and bool(raw_value.get("manualResetRequired"))
+        )
+    )
+
+
+def _is_paid_provider_circuit_breaker_enabled(provider_key: str) -> bool:
+    return str(provider_key or "").strip().lower() in PAID_PROVIDER_CIRCUIT_BREAKER_PROVIDERS
+
+
+def trip_paid_provider_circuit_breaker(
+    *,
+    provider_key: str,
+    business_key: str | None = None,
+    session_id: str | None = None,
+    failure_stage: str = "submit_phone_verification_code",
+    error_type: str = "phone_verification_downstream_failure",
+) -> dict[str, Any]:
+    normalized_provider = str(provider_key or "").strip().lower()
+    if not _is_paid_provider_circuit_breaker_enabled(normalized_provider):
+        return {
+            "tripped": False,
+            "providerKey": normalized_provider,
+            "reason": "provider_not_configured_for_paid_circuit_breaker",
+        }
+    config = _sms_runtime_config()
+    payload = _prune_sms_state(payload=_load_sms_state(config=config))
+    now = datetime.now(timezone.utc)
+    record = {
+        "state": "tripped",
+        "reason": PAID_CODE_OAUTH_INCOMPLETE_REASON,
+        "manualResetRequired": True,
+        "businessKey": str(business_key or "").strip().lower(),
+        "sessionId": str(session_id or "").strip(),
+        "failureStage": str(failure_stage or "").strip()[:120],
+        "errorType": str(error_type or "").strip()[:160],
+        "trippedAt": now.isoformat().replace("+00:00", "Z"),
+        "trippedAtTs": now.timestamp(),
+    }
+    payload.setdefault(PROVIDER_CIRCUIT_BREAKERS_KEY, {})[normalized_provider] = record
+    _write_sms_state(payload=payload, config=config)
+    json_log(
+        {
+            "event": "register_sms_paid_provider_circuit_breaker_tripped",
+            "providerKey": normalized_provider,
+            "reason": PAID_CODE_OAUTH_INCOMPLETE_REASON,
+            "manualResetRequired": True,
+            "businessKey": record["businessKey"],
+            "sessionId": record["sessionId"],
+            "failureStage": record["failureStage"],
+            "errorType": record["errorType"],
+        }
+    )
+    return {
+        "tripped": True,
+        "providerKey": normalized_provider,
+        "reason": PAID_CODE_OAUTH_INCOMPLETE_REASON,
+        "manualResetRequired": True,
+    }
+
+
+def clear_paid_provider_circuit_breaker(*, provider_key: str) -> dict[str, Any]:
+    normalized_provider = str(provider_key or "").strip().lower()
+    config = _sms_runtime_config()
+    payload = _prune_sms_state(payload=_load_sms_state(config=config))
+    breakers = payload.setdefault(PROVIDER_CIRCUIT_BREAKERS_KEY, {})
+    existed = normalized_provider in breakers
+    breakers.pop(normalized_provider, None)
+    _write_sms_state(
+        payload=payload,
+        config=config,
+        preserve_existing_circuit_breakers=False,
+    )
+    json_log(
+        {
+            "event": "register_sms_paid_provider_circuit_breaker_cleared",
+            "providerKey": normalized_provider,
+            "existed": existed,
+        }
+    )
+    return {
+        "cleared": existed,
+        "providerKey": normalized_provider,
+    }
+
+
 def _resolve_sms_terminal_phone_blacklist_seconds() -> int:
     raw = str(
         os.environ.get("REGISTER_SMS_TERMINAL_PHONE_BLACKLIST_SECONDS")
@@ -581,6 +749,13 @@ def _provider_capacity_unavailable_from_open_error(exc: BaseException) -> str:
     if end <= start:
         return ""
     return message[start:end].strip().lower()
+
+
+def _should_retry_provider_after_capacity_unavailable_in_same_attempt(provider_key: str) -> bool:
+    normalized_provider_key = str(provider_key or "").strip().lower()
+    if not normalized_provider_key:
+        return False
+    return normalized_provider_key in SMS_SAME_ATTEMPT_CAPACITY_RETRY_PROVIDERS
 
 
 def _match_phone_country_code(*, phone_number: str, country_codes: tuple[str, ...]) -> str:
@@ -772,6 +947,8 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
     )
     blocked_provider_phone_pairs = set(provider_phone_blacklist)
     hard_blocked_providers = set(_hard_provider_blacklist_from_state(payload=state_payload))
+    circuit_breaker_providers = set(_provider_circuit_breaker_from_state(payload=state_payload))
+    hard_blocked_providers |= circuit_breaker_providers
     dynamic_blocked_providers = set(
         _provider_blacklist_from_repeated_phone_scoped_state(payload=state_payload)
     )
@@ -817,6 +994,17 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
                     terminal_code="provider_capacity_unavailable",
                     terminal_message=str(exc),
                 )
+                if _should_retry_provider_after_capacity_unavailable_in_same_attempt(
+                    capacity_unavailable_provider
+                ):
+                    json_log(
+                        {
+                            "event": "register_sms_provider_capacity_same_attempt_retry",
+                            "providerKey": capacity_unavailable_provider,
+                            "reason": "provider_capacity_unavailable",
+                        }
+                    )
+                    continue
                 current_capacity_unavailable_providers.add(capacity_unavailable_provider)
                 attempt_provider_blacklist.add(capacity_unavailable_provider)
                 continue
@@ -906,6 +1094,7 @@ def open_phone_session_for_business(*, business_key: str | None = None) -> dict[
         "sessionId": session.session_id,
         "phoneNumber": session.phone_number,
         "providerKey": session.provider_key,
+        "refundableCancelAvailableAtIso": session.refundable_cancel_available_at_iso,
     }
 
 
@@ -938,3 +1127,135 @@ def report_phone_outcome_for_session(*, session_id: str, outcome: str, detail: s
         outcome=str(outcome or "").strip(),
         detail=str(detail or "").strip(),
     )
+
+
+def request_phone_code_for_session(*, session_id: str, reason: str = "") -> dict[str, Any]:
+    ensure_easy_sms_env_defaults()
+    effective_session_id = str(session_id or "").strip()
+    if not effective_session_id:
+        return {
+            "accepted": False,
+            "ignored": True,
+            "reason": "missing_session_id",
+        }
+    try:
+        result = update_sms_session_action(
+            session_id=effective_session_id,
+            action="request-code",
+        )
+    except Exception as exc:
+        json_log(
+            {
+                "event": "register_sms_session_request_code_failed",
+                "sessionId": effective_session_id,
+                "reason": str(reason or "").strip(),
+                "error": str(exc),
+            }
+        )
+        return {
+            "accepted": False,
+            "ignored": False,
+            "reason": "request_code_failed",
+            "detail": str(exc),
+        }
+    json_log(
+        {
+            "event": "register_sms_session_request_code_requested",
+            "sessionId": effective_session_id,
+            "reason": str(reason or "").strip(),
+            "providerKey": str(result.get("providerKey") or "").strip(),
+            "sessionMode": str(result.get("sessionMode") or "").strip(),
+            "requestedAction": str(result.get("requestedAction") or "").strip(),
+        }
+    )
+    normalized_action = str(result.get("requestedAction") or "").strip().lower()
+    accepted = normalized_action == "request-code"
+    return {
+        "accepted": accepted,
+        **dict(result),
+    }
+
+
+def complete_phone_session_for_session(*, session_id: str, reason: str = "") -> dict[str, Any]:
+    ensure_easy_sms_env_defaults()
+    effective_session_id = str(session_id or "").strip()
+    if not effective_session_id:
+        return {
+            "accepted": False,
+            "ignored": True,
+            "reason": "missing_session_id",
+        }
+    try:
+        result = update_sms_session_action(
+            session_id=effective_session_id,
+            action="complete",
+        )
+    except Exception as exc:
+        json_log(
+            {
+                "event": "register_sms_session_complete_failed",
+                "sessionId": effective_session_id,
+                "reason": str(reason or "").strip(),
+                "error": str(exc),
+            }
+        )
+        return {
+            "accepted": False,
+            "ignored": False,
+            "reason": "complete_failed",
+            "detail": str(exc),
+        }
+    json_log(
+        {
+            "event": "register_sms_session_completed",
+            "sessionId": effective_session_id,
+            "reason": str(reason or "").strip(),
+            "providerKey": str(result.get("providerKey") or "").strip(),
+            "sessionMode": str(result.get("sessionMode") or "").strip(),
+            "requestedAction": str(result.get("requestedAction") or "").strip(),
+        }
+    )
+    return result
+
+
+def cancel_phone_session_for_session(*, session_id: str, reason: str = "") -> dict[str, Any]:
+    ensure_easy_sms_env_defaults()
+    effective_session_id = str(session_id or "").strip()
+    if not effective_session_id:
+        return {
+            "accepted": False,
+            "ignored": True,
+            "reason": "missing_session_id",
+        }
+    try:
+        result = update_sms_session_action(
+            session_id=effective_session_id,
+            action="cancel",
+        )
+    except Exception as exc:
+        json_log(
+            {
+                "event": "register_sms_session_cancel_failed",
+                "sessionId": effective_session_id,
+                "reason": str(reason or "").strip(),
+                "error": str(exc),
+            }
+        )
+        return {
+            "accepted": False,
+            "ignored": False,
+            "reason": "cancel_failed",
+            "detail": str(exc),
+        }
+    json_log(
+        {
+            "event": "register_sms_session_cancelled",
+            "sessionId": effective_session_id,
+            "reason": str(reason or "").strip(),
+            "providerKey": str(result.get("providerKey") or "").strip(),
+            "sessionMode": str(result.get("sessionMode") or "").strip(),
+            "refundEligible": bool(result.get("refundEligible")),
+            "requestedAction": str(result.get("requestedAction") or "").strip(),
+        }
+    )
+    return result

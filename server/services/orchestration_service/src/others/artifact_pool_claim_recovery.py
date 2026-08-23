@@ -153,6 +153,70 @@ def recover_stale_team_claims(
     return recovered
 
 
+def openai_oauth_stale_claim_seconds() -> int:
+    raw = str(os.environ.get("REGISTER_OPENAI_OAUTH_STALE_CLAIM_SECONDS") or "900").strip()
+    try:
+        return max(0, int(float(raw)))
+    except Exception:
+        return 900
+
+
+def recover_stale_openai_oauth_claims(
+    *,
+    pool_dir: Path,
+    claims_dir: Path,
+    stale_after_seconds: int,
+    shared_root: Path,
+) -> list[dict[str, Any]]:
+    if stale_after_seconds <= 0:
+        return []
+
+    from others.openai_oauth_conversion_guard import release_conversion_lock
+
+    recovered: list[dict[str, Any]] = []
+    now = time.time()
+    for claimed_path in sorted(claims_dir.glob("*.json"), key=lambda path: path.name.lower()):
+        try:
+            age_seconds = max(0.0, now - claimed_path.stat().st_mtime)
+        except FileNotFoundError:
+            continue
+        if age_seconds < stale_after_seconds:
+            continue
+        original_name = derive_original_name_from_claim(claimed_path)
+        email = ""
+        try:
+            payload = load_json_payload(claimed_path)
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            email = str(payload.get("email") or "").strip()
+        try:
+            restored_path = restore_to_pool(
+                claimed_path=claimed_path,
+                pool_dir=pool_dir,
+                preferred_name=original_name,
+            )
+        except FileNotFoundError:
+            continue
+        lock_released = False
+        if email:
+            lock_released = release_conversion_lock(
+                shared_root=shared_root,
+                email=email,
+                claimed_path=claimed_path,
+            )
+        recovered.append(
+            {
+                "claimed_path": str(claimed_path),
+                "restored_path": restored_path,
+                "age_seconds": round(age_seconds, 3),
+                "email": email,
+                "lock_released": lock_released,
+            }
+        )
+    return recovered
+
+
 def safe_count(value: Any, default: int) -> int:
     try:
         return max(0, int(value))

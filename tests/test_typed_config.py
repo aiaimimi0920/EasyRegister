@@ -25,6 +25,7 @@ from others.config import (  # noqa: E402
     env_percent_value,
     env_ratio,
 )
+from others import preflight, runtime_proxy_env  # noqa: E402
 from others.preflight import validate_runtime_preflight  # noqa: E402
 from others.paths import resolve_shared_root  # noqa: E402
 
@@ -164,6 +165,20 @@ class TypedConfigTests(unittest.TestCase):
 
         self.assertEqual("", config.selection_mode)
         self.assertEqual("", config.resolve_business_policy("openai").selection_mode)
+
+    def test_sms_runtime_config_defaults_allow_paid_when_not_overridden(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_SMS_BUSINESS_KEY": "openai",
+            },
+            clear=True,
+        ):
+            config = SmsRuntimeConfig.from_env(default_state_path=Path("C:/tmp/register-sms-state.json"))
+
+        policy = config.resolve_business_policy("openai")
+        self.assertTrue(config.allow_paid)
+        self.assertTrue(policy.allow_paid)
 
     def test_dashboard_settings_reads_typed_values(self) -> None:
         with mock.patch.dict(
@@ -392,6 +407,76 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual("http://manager:9888", config.management_base_url)
         self.assertEqual(5, config.unique_attempts)
         self.assertEqual("easy-proxy", config.runtime_host)
+
+    def test_easy_proxy_defaults_use_current_management_port_and_lease_api(self) -> None:
+        self.assertEqual("http://localhost:29888", runtime_proxy_env.DEFAULT_EASY_PROXY_BASE_URL_HOST)
+        self.assertEqual("http://localhost:29888", preflight.DEFAULT_EASY_PROXY_BASE_URL_HOST)
+        self.assertEqual("127.0.0.1", runtime_proxy_env.DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST)
+        self.assertEqual("127.0.0.1", preflight.DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST)
+        self.assertEqual("lease", runtime_proxy_env.DEFAULT_EASY_PROXY_MODE)
+        self.assertEqual("lease", preflight.DEFAULT_EASY_PROXY_MODE)
+
+    def test_easy_proxy_host_mode_uses_loopback_runtime_host(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True), \
+            mock.patch.object(runtime_proxy_env, "_running_in_docker", return_value=False), \
+            mock.patch.object(preflight, "_running_in_docker", return_value=False):
+            runtime_config = runtime_proxy_env.proxy_runtime_config()
+            preflight_config = preflight._proxy_runtime_config()
+
+        self.assertEqual("127.0.0.1", runtime_config.runtime_host)
+        self.assertEqual("127.0.0.1", preflight_config.runtime_host)
+
+    def test_proxy_runtime_config_preserves_auto_mode_for_lease_fallback(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"REGISTER_PROXY_MODE": "auto"},
+            clear=True,
+        ):
+            config = ProxyRuntimeConfig.from_env(
+                default_management_base_url="http://localhost:29888",
+                default_ttl_minutes=30,
+                default_runtime_host="easy-proxy",
+                default_mode="lease",
+                running_in_docker=True,
+            )
+
+        self.assertEqual("auto", config.mode)
+
+    def test_proxy_runtime_config_preserves_static_mode(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"REGISTER_PROXY_MODE": "static"},
+            clear=True,
+        ):
+            config = ProxyRuntimeConfig.from_env(
+                default_management_base_url="http://localhost:29888",
+                default_ttl_minutes=30,
+                default_runtime_host="easy-proxy",
+                default_mode="lease",
+                running_in_docker=True,
+            )
+
+        self.assertEqual("static", config.mode)
+
+    def test_proxy_runtime_config_prefers_management_password_over_legacy_api_key(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "EASY_PROXY_MANAGEMENT_PASSWORD": "current-password",
+                "EASY_PROXY_API_KEY": "legacy-password",
+            },
+            clear=True,
+        ):
+            config = ProxyRuntimeConfig.from_env(
+                default_management_base_url="http://localhost:29888",
+                default_ttl_minutes=30,
+                default_runtime_host="easy-proxy",
+                default_mode="lease",
+                running_in_docker=False,
+            )
+
+        self.assertEqual("current-password", config.api_key)
+        self.assertEqual("lease", config.mode)
 
     def test_mailbox_runtime_config_supports_fallback_env_names_and_percent_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

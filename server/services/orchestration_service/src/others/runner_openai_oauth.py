@@ -780,16 +780,9 @@ def backfill_openai_oauth_continue_pool(
     moved: list[dict[str, Any]] = []
     discarded: list[dict[str, Any]] = []
     now = time.time()
-    candidates = _sort_file_paths_newest_first([path for path in source_pool_dir.glob("*.json") if path.is_file()])
-    for source_path in candidates:
-        if len(moved) >= move_budget:
-            break
-        try:
-            age_seconds = max(0.0, now - source_path.stat().st_mtime)
-        except FileNotFoundError:
-            continue
-        if min_age_seconds > 0 and age_seconds < min_age_seconds:
-            continue
+    candidate_paths = [path for path in source_pool_dir.glob("*.json") if path.is_file()]
+    validated_candidates: list[tuple[Path, dict[str, Any], bool]] = []
+    for source_path in _sort_file_paths_newest_first(candidate_paths):
         valid, reason, payload = load_openai_oauth_seed_validation(
             source_path,
             enforce_max_age=False,
@@ -798,6 +791,30 @@ def backfill_openai_oauth_continue_pool(
         if not valid:
             source_path.unlink(missing_ok=True)
             discarded.append({"source_path": str(source_path), "reason": reason})
+            continue
+        full_seed_valid, _ = validate_openai_oauth_seed_payload(
+            payload,
+            enforce_max_age=False,
+        )
+        validated_candidates.append((source_path, payload, full_seed_valid))
+
+    def _continue_prefill_candidate_key(item: tuple[Path, dict[str, Any], bool]) -> tuple[int, float, str]:
+        path, _payload, full_seed_valid = item
+        try:
+            modified_at = float(path.stat().st_mtime)
+        except FileNotFoundError:
+            modified_at = 0.0
+        return (0 if full_seed_valid else 1, -modified_at, path.name.lower())
+
+    validated_candidates.sort(key=_continue_prefill_candidate_key)
+    for source_path, payload, _full_seed_valid in validated_candidates:
+        if len(moved) >= move_budget:
+            break
+        try:
+            age_seconds = max(0.0, now - source_path.stat().st_mtime)
+        except FileNotFoundError:
+            continue
+        if min_age_seconds > 0 and age_seconds < min_age_seconds:
             continue
         destination = continue_pool_dir / source_path.name
         if destination.exists():

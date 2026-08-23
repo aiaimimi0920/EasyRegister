@@ -554,15 +554,22 @@ class ProxyRuntimeConfig:
         mode = env_text("REGISTER_PROXY_MODE", default_mode).lower()
         if mode in {"lease", "compat"}:
             mode = "lease"
+        elif mode == "auto":
+            mode = "auto"
         elif mode in {"random", "random-node", "random_node"}:
             mode = "random-node"
+        elif mode in {"static", "fixed"}:
+            mode = "static"
         else:
             mode = default_mode
         return cls(
             enabled=env_bool("REGISTER_ENABLE_EASY_PROXY", True),
             required_by_default=env_bool("REGISTER_REQUIRE_EASY_PROXY", True),
             management_base_url=management_base_url,
-            api_key=env_text("EASY_PROXY_API_KEY"),
+            api_key=env_first_text(
+                "EASY_PROXY_MANAGEMENT_PASSWORD",
+                "EASY_PROXY_API_KEY",
+            ),
             ttl_minutes=max(1, env_int("REGISTER_PROXY_TTL_MINUTES", env_int("EASY_PROXY_TTL_MINUTES", default_ttl_minutes))),
             mode=mode,
             runtime_host=env_text("EASY_PROXY_RUNTIME_HOST", default_runtime_host) or default_runtime_host,
@@ -912,7 +919,7 @@ class SmsRuntimeConfig:
         return cls(
             business_key=_normalize_mailbox_business_key(env_text("REGISTER_SMS_BUSINESS_KEY", "openai")) or "openai",
             explicit_blacklist_providers=_split_mailbox_providers(env_text("REGISTER_SMS_PROVIDER_BLACKLIST")),
-            allow_paid=env_bool("REGISTER_SMS_ALLOW_PAID", False),
+            allow_paid=env_bool("REGISTER_SMS_ALLOW_PAID", True),
             allow_reuse=env_bool("REGISTER_SMS_ALLOW_REUSE", False),
             max_bindings_per_phone=max(1, env_int("REGISTER_SMS_MAX_BINDINGS_PER_PHONE", 1)),
             country_codes=tuple(item.lower() for item in split_csv(env_text("REGISTER_SMS_COUNTRY_CODES"))),

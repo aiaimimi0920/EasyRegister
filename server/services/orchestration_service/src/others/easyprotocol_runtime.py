@@ -7,10 +7,12 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from others import runtime_sms
+from others.common import json_log
 from others.config_env import (
     account_audit_protocol_timeout_seconds as _account_audit_protocol_timeout_seconds,
 )
@@ -28,6 +30,11 @@ DEFAULT_PROTOCOL_OUTPUT_TARGET_DIR = "/shared/register-output"
 DEFAULT_PROTOCOL_BRIDGE_SUBDIR = "easyregister-bridge"
 DEFAULT_PHONE_VERIFICATION_TERMINAL_RETRY_ATTEMPTS = 5
 DEFAULT_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS = 1
+DEFAULT_PHONE_VERIFICATION_SAME_SESSION_CODE_RETRY_ATTEMPTS = 2
+MAX_HEROSMS_REFUND_CANCEL_WAIT_SECONDS = 5 * 60
+PHONE_VERIFICATION_SAME_SESSION_CODE_RETRY_PROVIDERS = {
+    "hero_sms",
+}
 PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
     "invalid_phone_number",
     "phone_number_in_use",
@@ -36,7 +43,14 @@ PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES = {
     "wrong_otp_code",
 }
 PHONE_VERIFICATION_SUBMIT_EXCEPTION_TERMINAL_MARKERS = (
-    ("invalid_phone_number", ("invalid_phone_number", "invalid phone number")),
+    (
+        "invalid_phone_number",
+        (
+            "invalid_phone_number",
+            "invalid phone number",
+            "detected suspicious behavior from phone numbers similar",
+        ),
+    ),
     ("phone_number_in_use", ("phone_number_in_use", "already used", "already in use", "number in use")),
     ("phone_max_usage_exceeded", ("phone_max_usage_exceeded", "max usage", "maximum usage")),
     ("rate_limit_exceeded", ("rate_limit_exceeded", "rate limit", "too many phone verification", "429", "status=403")),
@@ -47,6 +61,10 @@ PHONE_WALL_RECOVERY_ERROR_MARKERS = (
     "timeout",
     "easyprotocol_transport_failed",
 )
+
+
+class PhoneOauthCompletionIncompleteError(RuntimeError):
+    pass
 
 
 def normalize_easyprotocol_request_url(base_url: str) -> str:
@@ -114,8 +132,69 @@ def phone_verification_sms_code_wait_retry_attempts() -> int:
         return DEFAULT_PHONE_VERIFICATION_SMS_CODE_WAIT_RETRY_ATTEMPTS
 
 
+def phone_verification_same_session_code_retry_attempts() -> int:
+    raw = str(
+        os.environ.get("REGISTER_PHONE_VERIFICATION_SAME_SESSION_CODE_RETRY_ATTEMPTS")
+        or ""
+    ).strip()
+    if not raw:
+        return DEFAULT_PHONE_VERIFICATION_SAME_SESSION_CODE_RETRY_ATTEMPTS
+    try:
+        return max(0, int(float(raw)))
+    except Exception:
+        return DEFAULT_PHONE_VERIFICATION_SAME_SESSION_CODE_RETRY_ATTEMPTS
+
+
 def _is_retryable_phone_terminal_code(terminal_code: str) -> bool:
     return str(terminal_code or "").strip().lower() in PHONE_VERIFICATION_RETRYABLE_TERMINAL_CODES
+
+
+def _supports_same_session_phone_code_retry(provider_key: str) -> bool:
+    return (
+        str(provider_key or "").strip().lower()
+        in PHONE_VERIFICATION_SAME_SESSION_CODE_RETRY_PROVIDERS
+    )
+
+
+def _can_retry_phone_after_cancel(
+    *,
+    provider_key: str,
+    cancel_result: dict[str, Any] | None,
+) -> bool:
+    if str(provider_key or "").strip().lower() != "hero_sms":
+        return True
+    result = dict(cancel_result or {})
+    return (
+        str(result.get("requestedAction") or "").strip().lower() == "cancel"
+        and str(result.get("resultText") or "").strip().upper() == "ACCESS_CANCEL"
+        and bool(result.get("refundEligible"))
+    )
+
+
+def _hero_sms_refund_cancel_wait_seconds(
+    *,
+    phone_session: dict[str, Any],
+    sms_code_received: bool,
+) -> float | None:
+    if str(phone_session.get("providerKey") or "").strip().lower() != "hero_sms":
+        return 0.0
+    if sms_code_received:
+        return 0.0
+    refundable_at = str(
+        phone_session.get("refundableCancelAvailableAtIso") or ""
+    ).strip()
+    if not refundable_at:
+        return 0.0
+    try:
+        refundable_at_ts = datetime.fromisoformat(
+            refundable_at.replace("Z", "+00:00")
+        ).timestamp()
+    except Exception:
+        return None
+    wait_seconds = max(0.0, refundable_at_ts - time.time() + 1.0)
+    if wait_seconds > MAX_HEROSMS_REFUND_CANCEL_WAIT_SECONDS:
+        return None
+    return wait_seconds
 
 
 def _phone_submit_terminal_code_from_exception(exc: BaseException) -> str:
@@ -713,15 +792,95 @@ def dispatch_easyprotocol_step(*, step_type: str, step_input: dict[str, Any]) ->
     return result
 
 
+def _report_phone_outcome_safely(*, session_id: str, outcome: str, detail: str = "") -> bool:
+    try:
+        runtime_sms.report_phone_outcome_for_session(
+            session_id=session_id,
+            outcome=outcome,
+            detail=detail,
+        )
+        return True
+    except Exception as exc:
+        json_log(
+            {
+                "event": "register_sms_outcome_report_failed",
+                "sessionId": str(session_id or "").strip(),
+                "outcome": str(outcome or "").strip(),
+                "errorType": type(exc).__name__,
+            }
+        )
+        return False
+
+
+def _trip_paid_provider_circuit_breaker_safely(
+    *,
+    provider_key: str,
+    business_key: str,
+    session_id: str,
+    failure_stage: str,
+    error_type: str,
+) -> dict[str, Any]:
+    try:
+        return runtime_sms.trip_paid_provider_circuit_breaker(
+            provider_key=provider_key,
+            business_key=business_key,
+            session_id=session_id,
+            failure_stage=failure_stage,
+            error_type=error_type,
+        )
+    except Exception as exc:
+        # Fail closed for this worker when the persistent breaker cannot be written.
+        json_log(
+            {
+                "event": "register_sms_paid_provider_circuit_breaker_persist_failed",
+                "providerKey": str(provider_key or "").strip().lower(),
+                "sessionId": str(session_id or "").strip(),
+                "failureStage": str(failure_stage or "").strip(),
+                "errorType": type(exc).__name__,
+            }
+        )
+        return {
+            "tripped": True,
+            "persisted": False,
+            "providerKey": str(provider_key or "").strip().lower(),
+            "reason": "paid_code_without_oauth_completion",
+        }
+
+
+def _require_completed_phone_oauth_result(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        raise PhoneOauthCompletionIncompleteError("phone_oauth_completion_result_invalid")
+    if result.get("ok") is not True:
+        raise PhoneOauthCompletionIncompleteError("phone_oauth_completion_result_not_ok")
+    if str(result.get("status") or "").strip().lower() != "completed":
+        raise PhoneOauthCompletionIncompleteError("phone_oauth_completion_status_incomplete")
+    success_path = str(
+        result.get("successPath")
+        or result.get("success_path")
+        or ""
+    ).strip()
+    if not success_path:
+        raise PhoneOauthCompletionIncompleteError("phone_oauth_completion_artifact_missing")
+    return result
+
+
 def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, Any], step_input: dict[str, Any]) -> dict[str, Any]:
     initial_result = _normalize_phone_wall_result(initial_result)
     if not bool(initial_result.get("phoneVerificationRequired")):
         return initial_result
 
     resume_context = dict(initial_result.get("resumeContext") or {})
+    proxy_url = str(
+        step_input.get("proxy_url")
+        or step_input.get("proxyUrl")
+        or ""
+    ).strip()
     business_key = str(step_input.get("business_key") or step_input.get("mailbox_business_key") or "openai")
     max_phone_attempts = phone_verification_terminal_retry_attempts()
     max_sms_code_wait_attempts = phone_verification_sms_code_wait_retry_attempts()
+    max_same_session_code_retry_attempts = (
+        phone_verification_same_session_code_retry_attempts()
+    )
     sms_code_wait_failure_count = 0
     for phone_attempt_index in range(max_phone_attempts):
         phone_session = runtime_sms.open_phone_session_for_business(
@@ -729,113 +888,347 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
         )
         phone_number_submitted = False
         phone_failure_stage = "submit_phone_verification_number"
-        try:
-            phone_number_result = invoke_easyprotocol(
-                step_type="submit_phone_verification_number",
-                step_input={
-                    "source_path": step_input.get("source_path"),
-                    "resume_context": resume_context,
-                    "phone_number": phone_session["phoneNumber"],
-                    "phone_session_id": phone_session["sessionId"],
-                },
+        phone_session_cancelled = False
+        phone_session_cancel_result: dict[str, Any] = {}
+        phone_session_completed = False
+        phone_session_complete_result: dict[str, Any] = {}
+        retry_next_phone = False
+        sms_code_received = False
+        phone_provider_circuit_breaker_tripped = False
+        phone_provider_circuit_breaker_persisted = False
+
+        def _cancel_phone_session(reason: str) -> dict[str, Any]:
+            nonlocal phone_session_cancelled, phone_session_cancel_result
+            if phone_session_cancelled:
+                return dict(phone_session_cancel_result)
+            refund_wait_seconds = _hero_sms_refund_cancel_wait_seconds(
+                phone_session=phone_session,
+                sms_code_received=sms_code_received,
             )
-            if isinstance(phone_number_result, dict):
-                updated_resume_context = phone_number_result.get("resumeContext")
-                if isinstance(updated_resume_context, dict) and updated_resume_context:
-                    resume_context = dict(updated_resume_context)
-                if bool(phone_number_result.get("phoneVerificationTerminal")):
-                    terminal_code = str(phone_number_result.get("phoneVerificationTerminalCode") or "").strip()
-                    terminal_message = str(phone_number_result.get("phoneVerificationTerminalMessage") or "").strip()
-                    runtime_sms.record_terminal_phone_outcome(
-                        phone_number=phone_session["phoneNumber"],
-                        provider_key=phone_session["providerKey"],
-                        terminal_code=terminal_code,
-                        terminal_message=terminal_message,
-                        business_key=business_key,
+            if refund_wait_seconds is None:
+                phone_session_cancel_result = {
+                    "accepted": False,
+                    "ignored": True,
+                    "reason": "refund_window_unavailable",
+                    "refundEligible": False,
+                }
+                phone_session_cancelled = True
+                return dict(phone_session_cancel_result)
+            if refund_wait_seconds > 0:
+                time.sleep(refund_wait_seconds)
+            result = runtime_sms.cancel_phone_session_for_session(
+                session_id=phone_session["sessionId"],
+                reason=reason,
+            )
+            phone_session_cancel_result = dict(result or {})
+            phone_session_cancelled = True
+            return dict(phone_session_cancel_result)
+
+        def _complete_phone_session(reason: str) -> dict[str, Any]:
+            nonlocal phone_session_completed, phone_session_complete_result
+            if phone_session_completed:
+                return dict(phone_session_complete_result)
+            result = runtime_sms.complete_phone_session_for_session(
+                session_id=phone_session["sessionId"],
+                reason=reason,
+            )
+            phone_session_complete_result = dict(result or {})
+            phone_session_completed = True
+            return dict(phone_session_complete_result)
+
+        same_session_code_retry_count = 0
+        final_result: Any = None
+        while True:
+            try:
+                if not phone_number_submitted:
+                    phone_number_result = invoke_easyprotocol(
+                        step_type="submit_phone_verification_number",
+                        step_input={
+                            "source_path": step_input.get("source_path"),
+                            "resume_context": resume_context,
+                            "proxy_url": proxy_url,
+                            "phone_number": phone_session["phoneNumber"],
+                            "phone_session_id": phone_session["sessionId"],
+                        },
                     )
-                    runtime_sms.report_phone_outcome_for_session(
-                        session_id=phone_session["sessionId"],
-                        outcome="failure",
-                        detail=terminal_code or terminal_message or "phone_verification_terminal",
-                    )
-                    if (
-                        _is_retryable_phone_terminal_code(terminal_code)
-                        and phone_attempt_index + 1 < max_phone_attempts
-                    ):
-                        continue
-                    return {
-                        "ok": True,
-                        "status": str(phone_number_result.get("status") or "phone_verification_terminal").strip()
-                        or "phone_verification_terminal",
-                        "successPath": str(
-                            initial_result.get("successPath")
-                            or initial_result.get("sourcePath")
-                            or step_input.get("source_path")
-                            or ""
-                        ).strip(),
-                        "sourcePath": str(
-                            step_input.get("source_path")
-                            or initial_result.get("sourcePath")
-                            or initial_result.get("successPath")
-                            or ""
-                        ).strip(),
-                        "pageType": str(phone_number_result.get("pageType") or "").strip() or "add_phone",
-                        "resumeContext": dict(resume_context),
-                        "phoneVerificationAttempted": True,
-                        "phoneVerificationAccepted": False,
-                        "phoneVerificationTerminal": True,
-                        "phoneVerificationTerminalCode": terminal_code,
-                        "phoneVerificationTerminalMessage": terminal_message,
-                        "phoneVerificationTerminalStatusCode": phone_number_result.get("phoneVerificationTerminalStatusCode"),
-                        "phoneProvider": phone_session["providerKey"],
-                        "phoneSessionId": phone_session["sessionId"],
-                        "phoneNumber": phone_session["phoneNumber"],
-                    }
-                phone_number_submitted = True
+                    if isinstance(phone_number_result, dict):
+                        updated_resume_context = phone_number_result.get("resumeContext")
+                        if isinstance(updated_resume_context, dict) and updated_resume_context:
+                            resume_context = dict(updated_resume_context)
+                        if bool(phone_number_result.get("phoneVerificationTerminal")):
+                            terminal_code = str(phone_number_result.get("phoneVerificationTerminalCode") or "").strip()
+                            terminal_message = str(phone_number_result.get("phoneVerificationTerminalMessage") or "").strip()
+                            runtime_sms.record_terminal_phone_outcome(
+                                phone_number=phone_session["phoneNumber"],
+                                provider_key=phone_session["providerKey"],
+                                terminal_code=terminal_code,
+                                terminal_message=terminal_message,
+                                business_key=business_key,
+                            )
+                            cancel_result = _cancel_phone_session("phone_verification_terminal")
+                            _report_phone_outcome_safely(
+                                session_id=phone_session["sessionId"],
+                                outcome="failure",
+                                detail=terminal_code or terminal_message or "phone_verification_terminal",
+                            )
+                            if (
+                                _is_retryable_phone_terminal_code(terminal_code)
+                                and phone_attempt_index + 1 < max_phone_attempts
+                                and _can_retry_phone_after_cancel(
+                                    provider_key=phone_session["providerKey"],
+                                    cancel_result=cancel_result,
+                                )
+                            ):
+                                retry_next_phone = True
+                                break
+                            return {
+                                "ok": True,
+                                "status": str(phone_number_result.get("status") or "phone_verification_terminal").strip()
+                                or "phone_verification_terminal",
+                                "successPath": str(
+                                    initial_result.get("successPath")
+                                    or initial_result.get("sourcePath")
+                                    or step_input.get("source_path")
+                                    or ""
+                                ).strip(),
+                                "sourcePath": str(
+                                    step_input.get("source_path")
+                                    or initial_result.get("sourcePath")
+                                    or initial_result.get("successPath")
+                                    or ""
+                                ).strip(),
+                                "pageType": str(phone_number_result.get("pageType") or "").strip() or "add_phone",
+                                "resumeContext": dict(resume_context),
+                                "phoneVerificationAttempted": True,
+                                "phoneVerificationAccepted": False,
+                                "phoneVerificationTerminal": True,
+                                "phoneVerificationTerminalCode": terminal_code,
+                                "phoneVerificationTerminalMessage": terminal_message,
+                                "phoneVerificationTerminalStatusCode": phone_number_result.get("phoneVerificationTerminalStatusCode"),
+                                "phoneProvider": phone_session["providerKey"],
+                                "phoneSessionId": phone_session["sessionId"],
+                                "phoneNumber": phone_session["phoneNumber"],
+                            }
+                        phone_number_submitted = True
+
                 phone_failure_stage = "wait_sms_code"
-            sms_code = runtime_sms.wait_phone_code_for_session(
-                session_id=phone_session["sessionId"],
-                timeout_seconds=180,
-            )
-            phone_failure_stage = "submit_phone_verification_code"
-            final_result = invoke_easyprotocol(
-                step_type="submit_phone_verification_code",
-                step_input={
-                    "source_path": step_input.get("source_path"),
-                    "resume_context": resume_context,
-                    "sms_code": sms_code,
-                    "phone_session_id": phone_session["sessionId"],
-                },
-            )
-            runtime_sms.report_phone_outcome_for_session(
-                session_id=phone_session["sessionId"],
-                outcome="success",
-                detail="codex_oauth_completed",
-            )
-        except Exception as exc:
-            runtime_sms.report_phone_outcome_for_session(
-                session_id=phone_session["sessionId"],
-                outcome="failure",
-                detail=str(exc),
-            )
-            if not phone_number_submitted and phone_failure_stage == "submit_phone_verification_number":
-                terminal_code = _phone_submit_terminal_code_from_exception(exc)
-                if terminal_code:
+                sms_code = runtime_sms.wait_phone_code_for_session(
+                    session_id=phone_session["sessionId"],
+                    timeout_seconds=180,
+                )
+                sms_code_received = True
+                phone_failure_stage = "submit_phone_verification_code"
+                final_result = invoke_easyprotocol(
+                    step_type="submit_phone_verification_code",
+                    step_input={
+                        "source_path": step_input.get("source_path"),
+                        "resume_context": resume_context,
+                        "proxy_url": proxy_url,
+                        "sms_code": sms_code,
+                        "phone_session_id": phone_session["sessionId"],
+                    },
+                )
+                final_result = _require_completed_phone_oauth_result(final_result)
+                if str(phone_session.get("providerKey") or "").strip().lower() == "hero_sms":
+                    _complete_phone_session("codex_oauth_completed")
+                _report_phone_outcome_safely(
+                    session_id=phone_session["sessionId"],
+                    outcome="success",
+                    detail="codex_oauth_completed",
+                )
+                break
+            except Exception as exc:
+                failure_reported = False
+                if (
+                    phone_number_submitted
+                    and sms_code_received
+                    and phone_failure_stage == "submit_phone_verification_code"
+                ):
+                    circuit_breaker = _trip_paid_provider_circuit_breaker_safely(
+                        provider_key=phone_session["providerKey"],
+                        business_key=business_key,
+                        session_id=phone_session["sessionId"],
+                        failure_stage=phone_failure_stage,
+                        error_type=type(exc).__name__,
+                    )
+                    if bool(circuit_breaker.get("tripped")):
+                        phone_provider_circuit_breaker_tripped = True
+                        phone_provider_circuit_breaker_persisted = bool(
+                            circuit_breaker.get("persisted", True)
+                        )
+                        _complete_phone_session("paid_code_without_oauth_completion")
+                        _report_phone_outcome_safely(
+                            session_id=phone_session["sessionId"],
+                            outcome="failure",
+                            detail="paid_code_without_oauth_completion",
+                        )
+                        failure_reported = True
+                if not phone_number_submitted and phone_failure_stage == "submit_phone_verification_number":
+                    terminal_code = _phone_submit_terminal_code_from_exception(exc)
+                    if terminal_code:
+                        runtime_sms.record_terminal_phone_outcome(
+                            phone_number=phone_session["phoneNumber"],
+                            provider_key=phone_session["providerKey"],
+                            terminal_code=terminal_code,
+                            terminal_message=str(exc),
+                            business_key=business_key,
+                        )
+                        cancel_result = _cancel_phone_session("phone_verification_terminal")
+                        if (
+                            _is_retryable_phone_terminal_code(terminal_code)
+                            and phone_attempt_index + 1 < max_phone_attempts
+                            and _can_retry_phone_after_cancel(
+                                provider_key=phone_session["providerKey"],
+                                cancel_result=cancel_result,
+                            )
+                        ):
+                            _report_phone_outcome_safely(
+                                session_id=phone_session["sessionId"],
+                                outcome="failure",
+                                detail=str(exc),
+                            )
+                            failure_reported = True
+                            retry_next_phone = True
+                            break
+                        _report_phone_outcome_safely(
+                            session_id=phone_session["sessionId"],
+                            outcome="failure",
+                            detail=str(exc),
+                        )
+                        failure_reported = True
+                        return {
+                            "ok": True,
+                            "status": "phone_verification_terminal",
+                            "successPath": str(
+                                initial_result.get("successPath")
+                                or initial_result.get("sourcePath")
+                                or step_input.get("source_path")
+                                or ""
+                            ).strip(),
+                            "sourcePath": str(
+                                step_input.get("source_path")
+                                or initial_result.get("sourcePath")
+                                or initial_result.get("successPath")
+                                or ""
+                            ).strip(),
+                            "pageType": str((resume_context or {}).get("pageType") or "").strip() or "add_phone",
+                            "resumeContext": dict(resume_context),
+                            "phoneVerificationAttempted": True,
+                            "phoneVerificationSubmitted": False,
+                            "phoneVerificationAccepted": False,
+                            "phoneVerificationTerminal": True,
+                            "phoneVerificationTerminalCode": terminal_code,
+                            "phoneVerificationTerminalMessage": str(exc),
+                            "phoneProvider": phone_session["providerKey"],
+                            "phoneSessionId": phone_session["sessionId"],
+                            "phoneNumber": phone_session["phoneNumber"],
+                        }
+                if (
+                    phone_number_submitted
+                    and phone_failure_stage == "wait_sms_code"
+                    and _is_retryable_phone_code_wait_error(exc)
+                ):
+                    if (
+                        _supports_same_session_phone_code_retry(phone_session["providerKey"])
+                        and same_session_code_retry_count < max_same_session_code_retry_attempts
+                    ):
+                        retry_result = runtime_sms.request_phone_code_for_session(
+                            session_id=phone_session["sessionId"],
+                            reason="wait_sms_code_timeout",
+                        )
+                        if bool(retry_result.get("accepted")):
+                            same_session_code_retry_count += 1
+                            phone_failure_stage = "wait_sms_code"
+                            continue
                     runtime_sms.record_terminal_phone_outcome(
                         phone_number=phone_session["phoneNumber"],
                         provider_key=phone_session["providerKey"],
-                        terminal_code=terminal_code,
+                        terminal_code="sms_code_timeout",
                         terminal_message=str(exc),
                         business_key=business_key,
                     )
+                    cancel_result = _cancel_phone_session("wait_sms_code_timeout")
+                    _report_phone_outcome_safely(
+                        session_id=phone_session["sessionId"],
+                        outcome="failure",
+                        detail=str(exc),
+                    )
+                    failure_reported = True
+                    sms_code_wait_failure_count += 1
                     if (
-                        _is_retryable_phone_terminal_code(terminal_code)
+                        sms_code_wait_failure_count < max_sms_code_wait_attempts
                         and phone_attempt_index + 1 < max_phone_attempts
+                        and _can_retry_phone_after_cancel(
+                            provider_key=phone_session["providerKey"],
+                            cancel_result=cancel_result,
+                        )
                     ):
-                        continue
+                        retry_next_phone = True
+                        break
+                if (
+                    not failure_reported
+                    and phone_number_submitted
+                    and phone_failure_stage == "submit_phone_verification_code"
+                    and _is_retryable_phone_code_submission_error(exc)
+                ):
+                    if (
+                        _supports_same_session_phone_code_retry(phone_session["providerKey"])
+                        and same_session_code_retry_count < max_same_session_code_retry_attempts
+                    ):
+                        retry_result = runtime_sms.request_phone_code_for_session(
+                            session_id=phone_session["sessionId"],
+                            reason="submit_phone_verification_code_failed",
+                        )
+                        if bool(retry_result.get("accepted")):
+                            same_session_code_retry_count += 1
+                            phone_failure_stage = "wait_sms_code"
+                            continue
+                    submission_terminal_code = (
+                        _phone_submit_terminal_code_from_exception(exc)
+                        or (
+                            "submit_phone_verification_code_failed"
+                            if _supports_same_session_phone_code_retry(phone_session["providerKey"])
+                            else "wrong_otp_code"
+                        )
+                    )
+                    runtime_sms.record_terminal_phone_outcome(
+                        phone_number=phone_session["phoneNumber"],
+                        provider_key=phone_session["providerKey"],
+                        terminal_code=submission_terminal_code,
+                        terminal_message=str(exc),
+                        business_key=business_key,
+                    )
+                    if str(phone_session.get("providerKey") or "").strip().lower() == "hero_sms":
+                        _complete_phone_session("submit_phone_verification_code_failed")
+                    else:
+                        _cancel_phone_session("submit_phone_verification_code_failed")
+                    _report_phone_outcome_safely(
+                        session_id=phone_session["sessionId"],
+                        outcome="failure",
+                        detail=str(exc),
+                    )
+                    failure_reported = True
+                    if phone_attempt_index + 1 < max_phone_attempts:
+                        retry_next_phone = True
+                        break
+                if not failure_reported:
+                    if phone_number_submitted:
+                        if (
+                            sms_code_received
+                            and str(phone_session.get("providerKey") or "").strip().lower() == "hero_sms"
+                        ):
+                            _complete_phone_session(phone_failure_stage)
+                        else:
+                            _cancel_phone_session(phone_failure_stage)
+                    _report_phone_outcome_safely(
+                        session_id=phone_session["sessionId"],
+                        outcome="failure",
+                        detail=str(exc),
+                    )
+                if phone_number_submitted:
                     return {
                         "ok": True,
-                        "status": "phone_verification_terminal",
+                        "status": "phone_verification_submitted_small_success",
                         "successPath": str(
                             initial_result.get("successPath")
                             or initial_result.get("sourcePath")
@@ -851,51 +1244,19 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
                         "pageType": str((resume_context or {}).get("pageType") or "").strip() or "add_phone",
                         "resumeContext": dict(resume_context),
                         "phoneVerificationAttempted": True,
-                        "phoneVerificationSubmitted": False,
+                        "phoneVerificationSubmitted": True,
                         "phoneVerificationAccepted": False,
-                        "phoneVerificationTerminal": True,
-                        "phoneVerificationTerminalCode": terminal_code,
-                        "phoneVerificationTerminalMessage": str(exc),
+                        "phoneVerificationFailureStage": phone_failure_stage,
+                        "phoneVerificationFailureDetail": str(exc),
+                        "phoneProviderCircuitBreakerTripped": phone_provider_circuit_breaker_tripped,
+                        "phoneProviderCircuitBreakerPersisted": phone_provider_circuit_breaker_persisted,
                         "phoneProvider": phone_session["providerKey"],
                         "phoneSessionId": phone_session["sessionId"],
                         "phoneNumber": phone_session["phoneNumber"],
                     }
-            if (
-                phone_number_submitted
-                and phone_failure_stage == "wait_sms_code"
-                and _is_retryable_phone_code_wait_error(exc)
-            ):
-                runtime_sms.record_terminal_phone_outcome(
-                    phone_number=phone_session["phoneNumber"],
-                    provider_key=phone_session["providerKey"],
-                    terminal_code="sms_code_timeout",
-                    terminal_message=str(exc),
-                    business_key=business_key,
-                )
-                sms_code_wait_failure_count += 1
-                if (
-                    sms_code_wait_failure_count < max_sms_code_wait_attempts
-                    and phone_attempt_index + 1 < max_phone_attempts
-                ):
-                    continue
-            if (
-                phone_number_submitted
-                and phone_failure_stage == "submit_phone_verification_code"
-                and _is_retryable_phone_code_submission_error(exc)
-            ):
-                runtime_sms.record_terminal_phone_outcome(
-                    phone_number=phone_session["phoneNumber"],
-                    provider_key=phone_session["providerKey"],
-                    terminal_code="wrong_otp_code",
-                    terminal_message=str(exc),
-                    business_key=business_key,
-                )
-                if phone_attempt_index + 1 < max_phone_attempts:
-                    continue
-            if phone_number_submitted:
                 return {
                     "ok": True,
-                    "status": "phone_verification_submitted_small_success",
+                    "status": "phone_verification_attempted_small_success",
                     "successPath": str(
                         initial_result.get("successPath")
                         or initial_result.get("sourcePath")
@@ -911,7 +1272,7 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
                     "pageType": str((resume_context or {}).get("pageType") or "").strip() or "add_phone",
                     "resumeContext": dict(resume_context),
                     "phoneVerificationAttempted": True,
-                    "phoneVerificationSubmitted": True,
+                    "phoneVerificationSubmitted": False,
                     "phoneVerificationAccepted": False,
                     "phoneVerificationFailureStage": phone_failure_stage,
                     "phoneVerificationFailureDetail": str(exc),
@@ -919,32 +1280,8 @@ def _maybe_complete_phone_verification_for_oauth(*, initial_result: dict[str, An
                     "phoneSessionId": phone_session["sessionId"],
                     "phoneNumber": phone_session["phoneNumber"],
                 }
-            return {
-                "ok": True,
-                "status": "phone_verification_attempted_small_success",
-                "successPath": str(
-                    initial_result.get("successPath")
-                    or initial_result.get("sourcePath")
-                    or step_input.get("source_path")
-                    or ""
-                ).strip(),
-                "sourcePath": str(
-                    step_input.get("source_path")
-                    or initial_result.get("sourcePath")
-                    or initial_result.get("successPath")
-                    or ""
-                ).strip(),
-                "pageType": str((resume_context or {}).get("pageType") or "").strip() or "add_phone",
-                "resumeContext": dict(resume_context),
-                "phoneVerificationAttempted": True,
-                "phoneVerificationSubmitted": False,
-                "phoneVerificationAccepted": False,
-                "phoneVerificationFailureStage": phone_failure_stage,
-                "phoneVerificationFailureDetail": str(exc),
-                "phoneProvider": phone_session["providerKey"],
-                "phoneSessionId": phone_session["sessionId"],
-                "phoneNumber": phone_session["phoneNumber"],
-            }
+        if retry_next_phone:
+            continue
         if isinstance(final_result, dict):
             final_result["phoneVerificationAttempted"] = True
             final_result["phoneProvider"] = phone_session["providerKey"]

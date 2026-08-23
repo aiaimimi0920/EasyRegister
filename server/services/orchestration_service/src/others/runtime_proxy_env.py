@@ -16,11 +16,12 @@ from shared_proxy import env_flag
 
 
 DEFAULT_ORCHESTRATION_HOST_ID = "python-register-orchestration"
-DEFAULT_EASY_PROXY_BASE_URL_HOST = "http://localhost:19888"
+DEFAULT_EASY_PROXY_BASE_URL_HOST = "http://localhost:29888"
 DEFAULT_EASY_PROXY_BASE_URL_DOCKER = "http://easy-proxy:29888"
+DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST = "127.0.0.1"
 DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER = "easy-proxy"
 DEFAULT_EASY_PROXY_TTL_MINUTES = 30
-DEFAULT_EASY_PROXY_MODE = "auto"
+DEFAULT_EASY_PROXY_MODE = "lease"
 
 
 def _running_in_docker() -> bool:
@@ -33,11 +34,15 @@ def _default_easy_proxy_management_base_url() -> str:
     return DEFAULT_EASY_PROXY_BASE_URL_DOCKER if _running_in_docker() else DEFAULT_EASY_PROXY_BASE_URL_HOST
 
 
+def _default_easy_proxy_runtime_host() -> str:
+    return DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER if _running_in_docker() else DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST
+
+
 def proxy_runtime_config() -> ProxyRuntimeConfig:
     return ProxyRuntimeConfig.from_env(
         default_management_base_url=_default_easy_proxy_management_base_url(),
         default_ttl_minutes=DEFAULT_EASY_PROXY_TTL_MINUTES,
-        default_runtime_host=DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER,
+        default_runtime_host=_default_easy_proxy_runtime_host(),
         default_mode=DEFAULT_EASY_PROXY_MODE,
         running_in_docker=_running_in_docker(),
     )
@@ -67,19 +72,23 @@ def runtime_reachable_proxy_url(proxy_url: str) -> str:
         return raw
     host = str(parsed.hostname or "").strip().lower()
     runtime_host = resolve_easy_proxy_runtime_host()
-    if host not in ("127.0.0.1", "localhost") or not runtime_host:
+    rewrite_host = host in ("127.0.0.1", "localhost") and bool(runtime_host)
+    rewrite_scheme = str(parsed.scheme or "").strip().lower() == "mixed"
+    if not rewrite_host and not rewrite_scheme:
         return raw
-    netloc = runtime_host
-    if parsed.port:
-        netloc = f"{netloc}:{parsed.port}"
-    if parsed.username:
-        auth = parsed.username
-        if parsed.password:
-            auth = f"{auth}:{parsed.password}"
-        netloc = f"{auth}@{netloc}"
+    netloc = parsed.netloc
+    if rewrite_host:
+        netloc = runtime_host
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        if parsed.username:
+            auth = parsed.username
+            if parsed.password:
+                auth = f"{auth}:{parsed.password}"
+            netloc = f"{auth}@{netloc}"
     return urllib.parse.urlunsplit(
         (
-            parsed.scheme or "http",
+            "http" if rewrite_scheme else parsed.scheme or "http",
             netloc,
             parsed.path or "",
             parsed.query or "",

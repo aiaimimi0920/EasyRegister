@@ -240,6 +240,8 @@ def classify_error_code(
         )
     ):
         return ErrorCodes.UNSUPPORTED_EMAIL
+    if "account_deactivated" in combined or "deactivated_workspace" in combined:
+        return ErrorCodes.TEAM_WORKSPACE_DEACTIVATED
     if "registration_disallowed" in combined and "mailbox_provider=" in combined:
         return ErrorCodes.INVALID_REQUEST_ERROR
     if "chat_requirements_failed" in lowered:

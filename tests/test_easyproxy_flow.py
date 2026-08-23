@@ -78,6 +78,44 @@ class EasyProxyFlowTests(unittest.TestCase):
         self.assertEqual(probe_urls, acquire_lease.call_args.kwargs["probe_urls"])
         self.assertEqual({200}, acquire_lease.call_args.kwargs["probe_expected_statuses"])
 
+    def test_acquire_proxy_chain_reuses_avoided_proxy_after_exhaustion(self) -> None:
+        lease = easyproxy_flow.FlowProxyLease(
+            flow_name="codex_openai_account_task",
+            proxy_url="http://easy-proxy:25044",
+            raw_proxy_url="http://easy-proxy:25044",
+            lease_id="lease-1",
+            host_id="host-1",
+            management_base_url="http://easy-proxy:29888",
+            unique_key="http://easy-proxy:25044",
+            started_monotonic=1.0,
+            service_key="openai",
+            stage="registration",
+            acquisition_mode="checkout",
+            checked_out=True,
+        )
+        with mock.patch.object(
+            easyproxy_flow,
+            "acquire_flow_proxy_lease",
+            side_effect=[lease, lease],
+        ) as acquire_lease, mock.patch.object(
+            easyproxy_flow,
+            "release_flow_proxy_lease",
+        ) as release_lease:
+            result = easyproxy_flow.dispatch_easyproxy_step(
+                step_type="acquire_proxy_chain",
+                step_input={
+                    "flow_name": "codex_openai_account_task",
+                    "avoid_proxy_urls": ["http://easy-proxy:25044"],
+                    "max_acquire_attempts": 2,
+                    "required": True,
+                },
+            )
+
+        self.assertEqual("http://easy-proxy:25044", result["proxy_url"])
+        self.assertTrue(result["reused_avoided_proxy"])
+        self.assertEqual(2, acquire_lease.call_count)
+        release_lease.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

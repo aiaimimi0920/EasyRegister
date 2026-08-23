@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import math
 import multiprocessing as mp
 import os
 import signal
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from dashboard_server import ServiceRuntimeState, start_dashboard_server_if_enabled
 from others.common import ensure_directory as _ensure_directory
@@ -15,6 +16,7 @@ from others.common import json_log as _json_log
 from others.config import RunnerMainConfig
 from others.config_env import (
     account_audit_worker_hard_timeout_seconds as _account_audit_worker_hard_timeout_seconds,
+    continue_worker_hard_timeout_seconds as _continue_worker_hard_timeout_seconds,
 )
 from others.runner_flow_scheduler import flow_spec_summary
 from others.runner_flow_scheduler import release_flow_slot_for_owner
@@ -24,6 +26,7 @@ from others.runner_worker_loop import worker_loop
 
 DEFAULT_ACCOUNT_AUDIT_WORKER_HARD_TIMEOUT_SECONDS = 420.0
 DEFAULT_FLOW_SLOT_UNINTERRUPTIBLE_CONFIRM_SECONDS = 30.0
+DEFAULT_ROLE_WORKER_TERMINATE_GRACE_SECONDS = 1.0
 _UNINTERRUPTIBLE_SINCE_ATTRIBUTE = "_easyregister_uninterruptible_since_utc"
 
 
@@ -73,10 +76,20 @@ def account_audit_worker_hard_timeout_seconds() -> float:
     return _account_audit_worker_hard_timeout_seconds()
 
 
+def continue_worker_hard_timeout_seconds() -> float:
+    return _continue_worker_hard_timeout_seconds()
+
+
 def _worker_state_is_account_audit(worker_state: dict[str, Any]) -> bool:
     role = str(worker_state.get("currentTaskRole") or "").strip().lower()
     flow_name = str(worker_state.get("currentFlowName") or "").strip().lower()
     return role == "account-audit" or flow_name == "openai-account-availability-audit"
+
+
+def _worker_state_is_continue(worker_state: dict[str, Any]) -> bool:
+    role = str(worker_state.get("currentTaskRole") or "").strip().lower()
+    flow_name = str(worker_state.get("currentFlowName") or "").strip().lower()
+    return role == "continue" or flow_name == "openai-continue"
 
 
 def cleanup_dashboard_worker_state_files(*, shared_root: Path, instance_id: str) -> None:
@@ -341,7 +354,7 @@ def recover_stale_uninterruptible_worker_slots(
     return recovered
 
 
-def recover_stale_account_audit_workers(
+def _recover_stale_role_workers(
     *,
     processes: dict[int, Any],
     shared_root: Path,
@@ -349,10 +362,17 @@ def recover_stale_account_audit_workers(
     active_flow_counts: Any,
     active_flow_owners: Any,
     active_flow_lock: Any,
+    threshold_seconds: float,
+    worker_state_matches: Callable[[dict[str, Any]], bool],
+    event_name: str,
+    termination_failed_event_name: str,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    threshold_seconds = account_audit_worker_hard_timeout_seconds()
-    if threshold_seconds <= 0.0:
+    try:
+        threshold_seconds = float(threshold_seconds or 0.0)
+    except (TypeError, ValueError):
+        return []
+    if not math.isfinite(threshold_seconds) or threshold_seconds <= 0.0:
         return []
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     recovered: list[dict[str, Any]] = []
@@ -369,7 +389,7 @@ def recover_stale_account_audit_workers(
             instance_id=instance_id,
             worker_label=worker_label,
         )
-        if not _worker_state_is_account_audit(worker_state):
+        if not worker_state_matches(worker_state):
             continue
         timestamp = _parse_utc_timestamp(worker_state.get("updatedAt")) or _parse_utc_timestamp(
             worker_state.get("startedAt")
@@ -379,19 +399,18 @@ def recover_stale_account_audit_workers(
         age_seconds = (now_utc - timestamp).total_seconds()
         if age_seconds < threshold_seconds:
             continue
-        released_slot_key = release_flow_slot_for_owner(
-            owner_id=worker_label,
-            active_flow_counts=active_flow_counts,
-            active_flow_owners=active_flow_owners,
-            active_flow_lock=active_flow_lock,
-        )
-        if not released_slot_key:
+        try:
+            owned_slot_key = str(active_flow_owners.get(worker_label, "") or "").strip()
+        except Exception:
+            owned_slot_key = ""
+        if not owned_slot_key:
             continue
         try:
             pid = int(getattr(process, "pid", 0) or 0)
         except (TypeError, ValueError):
             pid = 0
         terminate_signal_sent = False
+        kill_signal_sent = False
         terminate = getattr(process, "terminate", None)
         if callable(terminate):
             try:
@@ -399,21 +418,115 @@ def recover_stale_account_audit_workers(
                 terminate_signal_sent = True
             except Exception:
                 terminate_signal_sent = False
-        recovery = {
+        join = getattr(process, "join", None)
+        if callable(join):
+            try:
+                join(timeout=DEFAULT_ROLE_WORKER_TERMINATE_GRACE_SECONDS)
+            except Exception:
+                pass
+        try:
+            process_alive = bool(process.is_alive())
+        except Exception:
+            process_alive = True
+        if process_alive:
+            kill = getattr(process, "kill", None)
+            if callable(kill):
+                try:
+                    kill()
+                    kill_signal_sent = True
+                except Exception:
+                    kill_signal_sent = False
+            if callable(join):
+                try:
+                    join(timeout=DEFAULT_ROLE_WORKER_TERMINATE_GRACE_SECONDS)
+                except Exception:
+                    pass
+            try:
+                process_alive = bool(process.is_alive())
+            except Exception:
+                process_alive = True
+        termination_confirmed = not process_alive
+        common_details = {
             "workerId": worker_label,
             "pid": pid,
-            "slotKey": released_slot_key,
+            "slotKey": owned_slot_key,
             "staleSeconds": age_seconds,
             "thresholdSeconds": threshold_seconds,
             "terminateSignalSent": terminate_signal_sent,
+            "killSignalSent": kill_signal_sent,
+            "terminationConfirmed": termination_confirmed,
             "currentTaskRole": str(worker_state.get("currentTaskRole") or ""),
             "currentFlowName": str(worker_state.get("currentFlowName") or ""),
             "currentOutputDir": str(worker_state.get("currentOutputDir") or ""),
             "updatedAt": str(worker_state.get("updatedAt") or ""),
         }
+        if not termination_confirmed:
+            _json_log({"event": termination_failed_event_name, **common_details})
+            continue
+        released_slot_key = release_flow_slot_for_owner(
+            owner_id=worker_label,
+            active_flow_counts=active_flow_counts,
+            active_flow_owners=active_flow_owners,
+            active_flow_lock=active_flow_lock,
+        )
+        recovery = {
+            **common_details,
+            "slotKey": released_slot_key or owned_slot_key,
+            "slotReleased": bool(released_slot_key),
+        }
         recovered.append(recovery)
-        _json_log({"event": "register_account_audit_worker_hard_timeout_recovered", **recovery})
+        _json_log({"event": event_name, **recovery})
     return recovered
+
+
+def recover_stale_continue_workers(
+    *,
+    processes: dict[int, Any],
+    shared_root: Path,
+    instance_id: str,
+    active_flow_counts: Any,
+    active_flow_owners: Any,
+    active_flow_lock: Any,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    return _recover_stale_role_workers(
+        processes=processes,
+        shared_root=shared_root,
+        instance_id=instance_id,
+        active_flow_counts=active_flow_counts,
+        active_flow_owners=active_flow_owners,
+        active_flow_lock=active_flow_lock,
+        threshold_seconds=continue_worker_hard_timeout_seconds(),
+        worker_state_matches=_worker_state_is_continue,
+        event_name="register_continue_worker_hard_timeout_recovered",
+        termination_failed_event_name="register_continue_worker_hard_timeout_termination_failed",
+        now=now,
+    )
+
+
+def recover_stale_account_audit_workers(
+    *,
+    processes: dict[int, Any],
+    shared_root: Path,
+    instance_id: str,
+    active_flow_counts: Any,
+    active_flow_owners: Any,
+    active_flow_lock: Any,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    return _recover_stale_role_workers(
+        processes=processes,
+        shared_root=shared_root,
+        instance_id=instance_id,
+        active_flow_counts=active_flow_counts,
+        active_flow_owners=active_flow_owners,
+        active_flow_lock=active_flow_lock,
+        threshold_seconds=account_audit_worker_hard_timeout_seconds(),
+        worker_state_matches=_worker_state_is_account_audit,
+        event_name="register_account_audit_worker_hard_timeout_recovered",
+        termination_failed_event_name="register_account_audit_worker_hard_timeout_termination_failed",
+        now=now,
+    )
 
 
 def cleanup_process_handle(*, process: Any, join_timeout: float = 0.0, terminate_if_alive: bool = False) -> None:
@@ -555,6 +668,14 @@ def main() -> int:
                 stale_seconds=flow_slot_uninterruptible_stale_seconds(),
             )
             recover_stale_account_audit_workers(
+                processes=processes,
+                shared_root=shared_root,
+                instance_id=config.instance_id,
+                active_flow_counts=active_flow_counts,
+                active_flow_owners=active_flow_owners,
+                active_flow_lock=active_flow_lock,
+            )
+            recover_stale_continue_workers(
                 processes=processes,
                 shared_root=shared_root,
                 instance_id=config.instance_id,

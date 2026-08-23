@@ -714,6 +714,11 @@ supervisor 还内置了两类容量兜底：
   - `deploy-host.ps1` 在 blank-host 路径下会自动注入本地安全 token，避免 dashboard 因空值或 `123456` 被静默禁用
 - `EASY_PROXY_BASE_URL`
   - 默认 `http://easy-proxy:29888`
+- `EASY_PROXY_MANAGEMENT_USERNAME` / `EASY_PROXY_MANAGEMENT_PASSWORD`
+  - EasyProxy 管理 API 凭据；客户端先调用未认证的 `/api/auth`，再选择 canonical Basic 或 raw password 认证
+  - `EASY_PROXY_API_KEY` 继续作为管理密码的旧名称兼容
+- `EASY_PROXY_INITIAL_PROBE_MAX_ATTEMPTS` / `EASY_PROXY_INITIAL_PROBE_BACKOFF_SECONDS`
+  - 对 `503 INITIAL_PROXY_PROBE_PENDING` 做有界指数退避，默认 `4` 次、基数 `1` 秒
 
 当一轮任务最终完成并且 `upload_file_to_r2` 已成功上传 auth JSON 后，
 对应的整轮输出目录会自动删除，避免 `docker-output` 持续膨胀。
