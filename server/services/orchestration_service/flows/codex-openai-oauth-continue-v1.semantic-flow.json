@@ -48,15 +48,14 @@
             "taskAttempt": "{{task.taskAttempt}}",
             "teamAuthPath": "{{task.team_auth_path}}"
           },
-          "probe_url": "https://chatgpt.com/auth/login",
+          "probe_url": "https://auth.openai.com/log-in-or-create-account",
           "probe_urls": [
-            "https://chatgpt.com/auth/login",
-            "https://platform.openai.com/login",
             "https://auth.openai.com/log-in-or-create-account"
           ],
           "probe_expected_statuses": [
             200
           ],
+          "allow_openai_auth_challenge": true,
           "avoid_proxy_urls": "{{task.avoidProxyUrls}}",
           "required": true,
           "max_acquire_attempts": 4

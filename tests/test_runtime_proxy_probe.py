@@ -85,6 +85,25 @@ class RuntimeProxyProbeTests(unittest.TestCase):
 
         self.assertTrue(session.closed)
 
+    def test_openai_auth_cloudflare_challenge_can_be_explicitly_accepted(self) -> None:
+        session = _FakeProbeSession(
+            SimpleNamespace(
+                status_code=403,
+                text="<!DOCTYPE html><html><head><title>Just a moment...</title></head></html>",
+                headers={},
+            )
+        )
+        with mock.patch.object(runtime_proxy_probe.requests, "Session", return_value=session), \
+            mock.patch.object(runtime_proxy_probe, "build_request_proxies", return_value={}):
+            runtime_proxy_probe.probe_flow_proxy(
+                proxy_url="http://easy-proxy:25001",
+                probe_url="https://auth.openai.com/log-in-or-create-account",
+                expected_statuses={200},
+                allow_openai_auth_challenge=True,
+            )
+
+        self.assertTrue(session.closed)
+
     def test_platform_openai_auth_cloudflare_header_challenge_cannot_be_opted_back_in(self) -> None:
         session = _FakeProbeSession(
             SimpleNamespace(

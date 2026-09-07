@@ -130,6 +130,7 @@ def probe_flow_proxy(
     proxy_url: str,
     probe_url: str,
     expected_statuses: set[int] | None,
+    allow_openai_auth_challenge: bool = False,
 ) -> None:
     verify_tls = env_flag("PROTOCOL_HTTP_VERIFY_TLS", False)
     impersonate = (os.environ.get("PROTOCOL_HTTP_IMPERSONATE") or "chrome").strip() or "chrome"
@@ -159,6 +160,7 @@ def probe_flow_proxy(
         *list(getattr(response, "history", None) or []),
         response,
     ]
+    challenge_detected = False
     for candidate_response in response_chain:
         candidate_status = int(getattr(candidate_response, "status_code", 0) or 0)
         candidate_body = str(getattr(candidate_response, "text", "") or "")[:180]
@@ -168,7 +170,10 @@ def probe_flow_proxy(
             candidate_body,
             headers=dict(getattr(candidate_response, "headers", {}) or {}),
         ):
-            raise RuntimeError(f"easy_proxy_probe_failed status={candidate_status}")
+            challenge_detected = True
+
+    if challenge_detected and allow_openai_auth_challenge:
+        return
 
     status_code = int(getattr(response, "status_code", 0) or 0)
     accepted = expected_statuses or {200}

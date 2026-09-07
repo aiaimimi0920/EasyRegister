@@ -3251,6 +3251,51 @@ class RunnerMailboxTests(unittest.TestCase):
             self.assertEqual("success", domains["example.com"]["lastOutcome"])
             self.assertEqual({"create_account_user_register_400": 1}, providers["m2u"]["failureReasons"])
 
+    def test_record_business_mailbox_domain_outcome_reports_explicit_session_for_opaque_ref(self) -> None:
+        opaque_ref = "mail2925:shared-instance:opaque-provider-data"
+        self.assertEqual("", runner_mailbox.mailbox_session_id_from_ref(opaque_ref))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_root = Path(tmp_dir) / "shared"
+            payload = {
+                "ok": True,
+                "steps": {"acquire-mailbox": "ok", "create-openai-account": "ok"},
+                "outputs": {
+                    "acquire-mailbox": {
+                        "email": "final@example.com",
+                        "provider": "cloudflare_temp_email",
+                        "business_key": "openai",
+                    },
+                    "mailbox-attempt-outcomes": [
+                        {
+                            "outcome": "failure",
+                            "failureReason": "email_otp_timeout",
+                            "failureClass": "mailbox_delivery_timeout",
+                            "errorCode": "email_otp_timeout",
+                            "provider": "mail2925",
+                            "domain": "mailbox.test",
+                            "email": "attempt@mailbox.test",
+                            "mailbox_ref": opaque_ref,
+                            "mailbox_session_id": "actual-easyemail-session",
+                            "business_key": "openai",
+                            "stepId": "create-openai-account",
+                            "attempt": 1,
+                        }
+                    ],
+                },
+            }
+
+            with mock.patch.object(runner_mailbox, "report_mailbox_outcome") as report_outcome:
+                outcome = runner_mailbox.record_business_mailbox_domain_outcome(
+                    shared_root=shared_root,
+                    result_payload_value=payload,
+                    instance_role="main",
+                )
+
+        self.assertIsNotNone(outcome)
+        report_outcome.assert_called_once()
+        self.assertEqual("actual-easyemail-session", report_outcome.call_args.kwargs["session_id"])
+        self.assertEqual("mail2925", report_outcome.call_args.kwargs["provider_type_key"])
+
     def test_record_business_mailbox_domain_outcome_reports_unsupported_email_without_provider_global_blacklist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"
@@ -3837,6 +3882,26 @@ class RunnerMailboxTests(unittest.TestCase):
                     **payload,
                 }
             ),
+        )
+
+    def test_mailbox_email_excluded_is_address_scoped_not_domain_blacklist(self) -> None:
+        payload = {
+            "ok": False,
+            "errorStep": "create-openai-account",
+            "mailboxFailureReason": "mailbox_address_excluded",
+            "stepErrors": {
+                "create-openai-account": {
+                    "message": "mail service POST /mail/mailboxes/open failed: [code=MAILBOX_EMAIL_EXCLUDED]",
+                }
+            },
+        }
+        self.assertEqual(
+            "",
+            runner_mailbox.mailbox_domain_blacklist_reason(result_payload_value=payload),
+        )
+        self.assertEqual(
+            "address_scoped_mailbox_excluded",
+            runner_mailbox.mailbox_failure_ignore_reason(result_payload_value=payload),
         )
 
     def test_record_business_mailbox_domain_outcome_tracks_non_moemail_provider(self) -> None:

@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 import json
+from unittest import mock
 from pathlib import Path
 
 
@@ -14,6 +15,7 @@ for candidate in (SRC_ROOT, PYTHON_SHARED_ROOT):
         sys.path.insert(0, str(candidate))
 
 import dst_flow  # noqa: E402
+from others import dst_flow_runtime  # noqa: E402
 from errors import (  # noqa: E402
     ErrorCodes,
     ProtocolRuntimeError,
@@ -162,6 +164,7 @@ class ErrorProfilesTests(unittest.TestCase):
                 ErrorCodes.USER_REGISTER_400,
                 ErrorCodes.UNSUPPORTED_EMAIL,
                 ErrorCodes.INVALID_REQUEST_ERROR,
+                ErrorCodes.EXISTING_ACCOUNT_DETECTED,
                 ErrorCodes.OTP_TIMEOUT,
                 ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
                 ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
@@ -299,6 +302,419 @@ class ErrorProfilesTests(unittest.TestCase):
         )
         self.assertEqual(ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, details["code"])
 
+    def test_build_error_details_classifies_uncoded_create_account_400_as_invalid_request(self) -> None:
+        details = build_error_details(
+            step_type="create_openai_account",
+            code="create_openai_account_failed",
+            message=(
+                'create_account status=400 body={"error":{"message":"request rejected"}} '
+                "[mailbox_provider=test_provider]"
+            ),
+        )
+        self.assertEqual(ErrorCodes.INVALID_REQUEST_ERROR, details["code"])
+
+        statement = dst_flow.DstStatement(
+            step_id="create-openai-account",
+            step_type="create_openai_account",
+            metadata={
+                "retry": {
+                    "maxAttempts": 2,
+                    "retryProfile": "step-create-account-recover",
+                }
+            },
+        )
+        self.assertTrue(
+            dst_flow._should_retry_step(
+                statement=statement,
+                error_details=details,
+                attempt_index=1,
+            )
+        )
+
+    def test_existing_account_step_retry_avoids_only_reused_mailbox_address(self) -> None:
+        statement = dst_flow.DstStatement(
+            step_id="create-openai-account",
+            step_type="create_openai_account",
+            metadata={
+                "retry": {
+                    "maxAttempts": 2,
+                    "retryProfile": "step-create-account-recover",
+                }
+            },
+        )
+        details = build_error_details(
+            step_type="create_openai_account",
+            code=ErrorCodes.EXISTING_ACCOUNT_DETECTED,
+            message="existing_account_detected",
+        )
+        self.assertTrue(
+            dst_flow._should_retry_step(
+                statement=statement,
+                error_details=details,
+                attempt_index=1,
+            )
+        )
+
+        task_state = {
+            "preallocated_email": "reused@example.test",
+            "preallocated_session_id": "mailbox-session",
+            "preallocated_mailbox_ref": "mailbox-ref",
+        }
+        state = {
+            "task": task_state,
+            "mailbox": {
+                "email": "reused@example.test",
+                "provider": "test_provider",
+                "mailbox_ref": "mailbox-ref",
+                "session_id": "mailbox-session",
+                "business_key": "openai",
+            },
+        }
+        result = dst_flow.DstExecutionResult(ok=False)
+        dst_flow_runtime._prepare_create_account_mailbox_retry_context(
+            statement=statement,
+            state=state,
+            result=result,
+            error_details=details,
+            attempt_index=1,
+        )
+
+        self.assertEqual(["reused@example.test"], state["task"]["avoidMailboxEmails"])
+        self.assertEqual("", state["task"]["preallocated_email"])
+        self.assertEqual("", state["task"]["preallocated_session_id"])
+        self.assertEqual("", state["task"]["preallocated_mailbox_ref"])
+        self.assertNotIn("avoidMailboxDomains", state["task"])
+        self.assertNotIn("avoidMailboxProviders", state["task"])
+        self.assertEqual("existing_account_detected", state["task"]["avoidMailboxReason"])
+        self.assertEqual(
+            "strong_mailbox_address_reused",
+            result.outputs["mailbox-attempt-outcomes"][0]["failureClass"],
+        )
+
+    def test_mailbox_email_excluded_step_retry_avoids_address_without_poisoning_provider(self) -> None:
+        statement = dst_flow.DstStatement(
+            step_id="create-openai-account",
+            step_type="create_openai_account",
+            metadata={
+                "retry": {
+                    "maxAttempts": 2,
+                    "retryProfile": "step-create-account-recover",
+                }
+            },
+        )
+        details = build_error_details(
+            step_type="create_openai_account",
+            code=ErrorCodes.UNSUPPORTED_EMAIL,
+            message="mail service POST /mail/mailboxes/open failed: [code=MAILBOX_EMAIL_EXCLUDED]",
+        )
+        self.assertTrue(
+            dst_flow._should_retry_step(
+                statement=statement,
+                error_details=details,
+                attempt_index=1,
+            )
+        )
+        state = {
+            "task": {
+                "preallocated_email": "reused@example.test",
+                "preallocated_session_id": "mailbox-session",
+                "preallocated_mailbox_ref": "mailbox-ref",
+            },
+            "mailbox": {
+                "email": "reused@example.test",
+                "provider": "etempmail",
+                "mailbox_ref": "mailbox-ref",
+                "session_id": "mailbox-session",
+                "business_key": "openai",
+            },
+        }
+        result = dst_flow.DstExecutionResult(ok=False)
+        dst_flow_runtime._prepare_create_account_mailbox_retry_context(
+            statement=statement,
+            state=state,
+            result=result,
+            error_details=details,
+            attempt_index=1,
+        )
+        self.assertEqual(["reused@example.test"], state["task"]["avoidMailboxEmails"])
+        self.assertNotIn("avoidMailboxDomains", state["task"])
+        self.assertNotIn("avoidMailboxProviders", state["task"])
+        self.assertEqual("mailbox_address_excluded", state["task"]["avoidMailboxReason"])
+        self.assertEqual(
+            "strong_mailbox_address_excluded",
+            result.outputs["mailbox-attempt-outcomes"][0]["failureClass"],
+        )
+
+        task_retry_state = {
+            "task": {
+                "preallocated_email": "reused@example.test",
+                "preallocated_session_id": "mailbox-session",
+                "preallocated_mailbox_ref": "mailbox-ref",
+            },
+            "mailbox": dict(state["mailbox"]),
+        }
+        dst_flow_runtime._prepare_task_retry_mailbox_context(
+            statement=statement,
+            state=task_retry_state,
+            result=dst_flow.DstExecutionResult(ok=False),
+            error_details=details,
+        )
+        self.assertEqual("", task_retry_state["task"]["preallocated_email"])
+        self.assertEqual("", task_retry_state["task"]["preallocated_session_id"])
+        self.assertEqual("", task_retry_state["task"]["preallocated_mailbox_ref"])
+
+    def test_repeated_existing_account_escalates_provider_and_domain_after_new_address(self) -> None:
+        statement = dst_flow.DstStatement(
+            step_id="create-openai-account",
+            step_type="create_openai_account",
+            metadata={"retry": {"maxAttempts": 3, "retryProfile": "step-create-account-recover"}},
+        )
+        details = build_error_details(
+            step_type="create_openai_account",
+            code=ErrorCodes.EXISTING_ACCOUNT_DETECTED,
+            message="existing_account_detected",
+        )
+        state = {
+            "task": {},
+            "mailbox": {
+                "email": "first@example.test",
+                "provider": "etempmail",
+                "mailbox_ref": "etempmail:first",
+                "session_id": "first-session",
+                "business_key": "openai",
+            },
+        }
+        result = dst_flow.DstExecutionResult(ok=False)
+        dst_flow_runtime._prepare_create_account_mailbox_retry_context(
+            statement=statement,
+            state=state,
+            result=result,
+            error_details=details,
+            attempt_index=1,
+        )
+        state["mailbox"] = {
+            "email": "second@example.test",
+            "provider": "etempmail",
+            "mailbox_ref": "etempmail:second",
+            "session_id": "second-session",
+            "business_key": "openai",
+        }
+        dst_flow_runtime._prepare_create_account_mailbox_retry_context(
+            statement=statement,
+            state=state,
+            result=result,
+            error_details=details,
+            attempt_index=2,
+        )
+
+        self.assertEqual(
+            ["first@example.test", "second@example.test"],
+            state["task"]["avoidMailboxEmails"],
+        )
+        self.assertEqual(["example.test"], state["task"]["avoidMailboxDomains"])
+        self.assertEqual(["etempmail"], state["task"]["avoidMailboxProviders"])
+        self.assertEqual(2, len(result.outputs["mailbox-attempt-outcomes"]))
+
+    def test_repeated_existing_account_keeps_sole_configured_provider_retryable(self) -> None:
+        statement = dst_flow.DstStatement(
+            step_id="create-openai-account",
+            step_type="create_openai_account",
+            metadata={"retry": {"maxAttempts": 3, "retryProfile": "step-create-account-recover"}},
+        )
+        details = build_error_details(
+            step_type="create_openai_account",
+            code=ErrorCodes.EXISTING_ACCOUNT_DETECTED,
+            message="existing_account_detected",
+        )
+        state = {
+            "task": {},
+            "mailbox": {
+                "email": "first@temporam.test",
+                "provider": "temporam",
+                "mailbox_ref": "temporam:first",
+                "session_id": "first-session",
+                "business_key": "openai",
+            },
+        }
+        result = dst_flow.DstExecutionResult(ok=False)
+        with mock.patch.dict("os.environ", {"REGISTER_MAILBOX_PROVIDERS": "temporam"}, clear=False):
+            dst_flow_runtime._prepare_create_account_mailbox_retry_context(
+                statement=statement,
+                state=state,
+                result=result,
+                error_details=details,
+                attempt_index=1,
+            )
+            state["mailbox"] = {
+                "email": "second@temporam.test",
+                "provider": "temporam",
+                "mailbox_ref": "temporam:second",
+                "session_id": "second-session",
+                "business_key": "openai",
+            }
+            dst_flow_runtime._prepare_create_account_mailbox_retry_context(
+                statement=statement,
+                state=state,
+                result=result,
+                error_details=details,
+                attempt_index=2,
+            )
+
+        self.assertEqual(["first@temporam.test", "second@temporam.test"], state["task"]["avoidMailboxEmails"])
+        self.assertNotIn("avoidMailboxProviders", state["task"])
+
+    def test_repeated_existing_account_escalates_provider_across_rotating_domains(self) -> None:
+        statement = dst_flow.DstStatement(
+            step_id="create-openai-account",
+            step_type="create_openai_account",
+            metadata={"retry": {"maxAttempts": 3, "retryProfile": "step-create-account-recover"}},
+        )
+        details = build_error_details(
+            step_type="create_openai_account",
+            code=ErrorCodes.EXISTING_ACCOUNT_DETECTED,
+            message="existing_account_detected",
+        )
+        state = {
+            "task": {},
+            "mailbox": {
+                "email": "first@alpha.example.test",
+                "provider": "cloudflare_temp_email",
+                "mailbox_ref": "cloudflare_temp_email:first",
+                "session_id": "first-session",
+                "business_key": "openai",
+            },
+        }
+        result = dst_flow.DstExecutionResult(ok=False)
+        dst_flow_runtime._prepare_create_account_mailbox_retry_context(
+            statement=statement,
+            state=state,
+            result=result,
+            error_details=details,
+            attempt_index=1,
+        )
+        state["mailbox"] = {
+            "email": "second@beta.example.test",
+            "provider": "cloudflare_temp_email",
+            "mailbox_ref": "cloudflare_temp_email:second",
+            "session_id": "second-session",
+            "business_key": "openai",
+        }
+        dst_flow_runtime._prepare_create_account_mailbox_retry_context(
+            statement=statement,
+            state=state,
+            result=result,
+            error_details=details,
+            attempt_index=2,
+        )
+
+        self.assertEqual(
+            ["cloudflare_temp_email"],
+            state["task"]["avoidMailboxProviders"],
+        )
+        self.assertNotIn("avoidMailboxDomains", state["task"])
+
+    def test_invalid_username_unsupported_email_escalates_provider_route(self) -> None:
+        statement = dst_flow.DstStatement(
+            step_id="create-openai-account",
+            step_type="create_openai_account",
+            metadata={"retry": {"maxAttempts": 2, "retryProfile": "step-create-account-recover"}},
+        )
+        details = build_error_details(
+            step_type="create_openai_account",
+            code=ErrorCodes.UNSUPPORTED_EMAIL,
+            message="authorize_continue status=400",
+            detail="invalid_username [mailbox_provider=etempmail]",
+        )
+        state = {
+            "task": {},
+            "mailbox": {
+                "email": "candidate@example.test",
+                "provider": "etempmail",
+                "mailbox_ref": "etempmail:candidate",
+                "session_id": "candidate-session",
+                "business_key": "openai",
+            },
+        }
+        result = dst_flow.DstExecutionResult(ok=False)
+        dst_flow_runtime._prepare_create_account_mailbox_retry_context(
+            statement=statement,
+            state=state,
+            result=result,
+            error_details=details,
+            attempt_index=1,
+        )
+
+        self.assertEqual(["etempmail"], state["task"]["avoidMailboxProviders"])
+        self.assertEqual("unsupported_email", state["task"]["avoidMailboxReason"])
+
+    def test_build_error_details_does_not_let_empty_step_fallback_hide_message_matcher(self) -> None:
+        details = build_error_details(
+            step_type="create_openai_account",
+            code="_failed",
+            message='platform_login status=403 body=<!DOCTYPE html><title>Just a moment...</title>',
+        )
+        self.assertEqual(ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, details["code"])
+
+    def test_build_error_details_does_not_let_step_fallback_hide_message_matcher(self) -> None:
+        details = build_error_details(
+            step_type="create_openai_account",
+            code="create_openai_account_failed",
+            message='platform_login status=403 body=<!DOCTYPE html><title>Just a moment...</title>',
+        )
+        self.assertEqual(ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, details["code"])
+
+    def test_build_error_details_replaces_empty_step_fallback_with_actual_step(self) -> None:
+        details = build_error_details(
+            step_type="create_openai_account",
+            code="_failed",
+            message="unrecognized failure",
+        )
+        self.assertEqual("create_openai_account_failed", details["code"])
+
+    def test_build_error_details_preserves_catalog_code_that_ends_with_failed(self) -> None:
+        details = build_error_details(
+            step_type="upload_file_to_r2",
+            code=ErrorCodes.UPLOAD_FILE_TO_R2_FAILED,
+            message="unrecognized failure",
+        )
+        self.assertEqual(ErrorCodes.UPLOAD_FILE_TO_R2_FAILED, details["code"])
+
+    def test_build_error_details_refines_oauth_invalid_state_to_missing_login_session(self) -> None:
+        details = build_error_details(
+            step_type="obtain_codex_oauth",
+            code=ErrorCodes.INVALID_REQUEST_ERROR,
+            message=(
+                "codex_session_handoff_failed strategy=session_handoff_without_password "
+                "browser_err=SessionNotCreatedException "
+                'workspace_err=workspace_select body={"error":{"code":"invalid_state"}}'
+            ),
+        )
+        self.assertEqual(ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION, details["code"])
+
+    def test_build_error_details_accepts_hyphenated_oauth_step_for_invalid_state(self) -> None:
+        details = build_error_details(
+            step_type="obtain-codex-oauth",
+            code=ErrorCodes.INVALID_REQUEST_ERROR,
+            message='workspace_err={"error":{"code":"invalid_state"}}',
+        )
+        self.assertEqual(ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION, details["code"])
+
+    def test_build_error_details_keeps_non_oauth_invalid_state_as_invalid_request(self) -> None:
+        details = build_error_details(
+            step_type="create_openai_account",
+            code=ErrorCodes.INVALID_REQUEST_ERROR,
+            message='create_account body={"error":{"code":"invalid_state"}}',
+        )
+        self.assertEqual(ErrorCodes.INVALID_REQUEST_ERROR, details["code"])
+
+    def test_build_error_details_preserves_specific_oauth_code_despite_invalid_state(self) -> None:
+        details = build_error_details(
+            step_type="obtain_codex_oauth",
+            code=ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
+            message='workspace_err={"error":{"code":"invalid_state"}}',
+        )
+        self.assertEqual(ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, details["code"])
+
     def test_build_error_details_classifies_unexpected_eof_as_proxy_connect_failed(self) -> None:
         details = build_error_details(
             step_type="create_openai_account",
@@ -328,6 +744,17 @@ class ErrorProfilesTests(unittest.TestCase):
                 "create_account status=400 body={\"error\":{\"code\":\"unsupported_email\","
                 "\"message\":\"The email you provided is not supported.\"}} "
                 "[mailbox_provider=etempmail email=user@example.test]"
+            ),
+        )
+        self.assertEqual(ErrorCodes.UNSUPPORTED_EMAIL, details["code"])
+
+    def test_build_error_details_classifies_mailbox_email_excluded_as_unsupported_email(self) -> None:
+        details = build_error_details(
+            step_type="create_openai_account",
+            code="create_openai_account_failed",
+            message=(
+                "mail service POST /mail/mailboxes/open failed: HTTP 500 "
+                "[code=MAILBOX_EMAIL_EXCLUDED] mailbox address was excluded"
             ),
         )
         self.assertEqual(ErrorCodes.UNSUPPORTED_EMAIL, details["code"])
@@ -487,6 +914,13 @@ class ErrorProfilesTests(unittest.TestCase):
             dst_flow._should_retry_step(
                 statement=statement,
                 error_details={"code": ErrorCodes.PROXY_CONNECT_FAILED},
+                attempt_index=1,
+            )
+        )
+        self.assertTrue(
+            dst_flow._should_retry_step(
+                statement=statement,
+                error_details={"code": ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION},
                 attempt_index=1,
             )
         )

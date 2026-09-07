@@ -1472,24 +1472,21 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertFalse(seed_path.exists())
         self.assertEqual(0, len(list(source_pool_dir.glob("*.json"))))
 
-    def test_canonical_openai_flows_probe_full_openai_registration_surfaces(self) -> None:
+    def test_canonical_openai_flows_probe_auth_registration_surface(self) -> None:
         flows_dir = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
         flow_names = (
             "codex-openai-account-v1.semantic-flow.json",
             "codex-openai-oauth-continue-v1.semantic-flow.json",
             "codex-team-expand-v1.semantic-flow.json",
         )
-        expected_probe_urls = [
-            "https://chatgpt.com/auth/login",
-            "https://platform.openai.com/login",
-            "https://auth.openai.com/log-in-or-create-account",
-        ]
+        expected_probe_url = "https://auth.openai.com/log-in-or-create-account"
+        expected_probe_urls = [expected_probe_url]
         for flow_name in flow_names:
             with self.subTest(flow_name=flow_name):
                 plan = load_dst_flow(flows_dir / flow_name)
                 proxy_steps = [statement for statement in plan.steps if statement.step_id == "acquire-proxy-chain"]
                 self.assertEqual(1, len(proxy_steps))
-                self.assertEqual("https://chatgpt.com/auth/login", proxy_steps[0].input.get("probe_url"))
+                self.assertEqual(expected_probe_url, proxy_steps[0].input.get("probe_url"))
                 self.assertEqual(expected_probe_urls, proxy_steps[0].input.get("probe_urls"))
                 self.assertEqual([200], proxy_steps[0].input.get("probe_expected_statuses"))
 
@@ -3640,6 +3637,9 @@ class DstFlowIntegrationTests(unittest.TestCase):
                                     "type": "acquire_mailbox",
                                     "metadata": {"owner": "easyemail"},
                                     "input": {
+                                        "preallocated_email": "{{task.preallocated_email}}",
+                                        "preallocated_session_id": "{{task.preallocated_session_id}}",
+                                        "preallocated_mailbox_ref": "{{task.preallocated_mailbox_ref}}",
                                         "business_key": "{{task.mailbox_business_key}}",
                                         "avoid_emails": "{{task.avoidMailboxEmails}}",
                                         "avoid_domains": "{{task.avoidMailboxDomains}}",
@@ -3764,6 +3764,9 @@ class DstFlowIntegrationTests(unittest.TestCase):
                 result = dst_flow.run_dst_flow_once(
                     output_dir=str(Path(tmp_dir) / "out"),
                     flow_path=flow_path,
+                    preallocated_email="user1@example.com",
+                    preallocated_session_id="mailbox-session-1",
+                    preallocated_mailbox_ref="mailbox-ref-1",
                 )
 
         self.assertTrue(result.ok)
@@ -3777,6 +3780,12 @@ class DstFlowIntegrationTests(unittest.TestCase):
             ],
             create_inputs,
         )
+        self.assertEqual("user1@example.com", mailbox_inputs[0]["preallocated_email"])
+        self.assertEqual("mailbox-session-1", mailbox_inputs[0]["preallocated_session_id"])
+        self.assertEqual("mailbox-ref-1", mailbox_inputs[0]["preallocated_mailbox_ref"])
+        self.assertEqual("", mailbox_inputs[1]["preallocated_email"])
+        self.assertEqual("", mailbox_inputs[1]["preallocated_session_id"])
+        self.assertEqual("", mailbox_inputs[1]["preallocated_mailbox_ref"])
         self.assertEqual("", mailbox_inputs[0]["avoid_emails"])
         self.assertEqual(["user1@kkb.qzz.io"], mailbox_inputs[1]["avoid_emails"])
         self.assertEqual(["kkb.qzz.io"], mailbox_inputs[1]["avoid_domains"])

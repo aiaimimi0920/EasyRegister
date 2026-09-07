@@ -197,6 +197,7 @@ def acquire_flow_proxy_lease(
     probe_url: str | None = None,
     probe_urls: object = None,
     probe_expected_statuses: set[int] | None = None,
+    allow_openai_auth_challenge: bool = False,
 ) -> FlowProxyLease:
     proxy_config = _proxy_runtime_config()
     enabled = proxy_config.enabled
@@ -309,10 +310,24 @@ def acquire_flow_proxy_lease(
         for target in probe_targets:
             kind = _openai_probe_kind(target)
             try:
+                probe_kwargs = {
+                    "proxy_url": raw_proxy_url,
+                    "probe_url": target,
+                    "expected_statuses": probe_expected_statuses,
+                }
+                # An auth-only OpenAI probe can legitimately return a
+                # Cloudflare challenge (HTTP 403) while still proving that the
+                # proxy reaches the registration surface.  Keep the strict
+                # default for mixed/non-OpenAI probes, but accept this bounded
+                # auth-only signal without requiring every caller to know the
+                # transport detail.
+                accept_auth_challenge = allow_openai_auth_challenge or (
+                    len(probe_targets) == 1 and kind == "auth"
+                )
+                if accept_auth_challenge:
+                    probe_kwargs["allow_openai_auth_challenge"] = True
                 _probe_flow_proxy(
-                    proxy_url=raw_proxy_url,
-                    probe_url=target,
-                    expected_statuses=probe_expected_statuses,
+                    **probe_kwargs,
                 )
                 probe_results.append((target, kind, True))
             except Exception as exc:

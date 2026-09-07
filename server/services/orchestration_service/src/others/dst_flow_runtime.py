@@ -71,6 +71,38 @@ def _append_unique_text(existing: Any, value: str) -> list[str]:
     return values
 
 
+def _is_only_configured_mailbox_provider(provider: str) -> bool:
+    """Keep retrying a sole provider with fresh addresses instead of self-excluding it.
+
+    Existing-account detection is address-scoped.  Escalating the provider is
+    useful when the configured pool has alternatives, but it makes a
+    single-provider deployment (for example a Temporam-only canary) unable to
+    retry at all: the next mailbox plan excludes its only route and returns
+    PROVIDER_SELECTION_FAILED.
+    """
+    normalized_provider = _normalize_mailbox_provider(provider)
+    if not normalized_provider:
+        return False
+    raw = str(os.environ.get("REGISTER_MAILBOX_PROVIDERS") or "").strip()
+    if not raw:
+        return False
+    configured = {
+        _normalize_mailbox_provider(item)
+        for item in raw.replace(";", ",").split(",")
+        if _normalize_mailbox_provider(item)
+    }
+    return len(configured) == 1 and normalized_provider in configured
+
+
+def _clear_preallocated_mailbox(task_state: dict[str, Any]) -> None:
+    for key in (
+        "preallocated_email",
+        "preallocated_session_id",
+        "preallocated_mailbox_ref",
+    ):
+        task_state[key] = ""
+
+
 def _merge_unique_text_values(existing: list[str], incoming: Any) -> list[str]:
     values = list(existing)
     if isinstance(incoming, list):
@@ -88,6 +120,8 @@ def _merge_unique_text_values(existing: list[str], incoming: Any) -> list[str]:
 def _mailbox_retry_failure_class(*, error_code: str, error_message: str) -> tuple[str, str]:
     normalized_code = str(error_code or "").strip().lower()
     lowered = str(error_message or "").strip().lower()
+    if "mailbox_email_excluded" in lowered:
+        return "mailbox_address_excluded", "strong_mailbox_address_excluded"
     if (
         normalized_code == ErrorCodes.UNSUPPORTED_EMAIL
         or "unsupported_email" in lowered
@@ -107,11 +141,85 @@ def _mailbox_retry_failure_class(*, error_code: str, error_message: str) -> tupl
         return "email_otp_timeout", "weak_attributed_email_otp_timeout"
     if "registration_disallowed" in lowered and "mailbox_provider=" in lowered:
         return "registration_disallowed", "strong_mailbox_registration_disallowed"
+    if (
+        normalized_code == ErrorCodes.EXISTING_ACCOUNT_DETECTED
+        or "existing_account_detected" in lowered
+    ):
+        return "existing_account_detected", "strong_mailbox_address_reused"
     if normalized_code == ErrorCodes.USER_REGISTER_400:
         return "create_account_user_register_400", "weak_attributed_generic_register_400"
     if normalized_code == ErrorCodes.INVALID_REQUEST_ERROR:
         return "create_account_invalid_request_error", "weak_attributed_invalid_request_error"
     return "", ""
+
+
+def _existing_account_repeated_provider_domain(
+    *,
+    result: DstExecutionResult,
+    provider: str,
+    domain: str,
+    email: str,
+) -> bool:
+    """Escalate only after distinct addresses fail on the same provider/domain."""
+    normalized_provider = _normalize_mailbox_provider(provider)
+    normalized_domain = str(domain or "").strip().lower()
+    normalized_email = _normalize_mailbox_email(email)
+    if not normalized_provider or not normalized_domain or not normalized_email:
+        return False
+    outcomes = result.outputs.get("mailbox-attempt-outcomes")
+    if not isinstance(outcomes, list):
+        return False
+    for outcome in outcomes:
+        if not isinstance(outcome, dict):
+            continue
+        if str(outcome.get("failureReason") or "").strip().lower() != "existing_account_detected":
+            continue
+        prior_provider = _normalize_mailbox_provider(outcome.get("provider"))
+        prior_domain = str(outcome.get("domain") or "").strip().lower()
+        prior_email = _normalize_mailbox_email(outcome.get("email"))
+        if (
+            prior_provider == normalized_provider
+            and prior_domain == normalized_domain
+            and prior_email
+            and prior_email != normalized_email
+        ):
+            return True
+    return False
+
+
+def _existing_account_repeated_provider(
+    *,
+    result: DstExecutionResult,
+    provider: str,
+    email: str,
+) -> bool:
+    """Escalate a provider after distinct addresses fail as existing accounts.
+
+    Providers such as Cloudflare can rotate domains per address. Requiring the
+    domain to match would therefore keep retrying a provider that is returning
+    recycled addresses while never activating the provider-level avoidance.
+    """
+    normalized_provider = _normalize_mailbox_provider(provider)
+    normalized_email = _normalize_mailbox_email(email)
+    if not normalized_provider or not normalized_email:
+        return False
+    outcomes = result.outputs.get("mailbox-attempt-outcomes")
+    if not isinstance(outcomes, list):
+        return False
+    for outcome in outcomes:
+        if not isinstance(outcome, dict):
+            continue
+        if str(outcome.get("failureReason") or "").strip().lower() != "existing_account_detected":
+            continue
+        prior_provider = _normalize_mailbox_provider(outcome.get("provider"))
+        prior_email = _normalize_mailbox_email(outcome.get("email"))
+        if (
+            prior_provider == normalized_provider
+            and prior_email
+            and prior_email != normalized_email
+        ):
+            return True
+    return False
 
 
 def _current_mailbox_context(*, state: dict[str, Any], result: DstExecutionResult) -> dict[str, str]:
@@ -169,9 +277,11 @@ def _prepare_create_account_mailbox_retry_context(
         return
     error_code = str(error_details.get("code") or "").strip().lower()
     error_message = str(error_details.get("message") or "").strip()
+    error_detail = str(error_details.get("detail") or "").strip()
+    error_text = " ".join(part for part in (error_message, error_detail) if part)
     failure_reason, failure_class = _mailbox_retry_failure_class(
         error_code=error_code,
-        error_message=error_message,
+        error_message=error_text,
     )
     if not failure_reason:
         return
@@ -186,9 +296,40 @@ def _prepare_create_account_mailbox_retry_context(
     provider = str(context.get("provider") or "").strip().lower()
     if email:
         task_state["avoidMailboxEmails"] = _append_unique_text(task_state.get("avoidMailboxEmails"), email)
-    if domain:
+    _clear_preallocated_mailbox(task_state)
+    address_scoped_failure = failure_reason in {
+        "existing_account_detected",
+        "mailbox_address_excluded",
+    }
+    repeated_existing_provider_domain = (
+        failure_reason == "existing_account_detected"
+        and _existing_account_repeated_provider_domain(
+            result=result,
+            provider=provider,
+            domain=domain,
+            email=email,
+        )
+    )
+    repeated_existing_provider = (
+        failure_reason == "existing_account_detected"
+        and _existing_account_repeated_provider(
+            result=result,
+            provider=provider,
+            email=email,
+        )
+    )
+    unsupported_provider_route = (
+        failure_reason == "unsupported_email"
+        and "invalid_username" in error_text.lower()
+    )
+    if domain and (not address_scoped_failure or repeated_existing_provider_domain):
         task_state["avoidMailboxDomains"] = _append_unique_text(task_state.get("avoidMailboxDomains"), domain)
-    if provider and failure_reason != "unsupported_email":
+    if provider and (
+        failure_reason
+        not in {"unsupported_email", "existing_account_detected", "mailbox_address_excluded"}
+        or (repeated_existing_provider and not _is_only_configured_mailbox_provider(provider))
+        or unsupported_provider_route
+    ):
         task_state["avoidMailboxProviders"] = _append_unique_text(task_state.get("avoidMailboxProviders"), provider)
     task_state["avoidMailboxReason"] = failure_reason
     if not result.outputs.get("mailbox-attempt-outcomes"):
@@ -226,9 +367,11 @@ def _prepare_task_retry_mailbox_context(
         return
     error_code = str(error_details.get("code") or "").strip().lower()
     error_message = str(error_details.get("message") or "").strip()
+    error_detail = str(error_details.get("detail") or "").strip()
+    error_text = " ".join(part for part in (error_message, error_detail) if part)
     failure_reason, _failure_class = _mailbox_retry_failure_class(
         error_code=error_code,
-        error_message=error_message,
+        error_message=error_text,
     )
     if not failure_reason:
         return
@@ -243,9 +386,40 @@ def _prepare_task_retry_mailbox_context(
     provider = str(context.get("provider") or "").strip().lower()
     if email:
         task_state["avoidMailboxEmails"] = _append_unique_text(task_state.get("avoidMailboxEmails"), email)
-    if domain:
+    _clear_preallocated_mailbox(task_state)
+    address_scoped_failure = failure_reason in {
+        "existing_account_detected",
+        "mailbox_address_excluded",
+    }
+    repeated_existing_provider_domain = (
+        failure_reason == "existing_account_detected"
+        and _existing_account_repeated_provider_domain(
+            result=result,
+            provider=provider,
+            domain=domain,
+            email=email,
+        )
+    )
+    repeated_existing_provider = (
+        failure_reason == "existing_account_detected"
+        and _existing_account_repeated_provider(
+            result=result,
+            provider=provider,
+            email=email,
+        )
+    )
+    unsupported_provider_route = (
+        failure_reason == "unsupported_email"
+        and "invalid_username" in error_text.lower()
+    )
+    if domain and (not address_scoped_failure or repeated_existing_provider_domain):
         task_state["avoidMailboxDomains"] = _append_unique_text(task_state.get("avoidMailboxDomains"), domain)
-    if provider and failure_reason != "unsupported_email":
+    if provider and (
+        failure_reason
+        not in {"unsupported_email", "existing_account_detected", "mailbox_address_excluded"}
+        or (repeated_existing_provider and not _is_only_configured_mailbox_provider(provider))
+        or unsupported_provider_route
+    ):
         task_state["avoidMailboxProviders"] = _append_unique_text(task_state.get("avoidMailboxProviders"), provider)
     task_state["avoidMailboxReason"] = failure_reason
 
@@ -772,6 +946,14 @@ def run_dst_flow_once(
     }
     task_retry_retained_outputs: dict[str, Any] = {}
     for task_attempt in range(1, task_retry_max_attempts(plan, task_max_attempts) + 1):
+        drop_preallocated_mailbox = bool(
+            failed_task_mailbox_reason
+            and (
+                failed_task_mailbox_emails
+                or failed_task_mailbox_domains
+                or failed_task_mailbox_providers
+            )
+        )
         resolved_team_auth_path = str(team_auth_path or "").strip()
         resolved_team_invite_enabled = bool(team_invite_enabled) if team_invite_enabled is not None else bool(resolved_team_auth_path)
         task_state = {
@@ -782,9 +964,9 @@ def run_dst_flow_once(
             "input_source_dir": str(input_source_dir or env_config.input_source_dir or "").strip(),
             "input_claims_dir": str(input_claims_dir or env_config.input_claims_dir or "").strip(),
             "login_entry_url": str(login_entry_url or env_config.login_entry_url or "").strip(),
-            "preallocated_email": str(preallocated_email or "").strip(),
-            "preallocated_session_id": str(preallocated_session_id or "").strip(),
-            "preallocated_mailbox_ref": str(preallocated_mailbox_ref or "").strip(),
+            "preallocated_email": "" if drop_preallocated_mailbox else str(preallocated_email or "").strip(),
+            "preallocated_session_id": "" if drop_preallocated_mailbox else str(preallocated_session_id or "").strip(),
+            "preallocated_mailbox_ref": "" if drop_preallocated_mailbox else str(preallocated_mailbox_ref or "").strip(),
             "r2_target_folder": str(r2_target_folder or "").strip(),
             "r2_bucket": str(r2_bucket or "").strip(),
             "r2_object_name": str(r2_object_name or "").strip(),

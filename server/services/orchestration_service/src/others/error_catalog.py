@@ -103,6 +103,7 @@ RETRY_PROFILES: dict[str, tuple[str, ...]] = {
         ErrorCodes.USER_REGISTER_400,
         ErrorCodes.UNSUPPORTED_EMAIL,
         ErrorCodes.INVALID_REQUEST_ERROR,
+        ErrorCodes.EXISTING_ACCOUNT_DETECTED,
         ErrorCodes.OTP_TIMEOUT,
         ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED,
         ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED,
@@ -227,12 +228,14 @@ def classify_error_code(
 ) -> str:
     normalized_code = normalize_error_code(code)
     normalized_step_type = str(step_type or "").strip().lower()
+    normalized_step_key = normalized_step_type.replace("-", "_")
     normalized_detail = str(detail or "").strip().lower()
     lowered = str(message or "").strip().lower()
     combined = " ".join(part for part in (normalized_detail, lowered) if part)
 
     if (
         "unsupported_email" in combined
+        or "mailbox_email_excluded" in combined
         or "the email you provided is not supported" in combined
         or (
             ("invalid_username" in combined or "invalid username" in combined)
@@ -243,6 +246,11 @@ def classify_error_code(
     if "account_deactivated" in combined or "deactivated_workspace" in combined:
         return ErrorCodes.TEAM_WORKSPACE_DEACTIVATED
     if "registration_disallowed" in combined and "mailbox_provider=" in combined:
+        return ErrorCodes.INVALID_REQUEST_ERROR
+    if (
+        normalized_step_key == "create_openai_account"
+        and "create_account status=400" in combined
+    ):
         return ErrorCodes.INVALID_REQUEST_ERROR
     if "chat_requirements_failed" in lowered:
         if "status=401" in lowered or '"detail":"unauthorized"' in lowered:
@@ -301,7 +309,17 @@ def classify_error_code(
         return ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS
     if ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS in combined:
         return ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS
-    if normalized_code:
+    fallback_code = normalize_error_code(f"{normalized_step_key}_failed")
+    if (
+        normalized_step_key in {"obtain_codex_oauth", "initialize_chatgpt_login_session"}
+        and ("invalid_state" in combined or "invalid state" in combined)
+        and normalized_code in {"", "_failed", fallback_code, ErrorCodes.INVALID_REQUEST_ERROR}
+    ):
+        return ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION
+    code_is_fallback = normalized_code == "_failed" or (
+        normalized_code not in CODE_CATEGORY_MAP and normalized_code == fallback_code
+    )
+    if normalized_code and not code_is_fallback:
         return normalized_code
 
     if ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING in combined:

@@ -19,7 +19,14 @@ from others.paths import resolve_shared_root as _shared_root_from_output_root
 
 ensure_local_bundle_imports()
 
-from shared_mailbox.easy_email_client import Mailbox, create_mailbox, plan_mailbox, recover_mailbox_by_email, release_mailbox
+from shared_mailbox.easy_email_client import (
+    Mailbox,
+    create_mailbox,
+    plan_mailbox,
+    probe_mailbox_provider,
+    recover_mailbox_by_email,
+    release_mailbox,
+)
 
 
 DEFAULT_ORCHESTRATION_HOST_ID = "python-register-orchestration"
@@ -44,6 +51,10 @@ DEFAULT_PROVIDER_ZERO_SUCCESS_BLACKLIST_MIN_ATTEMPTS = 20
 DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESSES = 10
 DEFAULT_PROVIDER_BLACKLIST_RECOVERY_MIN_SUCCESS_RATE = 20.0
 DEFAULT_PROVIDER_OPEN_FAILURE_CIRCUIT_TTL_SECONDS = 15 * 60
+DEFAULT_PROVIDER_INSTANCE_RECOVERY_ATTEMPTS = 1
+DEFAULT_PROVIDER_INSTANCE_RECOVERY_DELAY_SECONDS = 6.0
+DEFAULT_PROVIDER_INSTANCE_RECOVERY_PROBE_ATTEMPTS = 3
+DEFAULT_PROVIDER_INSTANCE_RECOVERY_PROBE_RETRY_DELAY_SECONDS = 5.0
 MAILBOX_DOMAIN_STATS_SCHEMA_VERSION = 3
 EMAIL_OTP_FAILURE_REASONS = {"email_otp_timeout", "email_otp_wrong_code"}
 STRONG_MAILBOX_FAILURE_REASONS = {"unsupported_email", "registration_disallowed"}
@@ -97,6 +108,21 @@ def resolve_mailbox_provider_selections() -> tuple[str, ...]:
     )
 
 
+def _sole_configured_provider_can_override_dynamic_blacklist(
+    provider: str,
+    *,
+    business_key: str | None = None,
+) -> bool:
+    normalized_provider = _normalize_mailbox_provider(provider)
+    configured = resolve_mailbox_provider_selections()
+    if len(configured) != 1 or configured[0] != normalized_provider:
+        return False
+    resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
+    return normalized_provider not in set(
+        _resolve_mailbox_explicit_blacklist_providers(business_key=resolved_business_key)
+    )
+
+
 def resolve_mailbox_strategy_mode_id() -> str:
     return _mailbox_runtime_config().strategy_mode_id
 
@@ -130,6 +156,102 @@ def _provider_open_failure_circuit_ttl_seconds() -> int:
             DEFAULT_PROVIDER_OPEN_FAILURE_CIRCUIT_TTL_SECONDS,
         ),
     )
+
+
+def _provider_instance_recovery_attempts() -> int:
+    return max(
+        0,
+        env_int(
+            "REGISTER_MAILBOX_PROVIDER_INSTANCE_RECOVERY_ATTEMPTS",
+            DEFAULT_PROVIDER_INSTANCE_RECOVERY_ATTEMPTS,
+        ),
+    )
+
+
+def _provider_instance_recovery_delay_seconds() -> float:
+    return max(
+        0.0,
+        env_float(
+            "REGISTER_MAILBOX_PROVIDER_INSTANCE_RECOVERY_DELAY_SECONDS",
+            DEFAULT_PROVIDER_INSTANCE_RECOVERY_DELAY_SECONDS,
+        ),
+    )
+
+
+def _provider_instance_recovery_probe_attempts() -> int:
+    return max(
+        1,
+        env_int(
+            "REGISTER_MAILBOX_PROVIDER_INSTANCE_RECOVERY_PROBE_ATTEMPTS",
+            DEFAULT_PROVIDER_INSTANCE_RECOVERY_PROBE_ATTEMPTS,
+        ),
+    )
+
+
+def _provider_instance_recovery_probe_retry_delay_seconds() -> float:
+    return max(
+        0.0,
+        env_float(
+            "REGISTER_MAILBOX_PROVIDER_INSTANCE_RECOVERY_PROBE_RETRY_DELAY_SECONDS",
+            DEFAULT_PROVIDER_INSTANCE_RECOVERY_PROBE_RETRY_DELAY_SECONDS,
+        ),
+    )
+
+
+def _mailbox_provider_instance_unavailable(exc: BaseException) -> bool:
+    return "provider_instance_unavailable" in str(exc or "").strip().lower()
+
+
+def _recover_mailbox_provider_instance(*, provider: str, business_key: str) -> bool:
+    normalized_provider = _normalize_mailbox_provider(provider)
+    if not normalized_provider:
+        return False
+    preferred_instance_id = str(os.environ.get("MAILBOX_PROVIDER_INSTANCE_ID") or "").strip()
+    recovery_delay_seconds = _provider_instance_recovery_delay_seconds()
+    probe_attempts = _provider_instance_recovery_probe_attempts()
+    probe_retry_delay_seconds = _provider_instance_recovery_probe_retry_delay_seconds()
+    # Credential-backed providers use a short runtime cooling window after
+    # transient fetch failures. Probing immediately only re-observes that
+    # cooling state and leaves the provider unavailable.
+    if recovery_delay_seconds > 0:
+        time.sleep(recovery_delay_seconds)
+
+    probe: dict[str, Any] = {}
+    last_error_type = ""
+    attempted_probes = 0
+    recovered = False
+    for probe_attempt in range(1, probe_attempts + 1):
+        attempted_probes = probe_attempt
+        try:
+            candidate = probe_mailbox_provider(
+                provider_type_key=normalized_provider,
+                preferred_instance_id=preferred_instance_id,
+            )
+            probe = candidate if isinstance(candidate, dict) else {}
+            recovered = bool(probe.get("ok"))
+            last_error_type = ""
+        except Exception as exc:
+            probe = {}
+            recovered = False
+            last_error_type = type(exc).__name__
+        if recovered:
+            break
+        if probe_attempt < probe_attempts and probe_retry_delay_seconds > 0:
+            time.sleep(probe_retry_delay_seconds)
+
+    event = {
+        "event": "register_mailbox_provider_instance_recovery",
+        "provider": normalized_provider,
+        "businessKey": business_key,
+        "recovered": recovered,
+        "delaySeconds": recovery_delay_seconds,
+        "probeAttempts": attempted_probes,
+        "probeStatus": str(probe.get("status") or ""),
+    }
+    if last_error_type:
+        event["errorType"] = last_error_type
+    json_log(event)
+    return recovered
 
 
 def _active_provider_open_failure_circuits() -> tuple[str, ...]:
@@ -191,6 +313,15 @@ def _mailbox_open_failure_avoidance(
         structured_provider = _normalize_mailbox_provider(
             str(provider_match.group(1) or "").strip()
         )
+    if (
+        "mailbox_business_policy_retries_exhausted" in message
+        and "attempt_local_mailbox_email" in message
+    ):
+        exhausted_provider = structured_provider or _normalize_mailbox_provider(
+            attempted_provider
+        )
+        if exhausted_provider:
+            return exhausted_provider, "", "provider_address_exhausted"
     if normalized_domain and any(
         marker in message
         for marker in (
@@ -296,6 +427,32 @@ def _mailbox_open_failure_avoidance(
 
 def _mailbox_open_failure_is_email_excluded(exc: BaseException) -> bool:
     return "mailbox_email_excluded" in str(exc or "").strip().lower()
+
+
+def _mailbox_open_failure_email(exc: BaseException) -> str:
+    """Extract only the rejected address so dynamic acquisition can avoid it."""
+    message = str(exc or "")
+    match = re.search(
+        r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
+        message,
+        flags=re.IGNORECASE,
+    )
+    return _normalize_requested_email_address(match.group(0)) if match else ""
+
+
+def _mailbox_open_failure_requires_new_address(exc: BaseException) -> bool:
+    message = str(exc or "").strip().lower()
+    if _mailbox_open_failure_is_email_excluded(exc):
+        return True
+    return any(
+        marker in message
+        for marker in (
+            "mailbox_domain_excluded",
+            "provider_selection_failed",
+            "no mail provider route",
+            "mailbox_capacity_unavailable",
+        )
+    )
 
 
 def _append_mailbox_avoid_value(existing: Any, value: str, *, kind: str) -> tuple[str, ...]:
@@ -765,6 +922,40 @@ def _resolve_mailbox_excluded_domains(
     return tuple(excluded)
 
 
+def _resolve_mailbox_excluded_domains_for_provider(
+    *,
+    provider: str,
+    business_key: str | None = None,
+    avoid_domains: Any = None,
+    except_domains: Any = None,
+) -> tuple[str, ...]:
+    """Keep dynamic domain exclusions scoped to the provider that recorded them.
+
+    The mailbox service accepts domain exclusions globally, while the local
+    state records which provider produced each domain. Applying every
+    provider's exhausted-domain list to a newly selected provider can make a
+    healthy provider appear to have no route at all.
+    """
+    normalized_provider = _normalize_mailbox_provider(provider)
+    excluded = _resolve_mailbox_excluded_domains(
+        business_key=business_key,
+        avoid_domains=avoid_domains,
+        except_domains=except_domains,
+    )
+    if not normalized_provider:
+        return excluded
+    always_excluded = set(_normalize_mailbox_avoid_values(avoid_domains, kind="domain"))
+    always_excluded.update(_resolve_mailbox_explicit_blacklist_domains(business_key=business_key))
+    state_payload = _load_mailbox_domain_state()
+    return tuple(
+        domain
+        for domain in excluded
+        if domain in always_excluded
+        or _mailbox_domain_provider(domain, state_payload, business_key=business_key)
+        == normalized_provider
+    )
+
+
 def _resolve_mailbox_excluded_email_addresses(*, avoid_emails: Any = None) -> tuple[str, ...]:
     return _normalize_mailbox_avoid_values(avoid_emails, kind="email")
 
@@ -1111,10 +1302,18 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
     pool_domain_is_authoritative_moemail = bool(
         business_domain_pool and provider == "moemail" and domain in business_domain_pool
     )
-    if provider and not pool_domain_is_authoritative_moemail and _mailbox_provider_is_business_blacklisted(
+    if (
+        provider
+        and not pool_domain_is_authoritative_moemail
+        and not _sole_configured_provider_can_override_dynamic_blacklist(
+            provider,
+            business_key=resolved_business_key,
+        )
+        and _mailbox_provider_is_business_blacklisted(
         provider,
         state_payload,
         business_key=resolved_business_key,
+        )
     ):
         return {
             "reason": "dynamic_business_provider_blacklist",
@@ -1263,14 +1462,16 @@ def _resolve_planned_mailbox_provider(
     *,
     ttl_seconds: int,
     strategy_kwargs: dict[str, Any],
+    provider: str = "auto",
     excluded_provider_type_keys: tuple[str, ...] = (),
     excluded_domains: tuple[str, ...] = (),
     excluded_email_addresses: tuple[str, ...] = (),
     avoid: dict[str, Any] | None = None,
 ) -> str:
+    requested_provider = _normalize_mailbox_provider(provider) or "auto"
     try:
         plan = plan_mailbox(
-            provider="auto",
+            provider=requested_provider,
             default_host_id=DEFAULT_ORCHESTRATION_HOST_ID,
             ttl_seconds=ttl_seconds,
             excluded_provider_type_keys=excluded_provider_type_keys,
@@ -1313,10 +1514,28 @@ def resolve_mailbox(
     avoid_domains: Any = None,
     avoid_providers: Any = None,
     avoid_reason: str = "",
+    _provider_recovery_attempt: int = 0,
 ) -> Mailbox:
     ensure_easy_email_env_defaults()
     mailbox_config = _mailbox_runtime_config()
     resolved_business_key = resolve_mailbox_business_key(business_key=business_key)
+    configured_provider_selections = resolve_mailbox_provider_selections()
+    configured_provider_pinned = len(configured_provider_selections) == 1
+    configured_provider = configured_provider_selections[0] if configured_provider_pinned else ""
+    explicit_provider_blacklist = set(
+        _resolve_mailbox_explicit_blacklist_providers(business_key=resolved_business_key)
+    )
+    if configured_provider_pinned:
+        # A sole configured provider is intentionally retried with a fresh
+        # address.  Task-level retries may carry the provider that failed in a
+        # previous attempt; forwarding that same key as an EasyEmail exclusion
+        # makes the pinned request self-contradictory and yields PROVIDER_EXCLUDED.
+        if configured_provider not in explicit_provider_blacklist:
+            avoid_providers = tuple(
+                provider
+                for provider in _normalize_mailbox_avoid_values(avoid_providers, kind="provider")
+                if provider != configured_provider
+            )
     normalized_preallocated_email = _normalize_requested_email_address(preallocated_email)
     if normalized_preallocated_email and recreate_preallocated_email:
         ttl_seconds = mailbox_config.ttl_seconds
@@ -1350,7 +1569,25 @@ def resolve_mailbox(
                 avoid_reason=avoid_reason,
             )
         except Exception as exc:
-            if _mailbox_open_failure_is_email_excluded(exc):
+            if _mailbox_open_failure_requires_new_address(exc):
+                recreate_retry_avoid_domains = avoid_domains
+                if "mailbox_domain_excluded" in str(exc or "").strip().lower():
+                    recreate_retry_avoid_domains = _append_mailbox_avoid_value(
+                        avoid_domains,
+                        requested_domain,
+                        kind="domain",
+                    )
+                json_log(
+                    {
+                        "event": "register_mailbox_recreate_address_fallback",
+                        "provider": preferred_provider,
+                        "reason": (
+                            "mailbox_email_excluded"
+                            if _mailbox_open_failure_is_email_excluded(exc)
+                            else "provider_route_exhausted"
+                        ),
+                    }
+                )
                 return resolve_mailbox(
                     preallocated_email=None,
                     preallocated_session_id=None,
@@ -1361,9 +1598,10 @@ def resolve_mailbox(
                         normalized_preallocated_email,
                         kind="email",
                     ),
-                    avoid_domains=avoid_domains,
+                    avoid_domains=recreate_retry_avoid_domains,
                     avoid_providers=avoid_providers,
-                    avoid_reason="email_unavailable",
+                    avoid_reason="mailbox_address_excluded",
+                    _provider_recovery_attempt=_provider_recovery_attempt,
                 )
             failed_provider, failed_domain, failure_reason = _mailbox_open_failure_avoidance(
                 exc,
@@ -1398,6 +1636,7 @@ def resolve_mailbox(
                         kind="provider",
                     ),
                     avoid_reason=failure_reason,
+                    _provider_recovery_attempt=_provider_recovery_attempt,
                 )
             raise ensure_protocol_runtime_error(
                 exc,
@@ -1492,6 +1731,17 @@ def resolve_mailbox(
         avoid_providers=avoid_providers,
         exclude_moemail=False,
     )
+    if configured_provider_pinned and configured_provider not in explicit_provider_blacklist:
+        # The sole configured provider is an operator pin.  Never send that
+        # same provider in EasyEmail's excluded-provider list: a retry can
+        # otherwise become `provider=mail2925` plus
+        # `excludedProviderTypeKeys=[mail2925]` and fail before opening a
+        # mailbox.  Explicit business blacklists remain authoritative.
+        plan_excluded_provider_type_keys = tuple(
+            provider
+            for provider in plan_excluded_provider_type_keys
+            if provider != configured_provider
+        )
     plan_excluded_domains = _resolve_mailbox_excluded_domains(
         business_key=resolved_business_key,
         avoid_domains=avoid_domains,
@@ -1508,11 +1758,27 @@ def resolve_mailbox(
     planned_provider = _resolve_planned_mailbox_provider(
         ttl_seconds=ttl_seconds,
         strategy_kwargs=strategy_kwargs,
+        provider=configured_provider or "auto",
         excluded_provider_type_keys=plan_excluded_provider_type_keys,
         excluded_domains=plan_excluded_domains,
         excluded_email_addresses=plan_excluded_email_addresses,
         avoid=plan_avoid,
     )
+    if configured_provider_pinned:
+        # A single configured provider is an operator pin, not merely a hint
+        # for EasyEmail's auto strategy.  EasyEmail's available-first planner
+        # can otherwise return an unrelated provider even when the request
+        # carries providerGroupSelections=[configured_provider].
+        if planned_provider and planned_provider != configured_provider:
+            json_log(
+                {
+                    "event": "register_mailbox_single_provider_plan_overridden",
+                    "configuredProvider": configured_provider,
+                    "plannedProvider": planned_provider,
+                    "businessKey": resolved_business_key,
+                }
+            )
+        planned_provider = configured_provider
     attempted_provider = planned_provider
     attempted_provider_pinned = False
     selected_domain = ""
@@ -1528,14 +1794,20 @@ def resolve_mailbox(
         planned_provider_blocked = False
         if planned_provider and planned_provider != "moemail":
             planned_provider_blocked = (
-                planned_provider in set(_active_provider_open_failure_circuits())
-                or _mailbox_provider_is_business_blacklisted(
+                (
+                    planned_provider in set(_active_provider_open_failure_circuits())
+                    or _mailbox_provider_is_business_blacklisted(
+                        planned_provider,
+                        _load_mailbox_domain_state(),
+                        business_key=resolved_business_key,
+                    )
+                )
+                and not _sole_configured_provider_can_override_dynamic_blacklist(
                     planned_provider,
-                    _load_mailbox_domain_state(),
                     business_key=resolved_business_key,
                 )
             )
-        if planned_provider == "moemail" or planned_provider_blocked:
+        if planned_provider == "moemail" or (planned_provider_blocked and not configured_provider_pinned):
             selected_domain, domain_selection_reason = _select_business_mailbox_domain(
                 business_key=resolved_business_key,
                 avoid_domains=avoid_domains,
@@ -1653,6 +1925,12 @@ def resolve_mailbox(
             avoid_providers=avoid_providers,
             exclude_moemail=auto_exclusion_exclude_moemail,
         )
+        if configured_provider_pinned and configured_provider not in explicit_provider_blacklist:
+            auto_excluded_provider_type_keys = tuple(
+                provider
+                for provider in auto_excluded_provider_type_keys
+                if provider != configured_provider
+            )
         auto_excluded_domains = _resolve_mailbox_excluded_domains(
             business_key=resolved_business_key,
             avoid_domains=avoid_domains,
@@ -1707,13 +1985,44 @@ def resolve_mailbox(
             excluded_email_addresses=auto_excluded_email_addresses,
             avoid_reason=avoid_reason,
         )
-        open_provider = (
-            planned_provider
-            if planned_provider
-            and not planned_provider_blocked
-            and planned_provider not in set(auto_excluded_provider_type_keys)
-            else "auto"
+        explicit_provider_candidates = tuple(
+            provider
+            for provider in resolve_mailbox_provider_selections()
+            if provider and provider not in set(auto_excluded_provider_type_keys)
         )
+        if configured_provider_pinned:
+            open_provider = configured_provider
+        else:
+            open_provider = (
+                planned_provider
+                if planned_provider
+                and not planned_provider_blocked
+                and planned_provider not in set(auto_excluded_provider_type_keys)
+                else (explicit_provider_candidates[0] if explicit_provider_candidates else "auto")
+            )
+        if open_provider != "auto":
+            provider_scoped_domains = _resolve_mailbox_excluded_domains_for_provider(
+                provider=open_provider,
+                business_key=resolved_business_key,
+                avoid_domains=avoid_domains,
+            )
+            if provider_scoped_domains != auto_excluded_domains:
+                json_log(
+                    {
+                        "event": "register_mailbox_provider_domain_exclusions_scoped",
+                        "businessKey": resolved_business_key,
+                        "provider": open_provider,
+                        "domainExclusionsBeforeCount": len(auto_excluded_domains),
+                        "domainExclusionsAfterCount": len(provider_scoped_domains),
+                    }
+                )
+                auto_excluded_domains = provider_scoped_domains
+                auto_avoid = _mailbox_avoid_payload(
+                    excluded_provider_type_keys=auto_excluded_provider_type_keys,
+                    excluded_domains=auto_excluded_domains,
+                    excluded_email_addresses=auto_excluded_email_addresses,
+                    avoid_reason=avoid_reason,
+                )
         attempted_provider = open_provider if open_provider != "auto" else attempted_provider
         attempted_provider_pinned = open_provider != "auto"
         return _create_mailbox_with_business_policy(
@@ -1736,6 +2045,85 @@ def resolve_mailbox(
             accept_dynamic_violation_fallback_immediately=immediate_dynamic_fallback,
         )
     except Exception as exc:
+        pinned_provider_instance_unavailable = (
+            configured_provider_pinned
+            and configured_provider not in explicit_provider_blacklist
+            and _mailbox_provider_instance_unavailable(exc)
+        )
+        if (
+            pinned_provider_instance_unavailable
+            and _provider_recovery_attempt < _provider_instance_recovery_attempts()
+            and _recover_mailbox_provider_instance(
+                provider=configured_provider,
+                business_key=resolved_business_key,
+            )
+        ):
+            relaxed_avoid_domains = _normalize_mailbox_avoid_values(avoid_domains, kind="domain")
+            if relaxed_avoid_domains:
+                json_log(
+                    {
+                        "event": "register_mailbox_provider_recovery_relaxed_attempt_domains",
+                        "provider": configured_provider,
+                        "businessKey": resolved_business_key,
+                        "clearedDomainCount": len(relaxed_avoid_domains),
+                    }
+                )
+            return resolve_mailbox(
+                preallocated_email=preallocated_email,
+                preallocated_session_id=preallocated_session_id,
+                preallocated_mailbox_ref=preallocated_mailbox_ref,
+                preallocated_recovery_data_credential=preallocated_recovery_data_credential,
+                recreate_preallocated_email=recreate_preallocated_email,
+                recover_preallocated_email=recover_preallocated_email,
+                business_key=business_key,
+                avoid_emails=avoid_emails,
+                # Keep explicit configured blacklists, which are recomputed in
+                # the recursive call, but do not let prior attempt domains
+                # eliminate the sole provider immediately after a good probe.
+                avoid_domains=(),
+                avoid_providers=avoid_providers,
+                avoid_reason=avoid_reason,
+                _provider_recovery_attempt=_provider_recovery_attempt + 1,
+            )
+        if pinned_provider_instance_unavailable:
+            # The provider-specific recovery already performed the only useful
+            # retry.  Do not fall through to the generic provider circuit,
+            # which would blindly retry the same sole pinned provider again.
+            raise ensure_protocol_runtime_error(
+                exc,
+                stage="stage_other",
+                detail="create_mailbox",
+                category="flow_error",
+            ) from exc
+        if _mailbox_open_failure_is_email_excluded(exc):
+            rejected_email = _mailbox_open_failure_email(exc)
+            avoided_emails = set(_normalize_mailbox_avoid_values(avoid_emails, kind="email"))
+            if rejected_email and rejected_email not in avoided_emails:
+                json_log(
+                    {
+                        "event": "register_mailbox_dynamic_email_excluded_retry",
+                        "provider": attempted_provider,
+                        "reason": "mailbox_email_excluded",
+                    }
+                )
+                return resolve_mailbox(
+                    preallocated_email=None,
+                    preallocated_session_id=None,
+                    preallocated_mailbox_ref=None,
+                    preallocated_recovery_data_credential=preallocated_recovery_data_credential,
+                    recreate_preallocated_email=False,
+                    recover_preallocated_email=False,
+                    business_key=business_key,
+                    avoid_emails=_append_mailbox_avoid_value(
+                        avoid_emails,
+                        rejected_email,
+                        kind="email",
+                    ),
+                    avoid_domains=avoid_domains,
+                    avoid_providers=avoid_providers,
+                    avoid_reason="mailbox_address_excluded",
+                    _provider_recovery_attempt=_provider_recovery_attempt,
+                )
         failed_provider, failed_domain, failure_reason = _mailbox_open_failure_avoidance(
             exc,
             attempted_provider=attempted_provider,
@@ -1768,6 +2156,7 @@ def resolve_mailbox(
                     avoid_domains=retry_avoid_domains,
                     avoid_providers=avoid_providers,
                     avoid_reason=failure_reason,
+                    _provider_recovery_attempt=_provider_recovery_attempt,
                 )
         if failed_provider and _open_provider_failure_circuit(
             provider=failed_provider,
@@ -1789,6 +2178,7 @@ def resolve_mailbox(
                     kind="provider",
                 ),
                 avoid_reason=failure_reason,
+                _provider_recovery_attempt=_provider_recovery_attempt,
             )
         raise ensure_protocol_runtime_error(
             exc,

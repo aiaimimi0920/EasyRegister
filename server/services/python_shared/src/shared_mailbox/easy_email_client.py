@@ -254,6 +254,43 @@ def _get_json(path: str) -> dict:
     return _mail_service_request(method="GET", path=path)
 
 
+def probe_mailbox_provider(
+    *,
+    provider_type_key: str,
+    preferred_instance_id: str = "",
+) -> dict:
+    """Probe one configured instance so a transient cooling route can recover."""
+    normalized_provider = _normalize_provider(provider_type_key)
+    if not normalized_provider:
+        return {}
+    query = urllib.parse.quote(normalized_provider, safe="")
+    payload = _get_json(f"/mail/query/provider-instances?providerTypeKey={query}")
+    instances = payload.get("instances") if isinstance(payload, dict) else None
+    if not isinstance(instances, list):
+        return {}
+
+    normalized_preferred = str(preferred_instance_id or "").strip()
+    candidates = [item for item in instances if isinstance(item, dict)]
+    candidates.sort(
+        key=lambda item: (
+            str(item.get("id") or "").strip() != normalized_preferred
+            if normalized_preferred
+            else False,
+            str(item.get("status") or "").strip().lower() == "offline",
+        )
+    )
+    for instance in candidates:
+        instance_id = str(instance.get("id") or "").strip()
+        status = str(instance.get("status") or "").strip().lower()
+        if not instance_id or status in {"offline", "provisioning"}:
+            continue
+        encoded_instance_id = urllib.parse.quote(instance_id, safe="")
+        response = _get_json(f"/mail/providers/{encoded_instance_id}/probe")
+        probe = response.get("probe") if isinstance(response, dict) else None
+        return probe if isinstance(probe, dict) else {}
+    return {}
+
+
 def _wait_mail_service_ready() -> None:
     deadline = time.time() + _mail_service_ready_timeout_seconds()
     interval_seconds = _mail_service_ready_probe_interval_seconds()

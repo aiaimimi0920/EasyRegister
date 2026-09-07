@@ -346,6 +346,8 @@ def mailbox_provider_dynamic_blacklist_recovery_qualified(
 
 def mailbox_domain_blacklist_reason(*, result_payload_value: dict[str, Any]) -> str:
     explicit_reason = str(result_payload_value.get("mailboxFailureReason") or "").strip().lower()
+    if explicit_reason == "mailbox_address_excluded":
+        return ""
     if explicit_reason in STRONG_MAILBOX_FAILURE_REASONS:
         return explicit_reason
     step_errors = result_payload_value.get("stepErrors") if isinstance(result_payload_value, dict) else {}
@@ -354,6 +356,8 @@ def mailbox_domain_blacklist_reason(*, result_payload_value: dict[str, Any]) -> 
     create_error = step_errors.get("create-openai-account")
     create_error = create_error if isinstance(create_error, dict) else {}
     message = str(create_error.get("message") or result_payload_value.get("error") or "").strip().lower()
+    if "mailbox_email_excluded" in message:
+        return ""
     if (
         "unsupported_email" in message
         or "the email you provided is not supported" in message
@@ -399,6 +403,9 @@ def mailbox_failure_ignore_reason(*, result_payload_value: dict[str, Any]) -> st
     explicit_reason = str(result_payload_value.get("mailboxFailureReason") or "").strip().lower()
     error_step = str(result_payload_value.get("errorStep") or "").strip().lower()
     combined = _mailbox_result_error_text(result_payload_value=result_payload_value)
+
+    if explicit_reason == "mailbox_address_excluded" or "mailbox_email_excluded" in combined:
+        return "address_scoped_mailbox_excluded"
 
     if (
         "sms_no_selection_plan_candidates" in combined
@@ -674,6 +681,11 @@ def mailbox_session_id_from_ref(mailbox_ref: str) -> str:
         return ""
     if ":" not in value:
         return value
+    # Only the legacy ``provider:session`` form can be decoded safely. Some
+    # providers use opaque multi-part refs (for example provider:instance:data),
+    # whose suffix is not the EasyEmail session id.
+    if value.count(":") != 1:
+        return ""
     return value.split(":", 1)[1].strip()
 
 
@@ -697,6 +709,12 @@ def extract_mailbox_business_outcome_context(*, result_payload_value: dict[str, 
         or mailbox_output.get("mailboxRef")
         or ""
     ).strip()
+    mailbox_session_id = str(
+        mailbox_output.get("session_id")
+        or mailbox_output.get("mailbox_session_id")
+        or mailbox_output.get("mailboxSessionId")
+        or ""
+    ).strip()
     provider = str(
         mailbox_output.get("provider")
         or mailbox_output.get("providerTypeKey")
@@ -718,6 +736,7 @@ def extract_mailbox_business_outcome_context(*, result_payload_value: dict[str, 
             "business_key": business_key,
             "provider": provider,
             "mailbox_ref": mailbox_ref,
+            "mailbox_session_id": mailbox_session_id,
             "email": email,
             "domain": "",
         }
@@ -725,6 +744,7 @@ def extract_mailbox_business_outcome_context(*, result_payload_value: dict[str, 
         "business_key": business_key,
         "provider": provider,
         "mailbox_ref": mailbox_ref,
+        "mailbox_session_id": mailbox_session_id,
         "email": email,
         "domain": email.rsplit("@", 1)[-1].strip().lower(),
     }
@@ -754,7 +774,9 @@ def _report_mailbox_failure_outcome_to_easyemail(
     normalized_reason = str(failure_reason or "").strip().lower()
     if normalized_reason not in MAILBOX_OUTCOME_REPORT_REASONS:
         return
-    session_id = mailbox_session_id_from_ref(str(context.get("mailbox_ref") or ""))
+    session_id = str(context.get("mailbox_session_id") or "").strip()
+    if not session_id:
+        session_id = mailbox_session_id_from_ref(str(context.get("mailbox_ref") or ""))
     if not session_id:
         return
     policy = _mailbox_outcome_report_policy(failure_reason=normalized_reason)
@@ -787,6 +809,9 @@ def _mailbox_artifact_matches_context(*, artifact_payload: dict[str, Any], conte
     context_email = str(context.get("email") or "").strip().lower()
     context_domain = str(context.get("domain") or "").strip().lower()
     context_ref = str(context.get("mailbox_ref") or "").strip()
+    context_session_id = str(context.get("mailbox_session_id") or "").strip()
+    if not context_session_id:
+        context_session_id = mailbox_session_id_from_ref(context_ref)
     artifact_email = str(artifact_payload.get("email") or "").strip().lower()
     artifact_ref = str(artifact_payload.get("mailboxRef") or artifact_payload.get("mailbox_ref") or "").strip()
     artifact_session_id = str(
@@ -804,10 +829,8 @@ def _mailbox_artifact_matches_context(*, artifact_payload: dict[str, Any], conte
         return False
     if context_ref and artifact_ref and context_ref != artifact_ref:
         return False
-    if context_ref and artifact_session_id and ":" in context_ref:
-        context_session_id = context_ref.split(":", 1)[1].strip()
-        if context_session_id and context_session_id != artifact_session_id:
-            return False
+    if context_session_id and artifact_session_id and context_session_id != artifact_session_id:
+        return False
     return True
 
 
@@ -870,12 +893,13 @@ def _mailbox_quality_success_from_completed_outputs(
         create_output.get("mailbox_session_id")
         or create_output.get("mailboxSessionId")
         or login_output.get("mailboxSessionId")
+        or context.get("mailbox_session_id")
         or ""
     ).strip()
+    if not mailbox_session_id:
+        mailbox_session_id = mailbox_session_id_from_ref(mailbox_ref)
     if not mailbox_ref:
         return ""
-    if not mailbox_session_id and ":" in mailbox_ref:
-        mailbox_session_id = mailbox_ref.split(":", 1)[1].strip()
     if not mailbox_session_id:
         return ""
     if not _output_status_is_completed(platform_output) or not _output_status_is_completed(login_output):
@@ -945,6 +969,12 @@ def _mailbox_attempt_outcome_payload(attempt: dict[str, Any]) -> dict[str, Any]:
                 "email": email,
                 "provider": provider,
                 "mailbox_ref": mailbox_ref,
+                "session_id": str(
+                    attempt.get("mailbox_session_id")
+                    or attempt.get("mailboxSessionId")
+                    or attempt.get("session_id")
+                    or ""
+                ).strip(),
                 "business_key": str(attempt.get("business_key") or attempt.get("businessKey") or "").strip().lower(),
             }
         },
