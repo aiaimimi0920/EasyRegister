@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "observedUntilUtc": "2026-09-08T13:39:11.071681+00:00",
+  "scope": "Read-only acceptance of one already-running real PC2 main DST task; separate isolated same-domain mail test. No new registration invocation, SMS purchase, or workflow mutation.",
+  "runtime": {
+    "host": "pc2",
+    "address": "192.168.15.104",
+    "root": "/home/mjc/easyregister",
+    "registerImage": "easy-register/easy-register:nas-dst-20260908-003",
+    "pythonImage": "easy-register/easy-protocol-python:pc2-passwordless-otp-20260908-001",
+    "emailHost": "192.168.15.200",
+    "emailImage": "easyemail/easy-email-service:nas-transport-recovery-20260908-001"
+  },
+  "emailObservation": {
+    "sinceUtc": "2026-09-08T11:50:02Z",
+    "retryEvents": {
+      "ECONNRESET": 10,
+      "UND_ERR_CONNECT_TIMEOUT": 2
+    },
+    "httpFailureEvents": 0,
+    "note": "Retry events record attempted safe recovery. The aggregate log does not provide per-request success correlation."
+  },
+  "realDst": {
+    "taskIndex": 130,
+    "workerId": "worker-01",
+    "startedAt": "2026-09-08T13:00:31.323369+00:00",
+    "finishedAt": "2026-09-08T13:25:14.235907+00:00",
+    "ok": false,
+    "smallSuccess": false,
+    "errorStep": "create-openai-account",
+    "errorCode": "otp_timeout",
+    "stepAttempts": {
+      "acquire-proxy-chain": 3,
+      "acquire-mailbox": 3,
+      "create-openai-account": 3,
+      "release-proxy-chain": 1,
+      "release-mailbox": 1
+    },
+    "steps": {
+      "acquire-proxy-chain": "ok",
+      "acquire-mailbox": "ok",
+      "create-openai-account": "failed",
+      "initialize-platform-organization": "skipped",
+      "initialize-chatgpt-login-session": "skipped",
+      "obtain-codex-oauth": "skipped",
+      "release-proxy-chain": "ok",
+      "release-mailbox": "ok"
+    },
+    "invocation": "Observed the existing continuous worker through its terminal event; did not start a second competing worker."
+  },
+  "milestoneAudit": {
+    "pool": "/shared/register-output/openai/pending",
+    "fileCount": 8,
+    "uniqueAccountCount": 4,
+    "completedMilestoneFiles": 4,
+    "earlySeedFiles": 4,
+    "validation": "others.common.validate_openai_oauth_seed_payload(enforce_max_age=False)",
+    "freshSeedCountAtAudit": 0,
+    "ageNote": "The configured continuation age gate is separate from a historical milestone and from live credential validity.",
+    "artifacts": [
+      {
+        "createdAt": "2026-09-08T06:27:00Z",
+        "sha256": "94ca44f4392c0a8d0dc4eac0bb2e5ce8d8436f46f71033f935d290f77166e3e7",
+        "completedMilestone": true
+      },
+      {
+        "createdAt": "2026-09-08T09:55:21Z",
+        "sha256": "fd2d0fead088c39c3e9c32f839a9585734e3a752c4c24dc22740e48ce3e5678a",
+        "completedMilestone": true
+      },
+      {
+        "taskIndex": 126,
+        "createdAt": "2026-09-08T11:52:26Z",
+        "sha256": "95eb08e4c30bc5e580077a983c98318de3cffdcb46ae63596237386e17d0cefd",
+        "completedMilestone": true
+      },
+      {
+        "taskIndex": 129,
+        "createdAt": "2026-09-08T12:57:29Z",
+        "sha256": "46b5e48c545264b33e09640113bf63c0b0b0b305a1011fd532b60701a428f94c",
+        "completedMilestone": true
+      }
+    ],
+    "allCompletedFiles": {
+      "platformOrganizationCompleted": true,
+      "chatgptLoginCompleted": true,
+      "personalWorkspacePresent": true,
+      "bootstrapLoggedIn": true,
+      "bootstrapPersonal": true,
+      "recoveryDataPresent": true
+    }
+  },
+  "laterStageBlockers": [
+    {
+      "taskIndex": 126,
+      "finishedAt": "2026-09-08T11:53:25.662138579Z",
+      "errorStep": "obtain-codex-oauth",
+      "error": "sms_not_enabled_for_business"
+    },
+    {
+      "taskIndex": 129,
+      "finishedAt": "2026-09-08T12:58:31.182574889Z",
+      "errorStep": "obtain-codex-oauth",
+      "error": "sms_not_enabled_for_business"
+    }
+  ],
+  "dependencyChecks": {
+    "passed": 11,
+    "failed": 0,
+    "verifierExitCode": 0,
+    "includes": [
+      "authenticated catalogs",
+      "unauthenticated rejection",
+      "protocol.echo semantic marker",
+      "gateway external executor identity"
+    ]
+  },
+  "sameDomainDelivery": {
+    "isolated": true,
+    "source": "Recipient domain selected from the current orchestration host's open session, then a separate mailbox was allocated.",
+    "senderDomainMatched": true,
+    "recipientDomainMatched": true,
+    "deliveryMode": "admin_delegate",
+    "bodyMarkerMatched": true,
+    "syntheticCodeMatched": true,
+    "storedMessages": 1,
+    "closedSessions": 2,
+    "releasedSessions": 2,
+    "exitCode": 0
+  },
+  "activeMailboxSnapshot": {
+    "scope": "Current orchestration host, session opened at 2026-09-08T13:27:16.461Z",
+    "sessionStatus": "open",
+    "upstreamStatus": 200,
+    "upstreamMessages": 0,
+    "storedMessages": 0,
+    "storedCodePresent": false,
+    "note": "A snapshot, not proof of the sender's delivery attempt or a permanent delivery failure."
+  },
+  "changesThisContinuation": {
+    "productionCode": false,
+    "productionConfig": false,
+    "newArtifacts": true
+  },
+  "limitations": [
+    "Task 130 did not produce a new small success or complete OAuth.",
+    "OTP nondelivery root cause remains unresolved; same-domain delivery passed but does not prove third-party delivery.",
+    "Paid SMS remains disabled; no phone-verification workaround was applied.",
+    "Historical completed milestones are not fresh credential reauthentication results."
+  ]
+}
