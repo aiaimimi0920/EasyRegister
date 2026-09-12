@@ -11,6 +11,8 @@ def sanitize_filename_component(value: str, *, fallback: str) -> str:
     text = str(value or "").strip()
     if not text:
         return fallback
+    if '..' in text or text.startswith(('/', '\\')):
+        return fallback
     for bad in ('<', '>', ':', '"', '/', "\\", "|", "?", "*"):
         text = text.replace(bad, "_")
     text = text.strip().strip(".")
@@ -29,7 +31,20 @@ def short_account_id_segment(value: str) -> str:
     return text[:8].strip()
 
 
-def decode_jwt_payload(token: str) -> dict[str, Any]:
+def decode_jwt_payload(token: str, *, verify: bool = False) -> dict[str, Any]:
+    """Decode JWT payload.
+
+    Args:
+        token: JWT token string
+        verify: If True, would verify signature (not implemented - returns empty dict).
+                If False, decodes payload without verification (display only).
+
+    Returns:
+        Dict of claims, or empty dict on error
+    """
+    if verify:
+        return {}
+
     raw = str(token or "").strip()
     if not raw:
         return {}

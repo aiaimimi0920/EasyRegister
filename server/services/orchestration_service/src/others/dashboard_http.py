@@ -73,9 +73,9 @@ class DashboardHTTPServer:
             return normalized, 9790
         host, _, port_text = normalized.rpartition(":")
         try:
-            return host or "0.0.0.0", int(port_text)
+            return host or "127.0.0.1", int(port_text)
         except Exception:
-            return host or "0.0.0.0", 9790
+            return host or "127.0.0.1", 9790
 
     def start(self) -> None:
         if self._thread is not None:
@@ -104,6 +104,13 @@ class DashboardHTTPServer:
                     self.wfile.write(payload)
                     return
                 if self.path == "/api/status":
+                    auth_header = self.headers.get('Authorization', '')
+                    if not auth_header.startswith('Bearer ') or auth_header[7:] != server._easy_protocol_token:
+                        self.send_response(401)
+                        self.send_header("Content-Type", "application/json; charset=utf-8")
+                        self.end_headers()
+                        self.wfile.write(b'{"error":"unauthorized"}')
+                        return
                     body = json.dumps(server._build_status_payload(), ensure_ascii=False, default=json_default).encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -240,6 +247,18 @@ class DashboardHTTPServer:
         base = self._easy_protocol_base_url.rstrip("/")
         if base.endswith("/api/public/request"):
             base = base[: -len("/api/public/request")]
+
+        parsed = urllib.parse.urlparse(base)
+        if parsed.hostname in ('127.0.0.1', 'localhost', '::1'):
+            return {}
+        try:
+            import ipaddress
+            ip = ipaddress.ip_address(parsed.hostname)
+            if ip.is_private or ip.is_loopback:
+                return {}
+        except (ValueError, TypeError):
+            pass
+
         url = base + "/api/internal/stats"
         req = urllib.request.Request(
             url,

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -12,41 +11,54 @@ SRC_ROOT = Path(__file__).resolve().parents[1] / "server" / "services" / "orches
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from others import local_config, runtime  # noqa: E402
+from others import runtime  # noqa: E402
 import dashboard_server  # noqa: E402
 
 
 class SecurityDefaultsTests(unittest.TestCase):
-    def test_read_easyemail_server_api_key_from_local_config(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            probe_path = root / "server" / "services" / "orchestration_service" / "src" / "others" / "probe.py"
-            probe_path.parent.mkdir(parents=True, exist_ok=True)
-            probe_path.write_text("", encoding="utf-8")
-            config_path = root / "server" / "EmailService" / "deploy" / "EasyEmail" / "config.yaml"
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text('apiKey: "discovered-secret"\n', encoding="utf-8")
-
-            self.assertEqual(
-                "discovered-secret",
-                local_config.read_easyemail_server_api_key(start_path=probe_path),
-            )
-
-    def test_ensure_easy_email_env_defaults_discovers_local_key(self) -> None:
+    def test_ensure_easy_email_env_defaults_does_not_scan_retired_local_service(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch.object(runtime, "read_easyemail_server_api_key", return_value="mailbox-key"):
+            with mock.patch.object(Path, "exists", return_value=True), \
+                mock.patch.object(Path, "read_text", return_value='apiKey: "retired-key"') as read_text:
                 runtime.ensure_easy_email_env_defaults()
+            read_text.assert_not_called()
+            self.assertEqual("http://192.168.15.200:18081", os.environ.get("MAILBOX_SERVICE_BASE_URL"))
+            self.assertNotIn("MAILBOX_SERVICE_API_KEY", os.environ)
 
-            self.assertEqual("http://localhost:18080", os.environ.get("MAILBOX_SERVICE_BASE_URL"))
-            self.assertEqual("mailbox-key", os.environ.get("MAILBOX_SERVICE_API_KEY"))
+    def test_ensure_easy_email_env_defaults_prefers_nas_sdk_names(self) -> None:
+        env = {
+            "EASY_EMAIL_BASE_URL": "http://easy-email-service:8080",
+            "EASY_EMAIL_API_KEY": "nas-token",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            runtime.ensure_easy_email_env_defaults()
+
+            self.assertEqual("http://easy-email-service:8080", os.environ.get("MAILBOX_SERVICE_BASE_URL"))
+            self.assertEqual("nas-token", os.environ.get("MAILBOX_SERVICE_API_KEY"))
+            self.assertEqual("nas-token", os.environ.get("EASY_EMAIL_API_KEY"))
 
     def test_ensure_easy_email_env_defaults_does_not_inject_hardcoded_key(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch.object(runtime, "read_easyemail_server_api_key", return_value=""):
-                runtime.ensure_easy_email_env_defaults()
+            runtime.ensure_easy_email_env_defaults()
 
-            self.assertEqual("http://localhost:18080", os.environ.get("MAILBOX_SERVICE_BASE_URL"))
+            self.assertEqual("http://192.168.15.200:18081", os.environ.get("MAILBOX_SERVICE_BASE_URL"))
+            self.assertEqual("http://192.168.15.200:18081", os.environ.get("EASY_EMAIL_BASE_URL"))
             self.assertNotIn("MAILBOX_SERVICE_API_KEY", os.environ)
+            self.assertNotIn("EASY_EMAIL_API_KEY", os.environ)
+
+    def test_ensure_easy_email_env_defaults_normalizes_blank_and_conflicting_aliases(self) -> None:
+        with mock.patch.dict(os.environ, {
+            "MAILBOX_SERVICE_BASE_URL": "  ",
+            "MAILBOX_SERVICE_API_KEY": " ",
+            "EASY_EMAIL_BASE_URL": "http://192.168.15.200:18081",
+            "EASY_EMAIL_API_KEY": "nas-token",
+        }, clear=True):
+            runtime.ensure_easy_email_env_defaults()
+            self.assertEqual(os.environ["EASY_EMAIL_BASE_URL"], os.environ["MAILBOX_SERVICE_BASE_URL"])
+            self.assertEqual("nas-token", os.environ["MAILBOX_SERVICE_API_KEY"])
+            os.environ["MAILBOX_SERVICE_API_KEY"] = "explicit-legacy-name-token"
+            runtime.ensure_easy_email_env_defaults()
+            self.assertEqual("explicit-legacy-name-token", os.environ["EASY_EMAIL_API_KEY"])
 
     def test_dashboard_disabled_without_secure_token(self) -> None:
         with mock.patch.dict(os.environ, {"REGISTER_DASHBOARD_ENABLED": "true"}, clear=True):
@@ -68,7 +80,7 @@ class SecurityDefaultsTests(unittest.TestCase):
                 server = dashboard_server.start_dashboard_server_if_enabled(
                     output_root=Path("tmp"),
                     easy_protocol_base_url="http://example.test",
-                    easy_protocol_token="secure-token",
+                    easy_protocol_token="secure-token-16ch",
                     easy_protocol_actor="actor",
                 )
 
@@ -86,7 +98,7 @@ class SecurityDefaultsTests(unittest.TestCase):
                 server = dashboard_server.start_dashboard_server_if_enabled(
                     output_root=Path("tmp"),
                     easy_protocol_base_url="http://example.test",
-                    easy_protocol_token="secure-token",
+                    easy_protocol_token="secure-token-16ch",
                     easy_protocol_actor="actor",
                 )
 
@@ -105,7 +117,7 @@ class SecurityDefaultsTests(unittest.TestCase):
                 server = dashboard_server.start_dashboard_server_if_enabled(
                     output_root=Path("tmp"),
                     easy_protocol_base_url="http://example.test",
-                    easy_protocol_token="secure-token",
+                    easy_protocol_token="secure-token-16ch",
                     easy_protocol_actor="actor",
                 )
 

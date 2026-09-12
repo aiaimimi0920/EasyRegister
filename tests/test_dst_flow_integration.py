@@ -1472,7 +1472,7 @@ class DstFlowIntegrationTests(unittest.TestCase):
         self.assertFalse(seed_path.exists())
         self.assertEqual(0, len(list(source_pool_dir.glob("*.json"))))
 
-    def test_canonical_openai_flows_probe_auth_registration_surface(self) -> None:
+    def test_canonical_openai_flows_probe_required_auth_surfaces(self) -> None:
         flows_dir = Path(__file__).resolve().parents[1] / "server" / "services" / "orchestration_service" / "flows"
         flow_names = (
             "codex-openai-account-v1.semantic-flow.json",
@@ -1480,12 +1480,18 @@ class DstFlowIntegrationTests(unittest.TestCase):
             "codex-team-expand-v1.semantic-flow.json",
         )
         expected_probe_url = "https://auth.openai.com/log-in-or-create-account"
-        expected_probe_urls = [expected_probe_url]
         for flow_name in flow_names:
             with self.subTest(flow_name=flow_name):
                 plan = load_dst_flow(flows_dir / flow_name)
                 proxy_steps = [statement for statement in plan.steps if statement.step_id == "acquire-proxy-chain"]
                 self.assertEqual(1, len(proxy_steps))
+                expected_probe_urls = [expected_probe_url]
+                if flow_name != "codex-team-expand-v1.semantic-flow.json":
+                    expected_probe_urls.extend([
+                        "https://chatgpt.com/auth/login",
+                        "https://chatgpt.com/api/auth/csrf",
+                    ])
+                    self.assertIs(False, proxy_steps[0].input.get("allow_openai_auth_challenge"))
                 self.assertEqual(expected_probe_url, proxy_steps[0].input.get("probe_url"))
                 self.assertEqual(expected_probe_urls, proxy_steps[0].input.get("probe_urls"))
                 self.assertEqual([200], proxy_steps[0].input.get("probe_expected_statuses"))

@@ -35,9 +35,12 @@ def _listen_targets_remote_host(listen: str) -> bool:
 
 def _control_token_is_secure(token: str) -> bool:
     normalized = str(token or "").strip()
-    if not normalized:
+    if len(normalized) < 16:
         return False
-    return normalized not in {"123456"}
+    weak_tokens = {"123456", "password", "admin", "test", "secret", "token", "default", "changeme"}
+    if normalized.lower() in weak_tokens:
+        return False
+    return True
 
 
 def start_dashboard_server_if_enabled(
