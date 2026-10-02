@@ -6,7 +6,7 @@ import os
 import re
 import time
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from others.config import _resolve_shared_root, env_float
 from others.common import json_log, write_json_atomic
@@ -45,6 +45,20 @@ from shared_proxy.easy_proxy_client import (
 _COMPAT_CHECKOUT_COOLDOWN_UNTIL: dict[str, float] = {}
 _COMPAT_CHECKOUT_COOLDOWN_STATE_SCHEMA_VERSION = 1
 _EASY_PROXY_DEVICE_ID_MAX_LENGTH = 64
+
+
+def _flow_proxy_route_key(proxy_url: str) -> str:
+    """Strict leases identify an egress node, not their per-request device ID."""
+    raw = str(proxy_url or "").strip()
+    try:
+        parsed = urlparse(raw)
+        tokens = unquote(parsed.username or "").split("+")[1:]
+        tags = [token[len("pin-strict="):] for token in tokens if token.startswith("pin-strict=")]
+        if len(tags) == 1 and tags[0] and parsed.hostname and parsed.port:
+            return f"node-bound://{parsed.hostname.lower()}:{parsed.port}/{tags[0]}".lower()
+    except (ValueError, TypeError):
+        pass
+    return raw.lower()
 
 
 def _normalize_random_node_host_id(raw_host_id: object) -> str:
@@ -197,7 +211,7 @@ def acquire_flow_proxy_lease(
     probe_url: str | None = None,
     probe_urls: object = None,
     probe_expected_statuses: set[int] | None = None,
-    allow_openai_auth_challenge: bool = False,
+    allow_openai_auth_challenge: bool | None = None,
 ) -> FlowProxyLease:
     proxy_config = _proxy_runtime_config()
     enabled = proxy_config.enabled
@@ -315,14 +329,12 @@ def acquire_flow_proxy_lease(
                     "probe_url": target,
                     "expected_statuses": probe_expected_statuses,
                 }
-                # An auth-only OpenAI probe can legitimately return a
-                # Cloudflare challenge (HTTP 403) while still proving that the
-                # proxy reaches the registration surface.  Keep the strict
-                # default for mixed/non-OpenAI probes, but accept this bounded
-                # auth-only signal without requiring every caller to know the
-                # transport detail.
-                accept_auth_challenge = allow_openai_auth_challenge or (
+                # Keep the implicit reachability check, but honor an explicit
+                # strict probe even when there is only one auth target.
+                accept_auth_challenge = (
                     len(probe_targets) == 1 and kind == "auth"
+                    if allow_openai_auth_challenge is None
+                    else allow_openai_auth_challenge
                 )
                 if accept_auth_challenge:
                     probe_kwargs["allow_openai_auth_challenge"] = True
@@ -438,7 +450,7 @@ def acquire_flow_proxy_lease(
                 )
                 raw_proxy_url = str(candidate.get("proxyUrl") or "").strip()
                 proxy_url = runtime_reachable_proxy_url(raw_proxy_url)
-                unique_key = proxy_url.lower()
+                unique_key = _flow_proxy_route_key(proxy_url)
                 attempted_proxy_urls.add(unique_key)
                 if not proxy_url:
                     raise RuntimeError("easy_proxy_random_node_missing_proxy_url")
@@ -481,7 +493,7 @@ def acquire_flow_proxy_lease(
                 node_tag = str(((candidate or {}).get("metadata") or {}).get("selectedNodeTag") or "").strip()
                 node_port = str(((candidate or {}).get("metadata") or {}).get("selectedNodePort") or "").strip()
                 candidate_proxy_url = runtime_reachable_proxy_url(str((candidate or {}).get("proxyUrl") or "").strip())
-                candidate_unique_key = str(candidate_proxy_url or "").strip().lower()
+                candidate_unique_key = _flow_proxy_route_key(candidate_proxy_url)
                 _, failure_class, _ = _classify_easy_proxy_error(exc, probe_url=primary_probe_url)
                 if failure_class == "route_failure" and candidate_unique_key:
                     _mark_failed_flow_proxy(candidate_unique_key)
@@ -515,7 +527,7 @@ def acquire_flow_proxy_lease(
                 )
                 raw_proxy_url = str(candidate.get("proxyUrl") or "").strip()
                 proxy_url = runtime_reachable_proxy_url(raw_proxy_url)
-                unique_key = proxy_url.lower()
+                unique_key = _flow_proxy_route_key(proxy_url)
                 if not proxy_url:
                     raise RuntimeError("easy_proxy_checkout_missing_proxy_url")
                 _probe_candidate(proxy_url)
@@ -567,7 +579,7 @@ def acquire_flow_proxy_lease(
                 if candidate_lease_id:
                     error_code, failure_class, route_confidence = _classify_easy_proxy_error(exc, probe_url=primary_probe_url)
                     if failure_class == "route_failure" and candidate_proxy_url:
-                        _mark_failed_flow_proxy(candidate_proxy_url.lower())
+                        _mark_failed_flow_proxy(_flow_proxy_route_key(candidate_proxy_url))
                     if not local_route_reuse:
                         report_usage(
                             candidate_lease_id,

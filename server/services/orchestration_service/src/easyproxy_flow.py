@@ -69,11 +69,14 @@ def dispatch_easyproxy_step(*, step_type: str, step_input: dict[str, Any]) -> di
             expected_status_set = None
         probe_url = str(step_input.get("probe_url") or "").strip() or None
         probe_urls = _coerce_string_list(step_input.get("probe_urls"))
-        allow_openai_auth_challenge = str(
-            step_input.get("allow_openai_auth_challenge")
-            or step_input.get("allowOpenaiAuthChallenge")
-            or ""
-        ).strip().lower() in {"1", "true", "yes", "on"}
+        challenge_policy = step_input.get("allow_openai_auth_challenge")
+        if challenge_policy is None:
+            challenge_policy = step_input.get("allowOpenaiAuthChallenge")
+        allow_openai_auth_challenge = (
+            None
+            if challenge_policy is None
+            else str(challenge_policy).strip().lower() in {"1", "true", "yes", "on"}
+        )
         last_error: Exception | None = None
         for attempt_index in range(max_acquire_attempts):
             proxy_kwargs = {
@@ -84,8 +87,8 @@ def dispatch_easyproxy_step(*, step_type: str, step_input: dict[str, Any]) -> di
                 "probe_urls": probe_urls,
                 "probe_expected_statuses": expected_status_set,
             }
-            if allow_openai_auth_challenge:
-                proxy_kwargs["allow_openai_auth_challenge"] = True
+            if allow_openai_auth_challenge is not None:
+                proxy_kwargs["allow_openai_auth_challenge"] = allow_openai_auth_challenge
             lease = acquire_flow_proxy_lease(
                 **proxy_kwargs,
             )

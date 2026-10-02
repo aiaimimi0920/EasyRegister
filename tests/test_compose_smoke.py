@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,6 +15,33 @@ TEST_COMPOSE_PATH = REPO_ROOT / "compose" / "docker-compose.test.yaml"
 
 
 class ComposeSmokeTests(unittest.TestCase):
+    def test_rendered_compose_defaults_use_cross_host_nas_services(self) -> None:
+        docker_path = shutil.which("docker")
+        if not docker_path:
+            self.skipTest("docker not available")
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(("EASY_EMAIL_", "MAILBOX_SERVICE_", "EASY_PROXY_", "EASYREGISTER_TEST_", "REGISTER_SMS_"))}
+        with tempfile.TemporaryDirectory(prefix="easyregister-compose-nas-") as tmp:
+            env_file = Path(tmp) / "empty.env"
+            env_file.write_text("", encoding="utf-8")
+            for compose_path in (MAIN_COMPOSE_PATH, TEST_COMPOSE_PATH):
+                with self.subTest(compose=compose_path.name):
+                    result = subprocess.run(
+                        [docker_path, "compose", "--env-file", str(env_file), "-f", str(compose_path), "config", "--format", "json"],
+                        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30,
+                    )
+                    self.assertEqual(0, result.returncode, msg=result.stderr)
+                    services = json.loads(result.stdout)["services"]
+                    self.assertTrue(services)
+                    for service in services.values():
+                        configured = service["environment"]
+                        self.assertEqual("http://192.168.15.200:18081", configured["MAILBOX_SERVICE_BASE_URL"])
+                        self.assertEqual("http://192.168.15.201:29888", configured["EASY_PROXY_BASE_URL"])
+                        self.assertEqual("192.168.15.201", configured["EASY_PROXY_RUNTIME_HOST"])
+                        sms_policies = json.loads(configured["REGISTER_SMS_BUSINESS_POLICIES_JSON"])
+                        self.assertIs(sms_policies["openai"]["enabled"], True)
+                        self.assertIs(sms_policies["default"]["enabled"], False)
+
     def test_main_compose_uses_easyaimi_external_network(self) -> None:
         payload = MAIN_COMPOSE_PATH.read_text(encoding="utf-8")
         self.assertIn("EasyAiMi", payload)

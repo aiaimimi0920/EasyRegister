@@ -39,10 +39,18 @@ class Mailbox:
     recovery_data_credential: dict[str, Any] | None = None
 
 
+def _first_env(*names: str) -> str:
+    for name in names:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _mail_service_base_url() -> str:
-    value = (os.environ.get("MAILBOX_SERVICE_BASE_URL") or "").strip().rstrip("/")
+    value = _first_env("MAILBOX_SERVICE_BASE_URL", "EASY_EMAIL_BASE_URL").rstrip("/")
     if not value:
-        raise RuntimeError("MAILBOX_SERVICE_BASE_URL is required")
+        raise RuntimeError("MAILBOX_SERVICE_BASE_URL or EASY_EMAIL_BASE_URL is required")
     return value
 
 
@@ -57,7 +65,7 @@ def _mail_service_headers() -> dict[str, str]:
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    api_key = (os.environ.get("MAILBOX_SERVICE_API_KEY") or "").strip()
+    api_key = _first_env("MAILBOX_SERVICE_API_KEY", "EASY_EMAIL_API_KEY")
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
@@ -101,7 +109,14 @@ def _build_opener() -> urllib.request.OpenerDirector:
     base_url = _mail_service_base_url()
     parsed = urllib.parse.urlparse(base_url)
     host = parsed.hostname or ""
-    should_bypass_proxy = host in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "easy-email")
+    should_bypass_proxy = host in (
+        "127.0.0.1",
+        "localhost",
+        "::1",
+        "0.0.0.0",
+        "easy-email",
+        "easy-email-service",
+    )
     if not should_bypass_proxy and host:
         try:
             ip = ipaddress.ip_address(host)
@@ -297,12 +312,14 @@ def _wait_mail_service_ready() -> None:
     last_error: Exception | None = None
     while time.time() < deadline:
         try:
-            _mail_service_request(
+            payload = _mail_service_request(
                 method="GET",
                 path="/mail/catalog",
                 timeout_seconds=10,
                 attempts=1,
             )
+            if not isinstance(payload, dict) or not isinstance(payload.get("catalog"), dict):
+                raise RuntimeError("mail service catalog readiness failed: catalog object missing")
             return
         except Exception as exc:
             last_error = exc
@@ -416,7 +433,12 @@ def _snapshot_session_openai_code(
     min_mail_id: int,
     allow_min_mail_id_equal: bool = False,
 ) -> tuple[str, int]:
-    response = _get_json("/mail/snapshot")
+    # Query persisted rows for this session only. Bulk snapshots can include
+    # every mailbox's full message body and exhaust the OTP waiting budget.
+    query = urllib.parse.urlencode({
+        "sessionId": session_id, "sync": "false", "limit": 20, "newestFirst": "true",
+    })
+    response = _get_json("/mail/query/observed-messages?" + query)
     snapshot = response.get("snapshot") if isinstance(response.get("snapshot"), dict) else response.get("result")
     root = snapshot if isinstance(snapshot, dict) else response
     messages = root.get("messages") if isinstance(root, dict) else None
@@ -769,6 +791,11 @@ def _build_mailbox_request_payload(
     preferred_instance_id = (os.environ.get("MAILBOX_PROVIDER_INSTANCE_ID") or "").strip()
     if provider_key == "self-hosted":
         provision_mode = "auto-create-if-missing"
+        binding_mode = "shared-instance"
+    elif provider_key == "cloudflare_temp_email":
+        # The NAS-owned instance holds admin recovery credentials. Provisioning
+        # a separate instance only inherits public settings, breaking recovery.
+        provision_mode = "reuse-only"
         binding_mode = "shared-instance"
     elif provider_key is None:
         provision_mode = "auto-create-if-missing"
@@ -1352,4 +1379,3 @@ def get_mailbox_latest_message_id(
     if not isinstance(code_obj, dict):
         return 0
     return _mail_dispatch_code_marker(code_obj)
-

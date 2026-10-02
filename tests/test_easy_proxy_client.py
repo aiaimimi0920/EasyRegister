@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import urllib.request
+
 import base64
+import gzip
 import io
 import json
+import runpy
 import sys
 import unittest
 import urllib.error
@@ -20,6 +24,55 @@ from shared_proxy import easy_proxy_client  # noqa: E402
 
 
 class EasyProxyClientTests(unittest.TestCase):
+    def test_management_headers_advertise_gzip_without_changing_auth(self) -> None:
+        headers = easy_proxy_client._management_headers(
+            "http://easy-proxy:29888", api_key="test-password", opener=object(),
+            discovery={"auth_mode": "password", "no_password": False},
+        )
+        self.assertEqual("gzip", headers["Accept-Encoding"])
+        self.assertEqual("test-password", headers["Authorization"])
+
+    def test_read_json_response_decodes_gzip_and_legacy_identity(self) -> None:
+        payload = {"nodes": [{"tag": "node-a", "timeline": [{"error": "历史诊断"}]}]}
+        plain = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request("http://easy-proxy:29888/api/nodes")
+        for encoding, body in (("gzip", gzip.compress(plain)), ("", plain)):
+            with self.subTest(encoding=encoding):
+                response = mock.MagicMock()
+                response.__enter__.return_value = response
+                response.headers = {"Content-Encoding": encoding}
+                response.read.return_value = body
+                opener = mock.Mock()
+                opener.open.return_value = response
+                self.assertEqual(payload, easy_proxy_client._read_json_response(opener, request))
+
+    def test_read_json_response_rejects_corrupted_gzip(self) -> None:
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {"Content-Encoding": "gzip"}
+        response.read.return_value = b"not-gzip-json"
+        opener = mock.Mock()
+        opener.open.return_value = response
+        request = urllib.request.Request("http://easy-proxy:29888/api/nodes")
+        with self.assertRaises(gzip.BadGzipFile):
+            easy_proxy_client._read_json_response(opener, request)
+
+    def test_shared_client_defaults_to_nas_gateway(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            module = runpy.run_path(str(PYTHON_SHARED_SRC_ROOT / "shared_proxy" / "easy_proxy_client.py"))
+        self.assertEqual("http://192.168.15.201:29888", module["EASY_PROXY_BASE_URL"])
+
+    def test_api_request_honors_environment_injected_after_import(self) -> None:
+        with mock.patch.dict("os.environ", {"EASY_PROXY_BASE_URL": "http://192.168.15.201:29888"}, clear=True), \
+            mock.patch.object(easy_proxy_client, "EASY_PROXY_BASE_URL", "http://127.0.0.1:29888"), \
+            mock.patch.object(easy_proxy_client, "_build_management_opener", return_value=object()), \
+            mock.patch.object(easy_proxy_client, "_management_header_candidates", return_value=({}, [{}])), \
+            mock.patch.object(easy_proxy_client, "_read_json_response", return_value={}) as read:
+            easy_proxy_client._api_request("GET", "/api/nodes", wait_for_ready=False)
+            self.assertEqual("http://192.168.15.201:29888/api/nodes", read.call_args.args[1].full_url)
+            easy_proxy_client._api_request("GET", "/api/nodes", base_url="http://explicit-gateway:29888", wait_for_ready=False)
+            self.assertEqual("http://explicit-gateway:29888/api/nodes", read.call_args.args[1].full_url)
+
     def test_api_request_discovers_password_auth_and_uses_raw_management_password(self) -> None:
         with mock.patch.object(easy_proxy_client, "_build_management_opener", return_value=object()), \
             mock.patch.object(
@@ -300,6 +353,7 @@ class EasyProxyClientTests(unittest.TestCase):
                 "bindingMode": "shared-instance",
                 "protocol": "http",
                 "ttlMinutes": 45,
+                "requireDedicatedNode": True,
                 "metadata": {"source": "easyregister"},
             },
             request_body,
@@ -354,6 +408,40 @@ class EasyProxyClientTests(unittest.TestCase):
             base_url="http://easy-proxy:29888",
             api_key="management-secret",
         )
+
+    def test_checkout_accepts_verified_strict_username_binding(self) -> None:
+        lease = {
+            "id": "strict-lease",
+            "proxyUrl": "http://user%2Bdev%3Dworker%2Bpin-strict%3Dnode-a%2Bnosplit:secret@easy-proxy:22323",
+            "port": 22323,
+            "metadata": {
+                "selectedNodeMode": "pinned-node",
+                "selectedNodeTag": "node-a",
+                "selectedNodePort": "22323",
+            },
+        }
+        with mock.patch.object(easy_proxy_client, "_api_request", return_value={"result": {"lease": lease}}) as request:
+            self.assertEqual(lease, easy_proxy_client.checkout_proxy(require_dedicated_node=True))
+        self.assertTrue(request.call_args.args[2]["requireDedicatedNode"])
+
+    def test_random_node_checkout_cannot_mislabel_shared_pool_port(self) -> None:
+        with mock.patch.object(easy_proxy_client, "get_settings", return_value={"mode": "pool"}):
+            with self.assertRaisesRegex(RuntimeError, "requires per-node listeners"):
+                easy_proxy_client.checkout_random_node_proxy()
+
+    def test_checkout_rejects_spoofed_or_soft_pin_metadata_and_releases(self) -> None:
+        for username in ["user+pin=node-a+nosplit", "user+pin-strict=node-b+nosplit", "user+pin-strict=node-a", "user+pin-strict=node-a+pin-strict=node-b+nosplit"]:
+            with self.subTest(username=username):
+                lease = {
+                    "id": "invalid-pin",
+                    "proxyUrl": easy_proxy_client._build_proxy_url(protocol="http", host="easy-proxy", port=22323, username=username, password="secret"),
+                    "port": 22323,
+                    "metadata": {"selectedNodeMode": "pinned-node", "selectedNodeTag": "node-a", "selectedNodePort": "22323"},
+                }
+                with mock.patch.object(easy_proxy_client, "_api_request", return_value={"result": {"lease": lease}}), mock.patch.object(easy_proxy_client, "release_lease") as release:
+                    with self.assertRaisesRegex(RuntimeError, "invalid strict node binding"):
+                        easy_proxy_client.checkout_proxy(require_dedicated_node=True)
+                release.assert_called_once()
 
     def test_list_available_nodes_falls_back_after_valid_empty_filtered_response(self) -> None:
         with mock.patch.object(easy_proxy_client, "_build_management_opener", return_value=object()):
@@ -745,6 +833,21 @@ class EasyProxyClientTests(unittest.TestCase):
             "http://easy-proxy-monorepo-service:29888/api/nodes",
             second_request.full_url,
         )
+
+
+class LiveEasyProxyNasAuthTests(unittest.TestCase):
+    def test_nas_gateway_auth_discovery_uses_canonical_pair(self) -> None:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            payload = easy_proxy_client._discover_management_auth(
+                "http://192.168.15.201:29888",
+                opener,
+            )
+        except Exception as exc:
+            self.skipTest(f"NAS EasyProxy auth discovery unavailable: {type(exc).__name__}")
+            return
+        self.assertEqual("canonical_pair", payload.get("auth_mode"))
+        self.assertTrue(payload.get("username_required"))
 
 
 if __name__ == "__main__":

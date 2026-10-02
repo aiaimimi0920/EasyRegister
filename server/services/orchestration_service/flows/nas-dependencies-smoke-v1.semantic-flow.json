@@ -1,0 +1,78 @@
+{
+  "definition": {
+    "version": "1",
+    "id": "nas-dependencies-smoke-v1",
+    "name": "NAS dependency migration acceptance",
+    "platform": "diagnostic",
+    "kind": "semantic-flow",
+    "description": "Explicit opt-in validation using production DST dispatchers; no registration or paid SMS.",
+    "resourcePolicies": [],
+    "metadata": {
+      "mailbox": { "businessKey": "nas-migration-smoke" },
+      "taskRetry": { "maxAttempts": 1 }
+    },
+    "steps": [
+      {
+        "id": "acquire-proxy-chain",
+        "type": "acquire_proxy_chain",
+        "input": {
+          "flow_name": "nas_dependency_smoke",
+          "probe_url": "https://example.com/",
+          "probe_expected_statuses": [200],
+          "required": true,
+          "max_acquire_attempts": 1
+        },
+        "saveAs": "proxy_chain",
+        "metadata": { "owner": "easyproxy", "stage": "proxy-acquire" }
+      },
+      {
+        "id": "acquire-mailbox",
+        "type": "acquire_mailbox",
+        "input": { "business_key": "nas-migration-smoke" },
+        "saveAs": "mailbox",
+        "metadata": { "owner": "easyemail", "stage": "mailbox-acquire" }
+      },
+      {
+        "id": "recover-mailbox",
+        "type": "acquire_mailbox",
+        "input": {
+          "preallocated_email": "{{mailbox.email}}",
+          "preallocated_recovery_data_credential": "{{mailbox.recovery_data_credential}}",
+          "recover_preallocated_email": true,
+          "business_key": "nas-migration-smoke"
+        },
+        "saveAs": "recovered_mailbox",
+        "metadata": { "owner": "easyemail", "stage": "mailbox-recover" }
+      },
+      {
+        "id": "release-recovered-mailbox",
+        "type": "release_mailbox",
+        "input": {
+          "provider": "{{recovered_mailbox.provider}}",
+          "mailbox_ref": "{{recovered_mailbox.mailbox_ref}}",
+          "mailbox_session_id": "{{recovered_mailbox.session_id}}"
+        },
+        "saveAs": "release_recovered_mailbox",
+        "metadata": { "owner": "easyemail", "stage": "cleanup", "alwaysRun": true }
+      },
+      {
+        "id": "release-mailbox",
+        "type": "release_mailbox",
+        "input": {
+          "provider": "{{mailbox.provider}}",
+          "mailbox_ref": "{{mailbox.mailbox_ref}}",
+          "mailbox_session_id": "{{mailbox.session_id}}"
+        },
+        "saveAs": "release_mailbox",
+        "metadata": { "owner": "easyemail", "stage": "cleanup", "alwaysRun": true }
+      },
+      {
+        "id": "release-proxy-chain",
+        "type": "release_proxy_chain",
+        "input": { "proxy_chain": "{{proxy_chain}}", "error_code": "{{task.errorCode}}" },
+        "saveAs": "release_proxy_chain",
+        "metadata": { "owner": "easyproxy", "stage": "cleanup", "alwaysRun": true }
+      }
+    ]
+  }
+}

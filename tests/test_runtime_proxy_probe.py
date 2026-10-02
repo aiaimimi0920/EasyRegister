@@ -29,7 +29,75 @@ class _FakeProbeSession:
         self.closed = True
 
 
+class _StreamingProbeResponse:
+    def __init__(self, *, status_code: int, prefix: bytes, first_chunk_error: Exception | None = None) -> None:
+        self.status_code = status_code
+        self.headers: dict[str, str] = {}
+        self.history: list[object] = []
+        self.prefix = prefix
+        self.first_chunk_error = first_chunk_error
+        self.closed = False
+        self.chunk_size = 0
+
+    @property
+    def text(self) -> str:
+        raise AssertionError("probe must not drain the complete response body")
+
+    def iter_content(self, chunk_size: int):
+        self.chunk_size = chunk_size
+        if self.first_chunk_error is not None:
+            raise self.first_chunk_error
+        yield self.prefix
+        raise TimeoutError("the remaining large HTML body stalls")
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class RuntimeProxyProbeTests(unittest.TestCase):
+    def test_probe_uses_bounded_prefix_without_draining_large_html(self) -> None:
+        response = _StreamingProbeResponse(status_code=200, prefix=b"<!doctype html><title>Login</title>")
+        session = _FakeProbeSession(response)
+        with mock.patch.object(runtime_proxy_probe.requests, "Session", return_value=session), \
+            mock.patch.object(runtime_proxy_probe, "build_request_proxies", return_value={}):
+            runtime_proxy_probe.probe_flow_proxy(
+                proxy_url="http://easy-proxy:25001",
+                probe_url="https://chatgpt.com/auth/login",
+                expected_statuses={200},
+            )
+        self.assertTrue(session.get_kwargs["stream"])
+        self.assertEqual(8192, response.chunk_size)
+        self.assertTrue(response.closed)
+        self.assertTrue(session.closed)
+
+    def test_streamed_403_challenge_still_fails_and_closes_response(self) -> None:
+        response = _StreamingProbeResponse(status_code=403, prefix=b"<title>Just a moment...</title>")
+        session = _FakeProbeSession(response)
+        with mock.patch.object(runtime_proxy_probe.requests, "Session", return_value=session), \
+            mock.patch.object(runtime_proxy_probe, "build_request_proxies", return_value={}):
+            with self.assertRaisesRegex(RuntimeError, "easy_proxy_probe_failed status=403"):
+                runtime_proxy_probe.probe_flow_proxy(
+                    proxy_url="http://easy-proxy:25001",
+                    probe_url="https://auth.openai.com/log-in-or-create-account",
+                    expected_statuses={200},
+                )
+        self.assertTrue(response.closed)
+        self.assertTrue(session.closed)
+
+    def test_stream_prefix_timeout_is_not_treated_as_success(self) -> None:
+        response = _StreamingProbeResponse(status_code=200, prefix=b"", first_chunk_error=TimeoutError("prefix timeout"))
+        session = _FakeProbeSession(response)
+        with mock.patch.object(runtime_proxy_probe.requests, "Session", return_value=session), \
+            mock.patch.object(runtime_proxy_probe, "build_request_proxies", return_value={}):
+            with self.assertRaisesRegex(TimeoutError, "prefix timeout"):
+                runtime_proxy_probe.probe_flow_proxy(
+                    proxy_url="http://easy-proxy:25001",
+                    probe_url="https://chatgpt.com/auth/login",
+                    expected_statuses={200},
+                )
+        self.assertTrue(response.closed)
+        self.assertTrue(session.closed)
+
     def _probe_with_response(self, *, probe_url: str, status_code: int, text: str = "") -> _FakeProbeSession:
         session = _FakeProbeSession(SimpleNamespace(status_code=status_code, text=text, headers={}))
         with mock.patch.object(runtime_proxy_probe.requests, "Session", return_value=session), \
@@ -187,6 +255,8 @@ class RuntimeProxyProbeTests(unittest.TestCase):
 
     def test_curl_transport_failures_are_high_confidence_route_failures(self) -> None:
         samples = [
+            "Failed to perform, curl: (28) Connection timed out after 20001 milliseconds.",
+            "curl: (28) Operation timed out after 20000 milliseconds with 0 bytes received",
             "Failed to perform, curl: (35) Recv failure: Connection reset by peer.",
             "curl: (7) Failed to connect to easy-proxy port 25155 after 0 ms: Could not connect to server",
             "Failed to perform, curl: (7) CONNECT tunnel failed, response 502.",

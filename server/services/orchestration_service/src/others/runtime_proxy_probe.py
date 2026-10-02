@@ -19,6 +19,7 @@ from shared_proxy import build_request_proxies, env_flag
 
 
 DEFAULT_EASY_PROXY_PROBE_TIMEOUT_SECONDS = 20
+DEFAULT_EASY_PROXY_PROBE_BODY_PREFIX_BYTES = 8192
 ACTIVE_FLOW_PROXY_LOCK = threading.Lock()
 ACTIVE_FLOW_PROXY_URLS: set[str] = set()
 RECENT_FLOW_PROXY_URLS: dict[str, float] = {}
@@ -145,13 +146,30 @@ def probe_flow_proxy(
             "accept-language": "en-US,en;q=0.9",
         }
     )
+    response = None
+    response_body_prefix = ""
     try:
         response = session.get(
             probe_url,
             allow_redirects=True,
+            stream=True,
             proxies=build_request_proxies(proxy_url),
         )
+        # A reachability probe needs status/headers and a challenge prefix, not
+        # an entire streamed HTML page whose tail can exceed the HTTP budget.
+        iter_content = getattr(response, "iter_content", None)
+        if callable(iter_content):
+            prefix = next(iter_content(chunk_size=DEFAULT_EASY_PROXY_PROBE_BODY_PREFIX_BYTES), b"")
+            response_body_prefix = prefix[:DEFAULT_EASY_PROXY_PROBE_BODY_PREFIX_BYTES].decode("utf-8", errors="replace")
+        else:
+            response_body_prefix = str(getattr(response, "text", "") or "")[:DEFAULT_EASY_PROXY_PROBE_BODY_PREFIX_BYTES]
     finally:
+        try:
+            close_response = getattr(response, "close", None)
+            if callable(close_response):
+                close_response()
+        except Exception:
+            pass
         try:
             session.close()
         except Exception:
@@ -163,7 +181,11 @@ def probe_flow_proxy(
     challenge_detected = False
     for candidate_response in response_chain:
         candidate_status = int(getattr(candidate_response, "status_code", 0) or 0)
-        candidate_body = str(getattr(candidate_response, "text", "") or "")[:180]
+        candidate_body = (
+            response_body_prefix
+            if candidate_response is response
+            else str(getattr(candidate_response, "text", "") or "")[:DEFAULT_EASY_PROXY_PROBE_BODY_PREFIX_BYTES]
+        )
         if _is_openai_auth_challenge_probe_response(
             probe_url,
             candidate_status,
@@ -235,6 +257,7 @@ def classify_easy_proxy_error(exc: Exception, *, probe_url: str | None = None) -
             return (error_code, "route_failure", "medium")
     route_markers = (
         "timeout",
+        "timed out",
         "tls",
         "connection reset",
         "connection closed",

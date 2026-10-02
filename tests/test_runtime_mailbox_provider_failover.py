@@ -29,6 +29,41 @@ class RuntimeMailboxProviderFailoverTests(unittest.TestCase):
         with runtime_mailbox._PROVIDER_OPEN_FAILURE_CIRCUITS_LOCK:
             runtime_mailbox._PROVIDER_OPEN_FAILURE_CIRCUITS.clear()
 
+    def test_sole_provider_uses_configured_domain_without_prior_history(self) -> None:
+        mailbox = runtime_mailbox.Mailbox(
+            provider="cloudflare_temp_email", email="candidate@healthy.test",
+            ref="cloudflare_temp_email:fixture", session_id="fixture",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "REGISTER_OUTPUT_ROOT": str(Path(tmp_dir) / "register-output"),
+                "REGISTER_MAILBOX_PROVIDERS": "cloudflare_temp_email",
+                "REGISTER_MAILBOX_BUSINESS_POLICIES_JSON": '{"openai":{"domainPool":["healthy.test"]}}',
+                "REGISTER_MAILBOX_BUSINESS_RETRY_ATTEMPTS": "1",
+            },
+            clear=True,
+        ), mock.patch.object(
+            runtime_mailbox, "_resolve_planned_mailbox_provider", return_value="cloudflare_temp_email",
+        ), mock.patch.object(
+            runtime_mailbox, "create_mailbox", return_value=mailbox,
+        ) as create, mock.patch.object(runtime_mailbox, "json_log"):
+            resolved = runtime_mailbox.resolve_mailbox(
+                preallocated_email=None, preallocated_session_id=None,
+                preallocated_mailbox_ref=None, business_key="openai",
+            )
+        self.assertIs(mailbox, resolved)
+        create.assert_called_once()
+        self.assertEqual("cloudflare_temp_email", create.call_args.kwargs["provider"])
+        self.assertEqual("healthy.test", create.call_args.kwargs.get("mailcreate_domain"))
+
+    def test_provider_inference_preserves_observed_mapping_and_multi_provider_default(self) -> None:
+        observed = {"domains": {"healthy.test": {"provider": "im215"}}}
+        with mock.patch.object(runtime_mailbox, "resolve_mailbox_provider_selections", return_value=("cloudflare_temp_email",)):
+            self.assertEqual("im215", runtime_mailbox._mailbox_domain_provider("healthy.test", observed))
+        with mock.patch.object(runtime_mailbox, "resolve_mailbox_provider_selections", return_value=("cloudflare_temp_email", "im215")):
+            self.assertEqual("moemail", runtime_mailbox._mailbox_domain_provider("unknown.test", {}))
+
     def test_provider_auth_failure_opens_circuit_and_replans(self) -> None:
         mailbox = runtime_mailbox.Mailbox(
             provider="cloudflare_temp_email",

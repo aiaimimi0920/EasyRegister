@@ -173,6 +173,24 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual("", config.selection_mode)
         self.assertEqual("", config.resolve_business_policy("openai").selection_mode)
 
+    def test_sms_global_paid_disable_cannot_be_overridden_by_business_policy(self) -> None:
+        for policy_key in ("openai", "default"):
+            with self.subTest(policy_key=policy_key), mock.patch.dict(
+                os.environ,
+                {
+                    "REGISTER_SMS_ALLOW_PAID": "false",
+                    "REGISTER_SMS_BUSINESS_POLICIES_JSON": (
+                        '{"' + policy_key + '":{"enabled":true,"allowPaid":true,"allowReuse":false}}'
+                    ),
+                },
+                clear=True,
+            ):
+                config = SmsRuntimeConfig.from_env(default_state_path=Path("sms-state.json"))
+                policy = config.resolve_business_policy("openai")
+                self.assertTrue(policy.enabled)
+                self.assertFalse(policy.allow_paid)
+                self.assertFalse(policy.allow_reuse)
+
     def test_sms_runtime_config_defaults_allow_paid_when_not_overridden(self) -> None:
         with mock.patch.dict(
             os.environ,
@@ -185,6 +203,7 @@ class TypedConfigTests(unittest.TestCase):
 
         policy = config.resolve_business_policy("openai")
         self.assertTrue(config.allow_paid)
+        self.assertTrue(policy.enabled)
         self.assertTrue(policy.allow_paid)
 
     def test_dashboard_settings_reads_typed_values(self) -> None:
@@ -416,22 +435,28 @@ class TypedConfigTests(unittest.TestCase):
         self.assertEqual("easy-proxy", config.runtime_host)
 
     def test_easy_proxy_defaults_use_current_management_port_and_lease_api(self) -> None:
-        self.assertEqual("http://localhost:29888", runtime_proxy_env.DEFAULT_EASY_PROXY_BASE_URL_HOST)
-        self.assertEqual("http://localhost:29888", preflight.DEFAULT_EASY_PROXY_BASE_URL_HOST)
-        self.assertEqual("127.0.0.1", runtime_proxy_env.DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST)
-        self.assertEqual("127.0.0.1", preflight.DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST)
+        self.assertEqual("http://192.168.15.201:29888", runtime_proxy_env.DEFAULT_EASY_PROXY_BASE_URL_HOST)
+        self.assertEqual("http://192.168.15.201:29888", preflight.DEFAULT_EASY_PROXY_BASE_URL_HOST)
+        self.assertEqual("http://192.168.15.201:29888", runtime_proxy_env.DEFAULT_EASY_PROXY_BASE_URL_DOCKER)
+        self.assertEqual("http://192.168.15.201:29888", preflight.DEFAULT_EASY_PROXY_BASE_URL_DOCKER)
+        self.assertEqual("192.168.15.201", runtime_proxy_env.DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST)
+        self.assertEqual("192.168.15.201", preflight.DEFAULT_EASY_PROXY_RUNTIME_HOST_HOST)
+        self.assertEqual("192.168.15.201", runtime_proxy_env.DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER)
+        self.assertEqual("192.168.15.201", preflight.DEFAULT_EASY_PROXY_RUNTIME_HOST_DOCKER)
         self.assertEqual("lease", runtime_proxy_env.DEFAULT_EASY_PROXY_MODE)
         self.assertEqual("lease", preflight.DEFAULT_EASY_PROXY_MODE)
 
-    def test_easy_proxy_host_mode_uses_loopback_runtime_host(self) -> None:
+    def test_easy_proxy_host_mode_uses_nas_gateway_runtime_host(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True), \
             mock.patch.object(runtime_proxy_env, "_running_in_docker", return_value=False), \
             mock.patch.object(preflight, "_running_in_docker", return_value=False):
             runtime_config = runtime_proxy_env.proxy_runtime_config()
             preflight_config = preflight._proxy_runtime_config()
 
-        self.assertEqual("127.0.0.1", runtime_config.runtime_host)
-        self.assertEqual("127.0.0.1", preflight_config.runtime_host)
+        self.assertEqual("192.168.15.201", runtime_config.runtime_host)
+        self.assertEqual("192.168.15.201", preflight_config.runtime_host)
+        self.assertEqual("http://192.168.15.201:29888", runtime_config.management_base_url)
+        self.assertEqual("http://192.168.15.201:29888", preflight_config.management_base_url)
 
     def test_proxy_runtime_config_preserves_auto_mode_for_lease_fallback(self) -> None:
         with mock.patch.dict(

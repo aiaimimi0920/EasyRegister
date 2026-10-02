@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from others.error_catalog import ErrorCodes
 from others.error_catalog import classify_error_code
 from others.error_catalog import infer_category_from_code
 from others.error_catalog import infer_category_from_message
@@ -58,6 +59,9 @@ def build_error_details(
         code=code,
     )
     final_category = normalize_error_category(category) or infer_category_from_code(final_code) or infer_category_from_message(message)
+    if final_code == ErrorCodes.ACCOUNT_UNAVAILABLE:
+        # 明确的账户拒绝优先于旧 provider 的笼统 flow_error 分类。
+        final_category = infer_category_from_code(final_code)
     return {
         "code": final_code,
         "message": str(message or "").strip(),

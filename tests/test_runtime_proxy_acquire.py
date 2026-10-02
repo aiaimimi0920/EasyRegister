@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -45,6 +46,15 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
         self.assertEqual(normalized, runtime_proxy_acquire._normalize_random_node_host_id(raw))
         self.assertNotEqual(raw, normalized)
 
+    def test_strict_route_identity_is_independent_of_device_and_credentials(self) -> None:
+        first = "http://user%2Bdev%3Da%2Bpin-strict%3Dnode-a%2Bnosplit:one@proxy:22323"
+        second = "http://user%2Bdev%3Db%2Bpin-strict%3Dnode-a%2Bnosplit:two@proxy:22323"
+        other = second.replace("node-a", "node-b")
+        self.assertEqual(runtime_proxy_acquire._flow_proxy_route_key(first), runtime_proxy_acquire._flow_proxy_route_key(second))
+        self.assertNotEqual(runtime_proxy_acquire._flow_proxy_route_key(first), runtime_proxy_acquire._flow_proxy_route_key(other))
+        ordinary = "http://user:secret@proxy:25001"
+        self.assertEqual(ordinary, runtime_proxy_acquire._flow_proxy_route_key(ordinary))
+
     def test_registration_defaults_to_reusing_recent_success(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
             self.assertEqual(
@@ -75,6 +85,71 @@ class RuntimeProxyAcquireTests(unittest.TestCase):
                 "false",
                 runtime_proxy_acquire._default_avoid_recent_success_reuse("oauth"),
             )
+
+    def test_explicit_strict_auth_probe_is_not_overridden_by_single_target_default(self) -> None:
+        config = SimpleNamespace(
+            enabled=True, required_by_default=True,
+            management_base_url="http://easy-proxy:29888", api_key="", ttl_minutes=30,
+        )
+
+        def challenged_probe(**kwargs):
+            if not kwargs.get("allow_openai_auth_challenge"):
+                raise RuntimeError("easy_proxy_probe_failed status=403")
+
+        with mock.patch.dict(
+            "os.environ", {"REGISTER_STATIC_PROXY_URL": "http://proxy.example.test:8080"},
+        ), mock.patch.object(runtime_proxy_acquire, "_proxy_runtime_config", return_value=config), \
+            mock.patch.object(runtime_proxy_acquire, "ensure_easy_proxy_env_defaults"), \
+            mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_mode", return_value="static"), \
+            mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_unique_attempts", return_value=1), \
+            mock.patch.object(runtime_proxy_acquire, "runtime_reachable_proxy_url", side_effect=lambda value: value), \
+            mock.patch.object(runtime_proxy_acquire, "_probe_flow_proxy", side_effect=challenged_probe) as probe, \
+            mock.patch.object(runtime_proxy_acquire, "json_log"):
+            with self.assertRaisesRegex(RuntimeError, "easy_proxy_checkout_failed"):
+                runtime_proxy_acquire.acquire_flow_proxy_lease(
+                    flow_name="codex_openai_account_task",
+                    probe_url="https://auth.openai.com/log-in-or-create-account",
+                    probe_expected_statuses={200}, allow_openai_auth_challenge=False,
+                )
+            self.assertEqual(1, probe.call_count)
+            for flag in (True, None):
+                with self.subTest(allow_challenge=flag):
+                    lease = runtime_proxy_acquire.acquire_flow_proxy_lease(
+                        flow_name="codex_openai_account_task",
+                        probe_url="https://auth.openai.com/log-in-or-create-account",
+                        probe_expected_statuses={200}, allow_openai_auth_challenge=flag,
+                    )
+                    self.assertEqual("static", lease.acquisition_mode)
+
+    def test_registration_preflight_rejects_failure_of_any_required_endpoint(self) -> None:
+        flow_path = Path(runtime_proxy_acquire.__file__).resolve().parents[2] / "flows" / "codex-openai-account-v1.semantic-flow.json"
+        definition = json.loads(flow_path.read_text(encoding="utf-8"))["definition"]
+        inputs = next(step["input"] for step in definition["steps"] if step["type"] == "acquire_proxy_chain")
+        config = SimpleNamespace(
+            enabled=True, required_by_default=True,
+            management_base_url="http://easy-proxy:29888", api_key="", ttl_minutes=30,
+        )
+        for failed_url in inputs["probe_urls"]:
+            def probe_endpoint(**kwargs):
+                if kwargs["probe_url"] == failed_url:
+                    raise RuntimeError("easy_proxy_probe_failed status=403")
+
+            with self.subTest(failed_url=failed_url), mock.patch.dict(
+                "os.environ", {"REGISTER_STATIC_PROXY_URL": "http://proxy.example.test:8080"},
+            ), mock.patch.object(runtime_proxy_acquire, "_proxy_runtime_config", return_value=config), \
+                mock.patch.object(runtime_proxy_acquire, "ensure_easy_proxy_env_defaults"), \
+                mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_mode", return_value="static"), \
+                mock.patch.object(runtime_proxy_acquire, "_resolve_easy_proxy_unique_attempts", return_value=1), \
+                mock.patch.object(runtime_proxy_acquire, "runtime_reachable_proxy_url", side_effect=lambda value: value), \
+                mock.patch.object(runtime_proxy_acquire, "_probe_flow_proxy", side_effect=probe_endpoint) as probe, \
+                mock.patch.object(runtime_proxy_acquire, "json_log"):
+                with self.assertRaisesRegex(RuntimeError, "easy_proxy_checkout_failed"):
+                    runtime_proxy_acquire.acquire_flow_proxy_lease(
+                        flow_name="codex_openai_account_task",
+                        probe_urls=inputs["probe_urls"], probe_expected_statuses={200},
+                        allow_openai_auth_challenge=inputs["allow_openai_auth_challenge"],
+                    )
+                self.assertEqual(3, probe.call_count)
 
     def test_static_mode_probes_and_selects_configured_proxy_without_easy_proxy_checkout(self) -> None:
         config = SimpleNamespace(

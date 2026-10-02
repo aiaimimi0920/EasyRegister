@@ -14,7 +14,7 @@ from errors import ensure_protocol_runtime_error
 from others.bootstrap import ensure_local_bundle_imports
 from others.common import json_log
 from others.config import MailboxRuntimeConfig, env_bool, env_float, env_int, env_text
-from others.local_config import read_easyemail_server_api_key
+from others.mailbox_account_risk import ACCOUNT_BAN_BLACKLIST_REASON, business_blocked_domains, normalize_domain, resolve_account_risk_domain_state_path
 from others.paths import resolve_shared_root as _shared_root_from_output_root
 
 ensure_local_bundle_imports()
@@ -30,7 +30,7 @@ from shared_mailbox.easy_email_client import (
 
 
 DEFAULT_ORCHESTRATION_HOST_ID = "python-register-orchestration"
-DEFAULT_EASY_EMAIL_BASE_URL = "http://localhost:18080"
+DEFAULT_EASY_EMAIL_BASE_URL = "http://192.168.15.200:18081"
 DEFAULT_MAILBOX_TTL_SECONDS = 1800
 DEFAULT_REGISTER_MOEMAIL_DOMAIN_POOL = (
     "sall.cc",
@@ -87,14 +87,17 @@ def _mailbox_runtime_config() -> MailboxRuntimeConfig:
 
 
 def ensure_easy_email_env_defaults() -> None:
-    base_url = str(os.environ.get("MAILBOX_SERVICE_BASE_URL") or "").strip()
-    if not base_url:
-        os.environ["MAILBOX_SERVICE_BASE_URL"] = DEFAULT_EASY_EMAIL_BASE_URL
-    api_key = str(os.environ.get("MAILBOX_SERVICE_API_KEY") or "").strip()
-    if not api_key:
-        discovered_api_key = read_easyemail_server_api_key()
-        if discovered_api_key:
-            os.environ["MAILBOX_SERVICE_API_KEY"] = discovered_api_key
+    base_url = (
+        env_text("MAILBOX_SERVICE_BASE_URL")
+        or env_text("EASY_EMAIL_BASE_URL")
+        or DEFAULT_EASY_EMAIL_BASE_URL
+    )
+    os.environ["MAILBOX_SERVICE_BASE_URL"] = base_url
+    os.environ["EASY_EMAIL_BASE_URL"] = base_url
+    api_key = env_text("MAILBOX_SERVICE_API_KEY") or env_text("EASY_EMAIL_API_KEY")
+    if api_key:
+        os.environ["MAILBOX_SERVICE_API_KEY"] = api_key
+        os.environ["EASY_EMAIL_API_KEY"] = api_key
 
 
 def resolve_mailbox_provider_selections() -> tuple[str, ...]:
@@ -525,6 +528,14 @@ def resolve_mailbox_business_key(*, business_key: str | None = None) -> str:
     return _mailbox_runtime_config().resolve_business_key(business_key)
 
 
+def _post_registration_banned_domains(*, business_key: str | None = None) -> tuple[str, ...]:
+    config = _mailbox_runtime_config()
+    return business_blocked_domains(
+        domain_state_path=resolve_account_risk_domain_state_path(config.domain_state_path),
+        business_key=config.resolve_business_key(business_key),
+    )
+
+
 def _resolve_mailbox_explicit_blacklist_domains(*, business_key: str | None = None) -> tuple[str, ...]:
     return _mailbox_runtime_config().resolve_business_policy(business_key).explicit_blacklist_domains
 
@@ -785,6 +796,8 @@ def _mailbox_provider_should_stay_excluded_under_relaxed_fallback(
 
 
 def _mailbox_domain_is_business_blacklisted(domain: str, state_payload: dict[str, Any], *, business_key: str | None = None) -> bool:
+    if normalize_domain(domain) in _post_registration_banned_domains(business_key=business_key):
+        return True
     if domain in set(_resolve_mailbox_explicit_blacklist_domains(business_key=business_key)):
         return True
     stats = _mailbox_domain_stats(domain, state_payload, business_key=business_key)
@@ -919,6 +932,11 @@ def _resolve_mailbox_excluded_domains(
         for domain in _state_mailbox_domain_keys(state_payload, business_key=business_key):
             if _mailbox_domain_is_business_blacklisted(domain, state_payload, business_key=business_key):
                 _append(domain)
+    # Account-risk blocks are business+domain scoped and do not expire with
+    # provider quality. Fallback and selected-domain exceptions cannot bypass.
+    for domain in _post_registration_banned_domains(business_key=business_key):
+        if domain not in excluded:
+            excluded.append(domain)
     return tuple(excluded)
 
 
@@ -946,6 +964,7 @@ def _resolve_mailbox_excluded_domains_for_provider(
         return excluded
     always_excluded = set(_normalize_mailbox_avoid_values(avoid_domains, kind="domain"))
     always_excluded.update(_resolve_mailbox_explicit_blacklist_domains(business_key=business_key))
+    always_excluded.update(_post_registration_banned_domains(business_key=business_key))
     state_payload = _load_mailbox_domain_state()
     return tuple(
         domain
@@ -1002,7 +1021,13 @@ def _mailbox_domain_provider(
         business_key=business_key,
     )
     provider = _normalize_mailbox_provider(str(stats.get("provider") or ""))
-    return provider or "moemail"
+    if provider:
+        return provider
+    # A cold state has no observations; retain the operator's sole provider pin.
+    configured = resolve_mailbox_provider_selections()
+    if len(configured) == 1 and configured[0] != "auto":
+        return configured[0]
+    return "moemail"
 
 
 def _select_business_mailbox_domain(
@@ -1119,15 +1144,8 @@ def _select_business_mailbox_domain_for_provider(
                 state_payload,
                 business_key=business_key,
             )
-            and _normalize_mailbox_provider(
-                str(
-                    _mailbox_domain_stats(
-                        domain,
-                        state_payload,
-                        business_key=business_key,
-                    ).get("provider")
-                    or ""
-                )
+            and _mailbox_domain_provider(
+                domain, state_payload, business_key=business_key,
             )
             == normalized_provider
         )
@@ -1277,6 +1295,15 @@ def _mailbox_domain_policy_violation(mailbox: Mailbox, *, business_key: str | No
         }
     if not domain:
         return None
+
+    if normalize_domain(domain) in _post_registration_banned_domains(business_key=resolved_business_key):
+        return {
+            "reason": ACCOUNT_BAN_BLACKLIST_REASON,
+            "business_key": resolved_business_key,
+            "provider": provider,
+            "domain": domain,
+            "email": email,
+        }
 
     state_payload = _load_mailbox_domain_state()
     explicit_blacklist = set(_resolve_mailbox_explicit_blacklist_domains(business_key=resolved_business_key))
@@ -1537,6 +1564,9 @@ def resolve_mailbox(
                 if provider != configured_provider
             )
     normalized_preallocated_email = _normalize_requested_email_address(preallocated_email)
+    if normalized_preallocated_email and (recreate_preallocated_email or not recover_preallocated_email):
+        if normalize_domain(_mailbox_domain_from_email(normalized_preallocated_email)) in _post_registration_banned_domains(business_key=resolved_business_key):
+            raise RuntimeError("mailbox_domain_excluded:" + ACCOUNT_BAN_BLACKLIST_REASON)
     if normalized_preallocated_email and recreate_preallocated_email:
         ttl_seconds = mailbox_config.ttl_seconds
         requested_local_part, _, requested_domain = normalized_preallocated_email.partition("@")

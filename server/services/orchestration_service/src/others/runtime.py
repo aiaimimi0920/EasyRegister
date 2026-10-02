@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import os
-
-from others.local_config import read_easyemail_server_api_key
 from others.runtime_mailbox import (
-    DEFAULT_EASY_EMAIL_BASE_URL,
     resolve_mailbox,
     resolve_mailbox_provider_selections,
     resolve_mailbox_routing_profile_id,
@@ -25,11 +21,6 @@ from others.runtime_proxy import (
 
 
 def ensure_easy_email_env_defaults() -> None:
-    base_url = str(os.environ.get("MAILBOX_SERVICE_BASE_URL") or "").strip()
-    if not base_url:
-        os.environ["MAILBOX_SERVICE_BASE_URL"] = DEFAULT_EASY_EMAIL_BASE_URL
-    api_key = str(os.environ.get("MAILBOX_SERVICE_API_KEY") or "").strip()
-    if not api_key:
-        discovered_api_key = read_easyemail_server_api_key()
-        if discovered_api_key:
-            os.environ["MAILBOX_SERVICE_API_KEY"] = discovered_api_key
+    from others.runtime_mailbox import ensure_easy_email_env_defaults as _ensure
+
+    _ensure()

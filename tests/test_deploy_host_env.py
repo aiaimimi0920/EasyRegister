@@ -24,6 +24,50 @@ def _read_dotenv(path: Path) -> dict[str, str]:
 
 
 class DeployHostEnvTests(unittest.TestCase):
+    def test_materialize_only_accepts_nas_service_environment(self) -> None:
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        if not powershell:
+            self.skipTest("PowerShell not available")
+        with tempfile.TemporaryDirectory(prefix="easyregister-nas-env-") as temp:
+            root = Path(temp)
+            script = root / "deploy-host.ps1"
+            shutil.copyfile(DEPLOY_HOST, script)
+            env = {
+                key: value for key, value in os.environ.items()
+                if not key.startswith(("MAILBOX_SERVICE_", "EASY_EMAIL_", "EASY_PROXY_"))
+            }
+            env.update({
+                "EASY_EMAIL_BASE_URL": "http://192.168.15.200:18081",
+                "EASY_EMAIL_API_KEY": "nas-email-test-token",
+                "EASY_PROXY_BASE_URL": "http://192.168.15.201:29888",
+                "EASY_PROXY_RUNTIME_HOST": "192.168.15.201",
+                "EASY_PROXY_MANAGEMENT_USERNAME": "easyproxy",
+                "EASY_PROXY_MANAGEMENT_PASSWORD": "nas-proxy-test-password",
+            })
+            command = [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
+                       "-RepoCacheRoot", str(REPO_ROOT), "-OutputDirHost", str(root / "output"),
+                       "-CodexFreeDirHost", str(root / "free"), "-CodexTeamDirHost", str(root / "team"),
+                       "-CodexTeamInputDirHost", str(root / "team-input"),
+                       "-CodexTeamMotherInputDirHost", str(root / "team-mother"),
+                       "-Image", "ghcr.io/example/easyregister:test", "-MaterializeOnly", "-NoBuild"]
+            result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(0, result.returncode, msg=(result.stderr or result.stdout).strip())
+            values = _read_dotenv(root / ".deploy-compose.env")
+            self.assertEqual(env["EASY_EMAIL_BASE_URL"], values["MAILBOX_SERVICE_BASE_URL"])
+            self.assertEqual(env["EASY_EMAIL_API_KEY"], values["MAILBOX_SERVICE_API_KEY"])
+            self.assertEqual(env["EASY_PROXY_MANAGEMENT_PASSWORD"], values["EASY_PROXY_MANAGEMENT_PASSWORD"])
+            self.assertNotIn(env["EASY_EMAIL_API_KEY"], result.stdout + result.stderr)
+            self.assertNotIn(env["EASY_PROXY_MANAGEMENT_PASSWORD"], result.stdout + result.stderr)
+
+            # Explicit deployment parameters retain precedence over environment injection.
+            result = subprocess.run(command + ["-MailboxServiceBaseUrl", "http://explicit-mail:8080",
+                                              "-MailboxServiceApiKey", "explicit-email-test-token"],
+                                    cwd=root, env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(0, result.returncode, msg=(result.stderr or result.stdout).strip())
+            values = _read_dotenv(root / ".deploy-compose.env")
+            self.assertEqual("http://explicit-mail:8080", values["MAILBOX_SERVICE_BASE_URL"])
+            self.assertEqual("explicit-email-test-token", values["MAILBOX_SERVICE_API_KEY"])
+
     def test_materialize_only_keeps_service_api_keys_empty_without_explicit_input(self) -> None:
         powershell = shutil.which("powershell") or shutil.which("pwsh")
         if not powershell:
@@ -74,6 +118,8 @@ class DeployHostEnvTests(unittest.TestCase):
             )
 
             env_values = _read_dotenv(launcher_root / ".deploy-compose.env")
+            self.assertEqual("http://192.168.15.200:18081", env_values.get("MAILBOX_SERVICE_BASE_URL"))
+            self.assertEqual("http://192.168.15.201:29888", env_values.get("EASY_PROXY_BASE_URL"))
             self.assertEqual("", env_values.get("MAILBOX_SERVICE_API_KEY"))
             self.assertEqual("easyproxy", env_values.get("EASY_PROXY_MANAGEMENT_USERNAME"))
             self.assertEqual("", env_values.get("EASY_PROXY_MANAGEMENT_PASSWORD"))

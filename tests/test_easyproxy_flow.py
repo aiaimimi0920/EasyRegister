@@ -77,6 +77,34 @@ class EasyProxyFlowTests(unittest.TestCase):
         self.assertEqual("https://chatgpt.com/auth/login", acquire_lease.call_args.kwargs["probe_url"])
         self.assertEqual(probe_urls, acquire_lease.call_args.kwargs["probe_urls"])
         self.assertEqual({200}, acquire_lease.call_args.kwargs["probe_expected_statuses"])
+        self.assertNotIn("allow_openai_auth_challenge", acquire_lease.call_args.kwargs)
+
+    def test_acquire_proxy_chain_preserves_explicit_challenge_policy(self) -> None:
+        policies = [
+            ({"allow_openai_auth_challenge": False}, False),
+            ({"allowOpenaiAuthChallenge": False}, False),
+            ({"allow_openai_auth_challenge": "false"}, False),
+            ({"allow_openai_auth_challenge": False, "allowOpenaiAuthChallenge": True}, False),
+            ({"allow_openai_auth_challenge": True}, True),
+            ({"allowOpenaiAuthChallenge": "true"}, True),
+        ]
+        for policy, expected in policies:
+            with self.subTest(policy=policy), mock.patch.object(
+                easyproxy_flow,
+                "acquire_flow_proxy_lease",
+                return_value=easyproxy_flow.FlowProxyLease.direct(flow_name="test"),
+            ) as acquire_lease:
+                easyproxy_flow.dispatch_easyproxy_step(
+                    step_type="acquire_proxy_chain",
+                    step_input={
+                        "probe_url": "https://auth.openai.com/log-in-or-create-account",
+                        "probe_expected_statuses": [200],
+                        **policy,
+                    },
+                )
+
+                acquire_lease.assert_called_once()
+                self.assertIs(expected, acquire_lease.call_args.kwargs.get("allow_openai_auth_challenge"))
 
     def test_acquire_proxy_chain_reuses_avoided_proxy_after_exhaustion(self) -> None:
         lease = easyproxy_flow.FlowProxyLease(

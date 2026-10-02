@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+import hmac
 import json
 import re
 import threading
+import urllib.parse
 import urllib.request
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,6 +23,27 @@ from others.dashboard_state import utcnow
 _EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _authorization_matches(header: str, token: str) -> bool:
+    if not token:
+        return False
+    scheme, _, supplied = header.partition(" ")
+    if scheme.lower() == "basic":
+        try:
+            username, separator, supplied = base64.b64decode(supplied, validate=True).decode("utf-8").partition(":")
+        except (ValueError, UnicodeError):
+            return False
+        if username != "dashboard" or not separator:
+            return False
+    elif scheme.lower() != "bearer":
+        return False
+    return hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8"))
+
+
 def _mask_email_match(match: re.Match[str]) -> str:
     local = match.group(0).partition("@")[0]
     # Artifact names embed the email after a run prefix such as
@@ -32,10 +56,8 @@ def _mask_email_match(match: re.Match[str]) -> str:
 def mask_account_emails(value: Any) -> Any:
     """Redact account emails anywhere in the dashboard payload.
 
-    /api/status has no authentication and the shipped default listens on all
-    interfaces, while artifact object keys are named after the account email.
-    Masking at the response boundary keeps the on-disk state fully detailed for
-    forensics without publishing the account list to the local network.
+    Artifact object keys contain account emails. Keep on-disk state detailed
+    while limiting the account information exposed to dashboard viewers.
     """
     if isinstance(value, str):
         return _EMAIL_PATTERN.sub(_mask_email_match, value)
@@ -95,26 +117,33 @@ class DashboardHTTPServer:
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
+                if self.path in {"/", "/index.html", "/api/status"} and not _authorization_matches(
+                    self.headers.get("Authorization", ""), server._easy_protocol_token
+                ):
+                    body = b'{"error":"unauthorized"}'
+                    self.send_response(401)
+                    self.send_header("WWW-Authenticate", 'Basic realm="Register Dashboard", charset="UTF-8"')
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 if self.path == "/" or self.path == "/index.html":
                     payload = server._render_html()
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
                     self.send_header("Content-Length", str(len(payload)))
+                    self.send_header("Cache-Control", "no-store")
                     self.end_headers()
                     self.wfile.write(payload)
                     return
                 if self.path == "/api/status":
-                    auth_header = self.headers.get('Authorization', '')
-                    if not auth_header.startswith('Bearer ') or auth_header[7:] != server._easy_protocol_token:
-                        self.send_response(401)
-                        self.send_header("Content-Type", "application/json; charset=utf-8")
-                        self.end_headers()
-                        self.wfile.write(b'{"error":"unauthorized"}')
-                        return
                     body = json.dumps(server._build_status_payload(), ensure_ascii=False, default=json_default).encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
                     self.end_headers()
                     self.wfile.write(body)
                     return
@@ -248,29 +277,26 @@ class DashboardHTTPServer:
         if base.endswith("/api/public/request"):
             base = base[: -len("/api/public/request")]
 
-        parsed = urllib.parse.urlparse(base)
-        if parsed.hostname in ('127.0.0.1', 'localhost', '::1'):
-            return {}
         try:
-            import ipaddress
-            ip = ipaddress.ip_address(parsed.hostname)
-            if ip.is_private or ip.is_loopback:
+            parsed = urllib.parse.urlsplit(base)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
                 return {}
-        except (ValueError, TypeError):
-            pass
-
-        url = base + "/api/internal/stats"
-        req = urllib.request.Request(
-            url,
-            method="GET",
-            headers={
-                "Authorization": f"Bearer {self._easy_protocol_token}",
-                "X-EasyProtocol-Actor": self._easy_protocol_actor,
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                return json.loads(resp.read().decode("utf-8", errors="replace"))
+            if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+                return {}
+            # The operator-configured service can be internal. Never forward its
+            # control credential to a target supplied by a redirect response.
+            req = urllib.request.Request(
+                base + "/api/internal/stats",
+                method="GET",
+                headers={
+                    "Authorization": f"Bearer {self._easy_protocol_token}",
+                    "X-EasyProtocol-Actor": self._easy_protocol_actor,
+                },
+            )
+            opener = urllib.request.build_opener(_NoRedirectHandler())
+            with opener.open(req, timeout=5) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+                return payload if isinstance(payload, dict) else {}
         except Exception:
             return {}
 
@@ -442,6 +468,9 @@ class DashboardHTTPServer:
     }}
     async function refresh() {{
       const response = await fetch('/api/status', {{ cache: 'no-store' }});
+      if (!response.ok) {{
+        throw new Error('Status unavailable (HTTP ' + response.status + ')');
+      }}
       const data = await response.json();
 
       const pipelines = data.pipelines || {{}};
@@ -490,8 +519,13 @@ class DashboardHTTPServer:
         </tr>
       `).join('');
     }}
-    refresh();
-    setInterval(refresh, 5000);
+    function refreshWithErrors() {{
+      refresh().catch((error) => {{
+        document.getElementById('summary').textContent = error.message;
+      }});
+    }}
+    refreshWithErrors();
+    setInterval(refreshWithErrors, 5000);
   </script>
 </body>
 </html>"""

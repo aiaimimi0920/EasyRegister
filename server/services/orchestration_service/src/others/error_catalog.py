@@ -4,6 +4,8 @@ from typing import Any
 
 
 class ErrorCodes:
+    ACCOUNT_UNAVAILABLE = "account_unavailable"
+    BROWSER_VERIFICATION_REQUIRED = "browser_verification_required"
     AUTHORIZE_CONTINUE_BLOCKED = "authorize_continue_blocked"
     AUTHORIZE_CONTINUE_RATE_LIMITED = "authorize_continue_rate_limited"
     AUTHORIZE_MISSING_LOGIN_SESSION = "authorize_missing_login_session"
@@ -32,6 +34,8 @@ class ErrorCodes:
 
 
 CODE_CATEGORY_MAP: dict[str, str] = {
+    ErrorCodes.ACCOUNT_UNAVAILABLE: "blocked",
+    ErrorCodes.BROWSER_VERIFICATION_REQUIRED: "blocked",
     ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED: "blocked",
     ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED: "blocked",
     ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION: "auth_error",
@@ -233,6 +237,16 @@ def classify_error_code(
     lowered = str(message or "").strip().lower()
     combined = " ".join(part for part in (normalized_detail, lowered) if part)
 
+    if normalized_step_key == "initialize_chatgpt_login_session" and normalized_code in {
+        "", "_failed", f"{normalized_step_key}_failed",
+        ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, ErrorCodes.INVALID_REQUEST_ERROR,
+    }:
+        # 复用风险记录器的严格上游正文判定；泛 403、引用和否定句不是账户停用证据。
+        from others.mailbox_account_risk import _explicit_account_rejection
+
+        if _explicit_account_rejection({}, str(message or "")):
+            return ErrorCodes.ACCOUNT_UNAVAILABLE
+
     if (
         "unsupported_email" in combined
         or "mailbox_email_excluded" in combined
@@ -321,6 +335,9 @@ def classify_error_code(
     )
     if normalized_code and not code_is_fallback:
         return normalized_code
+
+    if ErrorCodes.BROWSER_VERIFICATION_REQUIRED in combined:
+        return ErrorCodes.BROWSER_VERIFICATION_REQUIRED
 
     if ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING in combined:
         return ErrorCodes.FREE_PERSONAL_WORKSPACE_MISSING

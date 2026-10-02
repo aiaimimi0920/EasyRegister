@@ -92,8 +92,15 @@
 - `EasyAiMi`
 
 当前 `compose/docker-compose.yaml` 和 `compose/docker-compose.test.yaml` 都会直接挂到这个外部网络，
-这样 `EasyRegister` 才能通过容器名访问 `easy-email`、`easy-proxy`、
-`easy-protocol` 以及其他 EZ 系服务实例。
+这样 `EasyRegister` 才能通过容器名访问 `easy-email-service`、`easy-protocol` 以及其他 EZ 系服务实例。
+当前正式 EasyProxy 不在 EasyRegister 同镜像或 `easy-proxy` Docker 别名里，而是独立部署在 NAS 网关 `192.168.15.201`。
+
+`easy-email-service:8080` 只适用于 NAS 上与 `easyemail-sdk` 加入同一个 Docker 网络的容器。
+PC2 或其他主机上的同名 `EasyAiMi` 网络不会共享 NAS 的 DNS alias；跨主机必须显式设置
+`EASY_EMAIL_BASE_URL=http://192.168.15.200:18081`，并从受控密钥文件注入 `EASY_EMAIL_API_KEY`。
+运行时、compose 和部署入口现在统一默认使用这个跨主机地址；只有确定与 NAS SDK 同网络时才显式覆盖为 Docker alias。
+`deploy-host.ps1` 支持这些进程环境变量，以及 `EASY_PROXY_*` 地址和认证变量；显式脚本参数、
+bootstrap 导入值仍优先于进程环境变量。已有 bootstrap 中的旧地址需要同步替换，不能靠环境变量覆盖。
 
 并且需要提供：
 
@@ -103,10 +110,32 @@
 
 如果未显式传入环境变量，当前代码会优先尝试：
 
-- `MAILBOX_SERVICE_BASE_URL = http://localhost:18080`
-- `MAILBOX_SERVICE_API_KEY`
-  - 从当前工作树向上搜索已有的 `EmailService/deploy/EasyEmail/config.yaml`
-  - 不在 `EasyRegister` 内部单独维护一份 EasyEmail 配置
+- `MAILBOX_SERVICE_BASE_URL` / `EASY_EMAIL_BASE_URL = http://192.168.15.200:18081`
+- `MAILBOX_SERVICE_API_KEY` / `EASY_EMAIL_API_KEY`
+  - 由独立部署的 EasyEmail NAS SDK 注入 Bearer token
+  - 不再把同镜像内嵌 EasyEmail、或本地 `EmailService/deploy/EasyEmail/config.yaml` 当作正式入口
+  - 正式就绪检查是带认证的 `GET /mail/catalog`，响应必须包含 `catalog` 对象
+
+切换前可以运行 `python scripts/verify-nas-dst-services.py`。它要求显式注入
+`EASY_EMAIL_BASE_URL`、`EASY_EMAIL_API_KEY`、`EASY_PROXY_BASE_URL` 和
+`EASY_PROXY_MANAGEMENT_PASSWORD`，不会读取或输出仓库中的真实密钥。
+验证会创建短期测试邮箱和代理租约，检查邮箱查询合同以及经代理的真实 TLS 请求，并在结束时释放资源。
+输出不包含邮箱地址、正文、验证码或代理凭据。它不启动注册 worker、不购买短信，
+也不能代替目标主机上的容器切换、真实收信和完整 DST 工作流验收。
+
+更进一步的 DST 验收入口是镜像内的 `python -m nas_dst_smoke`，它通过正式 dispatcher 执行
+`nas-dependencies-smoke-v1.semantic-flow.json`：申请代理、申请邮箱、使用原样恢复数据恢复邮箱，
+最后释放原邮箱、恢复后的邮箱和代理。所有步骤及清理验证必须通过；不会执行注册、邀请、上传或短信步骤。
+例如，在调用方已经安全注入两个认证环境变量后，运行：
+
+```powershell
+docker run --rm --read-only --tmpfs /tmp -e EASY_EMAIL_API_KEY -e EASY_PROXY_MANAGEMENT_PASSWORD easy-register/easy-register:nas-dst-20260908-002 python -m nas_dst_smoke
+```
+
+该验收不传 URL，使用新 NAS 服务的默认地址。正式运行时仍保留显式 URL 覆盖能力。
+Cloudflare provider 使用 `reuse-only` / `shared-instance` 复用 NAS 已配置的 provider 实例；
+不再为它创建缺少管理恢复凭据的 dedicated instance。复用 provider 配置不等于强制复用同一邮箱地址，
+provider 管理凭据也不会下发给 EasyRegister。旧本地 EasyEmail 配置的密钥扫描回退已经移除。
 
 当前邮箱策略已经收口成“由 `EasyEmail` 决定 provider 路由”：
 
@@ -237,7 +266,7 @@ python -m infinite_runner
 
 即使操作者只单独下载这一份脚本，它也可以先自举拉取本仓所需文件，再继续完成部署。
 在 blank-host 路径下，脚本还会自动补齐：
-- `EASY_PROXY_BASE_URL=http://easy-proxy:29888`
+- `EASY_PROXY_BASE_URL=http://192.168.15.201:29888`
 - 一个本地安全的 `EASY_PROTOCOL_CONTROL_TOKEN`
 - `REGISTER_DASHBOARD_LISTEN=0.0.0.0:9790`
 - `REGISTER_DASHBOARD_ALLOW_REMOTE=true`
@@ -713,7 +742,7 @@ supervisor 还内置了两类容量兜底：
   - 读取 `EasyProtocol` internal stats 的控制面 token
   - `deploy-host.ps1` 在 blank-host 路径下会自动注入本地安全 token，避免 dashboard 因空值或 `123456` 被静默禁用
 - `EASY_PROXY_BASE_URL`
-  - 默认 `http://easy-proxy:29888`
+  - 默认 `http://192.168.15.201:29888`
 - `EASY_PROXY_MANAGEMENT_USERNAME` / `EASY_PROXY_MANAGEMENT_PASSWORD`
   - EasyProxy 管理 API 凭据；客户端先调用未认证的 `/api/auth`，再选择 canonical Basic 或 raw password 认证
   - `EASY_PROXY_API_KEY` 继续作为管理密码的旧名称兼容

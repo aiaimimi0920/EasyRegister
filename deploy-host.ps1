@@ -16,7 +16,7 @@ param(
     [string]$ProtocolOutputMirrorContainerPath = "/shared/protocol-register-output",
     [string]$ProtocolBridgeSubdir = "easyregister-bridge",
     [string]$ProtocolBridgeDockerVolume = "",
-    [string]$MailboxServiceBaseUrl = "http://easy-email:8080",
+    [string]$MailboxServiceBaseUrl = "http://192.168.15.200:18081",
     [string]$MailboxServiceApiKey = "",
     [string]$MailboxDomainPool = "",
     [string]$MailboxDomainBlacklist = "",
@@ -45,8 +45,8 @@ param(
     [string]$SmsSelectionMode = "",
     [string]$SmsBusinessPoliciesJson = "",
     [string]$SmsTerminalInvalidPhoneBlacklistSeconds = "",
-    [string]$EasyProxyBaseUrl = "http://easy-proxy:29888",
-    [string]$EasyProxyRuntimeHost = "easy-proxy",
+    [string]$EasyProxyBaseUrl = "http://192.168.15.201:29888",
+    [string]$EasyProxyRuntimeHost = "192.168.15.201",
     [string]$EasyProxyManagementUsername = "easyproxy",
     [string]$EasyProxyManagementPassword = "",
     [string]$EasyProxyApiKey = "",
@@ -123,7 +123,7 @@ foreach ($entry in $PSBoundParameters.GetEnumerator()) {
     $deployBoundParameters[[string]$entry.Key] = $true
 }
 
-$defaultEasyProxyBaseUrl = "http://easy-proxy:29888"
+$defaultEasyProxyBaseUrl = "http://192.168.15.201:29888"
 $defaultDashboardEnabled = "true"
 $defaultDashboardControlToken = "easyregister-dashboard-local-token"
 $defaultDashboardListen = "0.0.0.0:9790"
@@ -860,7 +860,9 @@ function Resolve-EnvValue {
         [Parameter(Mandatory = $true)]
         [string]$RuntimeKey,
         [string]$Fallback = '',
-        [switch]$UseFallbackWhenBlank
+        [switch]$UseFallbackWhenBlank,
+        [string[]]$RuntimeAliases = @(),
+        [switch]$ReadProcessEnvironment
     )
 
     if ($deployBoundParameters.ContainsKey($ParameterName)) {
@@ -870,18 +872,30 @@ function Resolve-EnvValue {
         }
         return $value
     }
-    if ($importedRuntimeValues.ContainsKey($RuntimeKey)) {
-        $value = [string]$importedRuntimeValues[$RuntimeKey]
-        if ($UseFallbackWhenBlank -and [string]::IsNullOrWhiteSpace($value)) {
-            return $Fallback
+    $runtimeKeys = @($RuntimeKey) + $RuntimeAliases
+    foreach ($key in $runtimeKeys) {
+        if ($importedRuntimeValues.ContainsKey($key)) {
+            $value = [string]$importedRuntimeValues[$key]
+            if ($UseFallbackWhenBlank -and [string]::IsNullOrWhiteSpace($value)) {
+                return $Fallback
+            }
+            return $value
         }
-        return $value
+    }
+    # Opt in only external service settings; do not alter scheduler defaults.
+    if ($ReadProcessEnvironment) {
+        foreach ($key in $runtimeKeys) {
+            $value = [Environment]::GetEnvironmentVariable($key, 'Process')
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                return $value
+            }
+        }
     }
     return $Fallback
 }
 
-$resolvedMailboxServiceBaseUrl = Resolve-EnvValue -ParameterName 'MailboxServiceBaseUrl' -RuntimeKey 'MAILBOX_SERVICE_BASE_URL' -Fallback 'http://easy-email:8080'
-$resolvedMailboxServiceApiKey = Resolve-EnvValue -ParameterName 'MailboxServiceApiKey' -RuntimeKey 'MAILBOX_SERVICE_API_KEY' -Fallback ''
+$resolvedMailboxServiceBaseUrl = Resolve-EnvValue -ParameterName 'MailboxServiceBaseUrl' -RuntimeKey 'MAILBOX_SERVICE_BASE_URL' -RuntimeAliases @('EASY_EMAIL_BASE_URL') -ReadProcessEnvironment -Fallback 'http://192.168.15.200:18081'
+$resolvedMailboxServiceApiKey = Resolve-EnvValue -ParameterName 'MailboxServiceApiKey' -RuntimeKey 'MAILBOX_SERVICE_API_KEY' -RuntimeAliases @('EASY_EMAIL_API_KEY') -ReadProcessEnvironment -Fallback ''
 $resolvedMailboxDomainPool = Resolve-EnvValue -ParameterName 'MailboxDomainPool' -RuntimeKey 'REGISTER_MAILBOX_DOMAIN_POOL' -Fallback ''
 $resolvedMailboxDomainBlacklist = Resolve-EnvValue -ParameterName 'MailboxDomainBlacklist' -RuntimeKey 'REGISTER_MAILBOX_DOMAIN_BLACKLIST' -Fallback $defaultMailboxDomainBlacklistCsv
 $resolvedMailboxProviderBlacklist = Resolve-EnvValue -ParameterName 'MailboxProviderBlacklist' -RuntimeKey 'REGISTER_MAILBOX_PROVIDER_BLACKLIST' -Fallback $defaultMailboxProviderBlacklistCsv
@@ -908,11 +922,11 @@ $resolvedSmsCountryCodes = Resolve-EnvValue -ParameterName 'SmsCountryCodes' -Ru
 $resolvedSmsSelectionMode = Resolve-EnvValue -ParameterName 'SmsSelectionMode' -RuntimeKey 'REGISTER_SMS_SELECTION_MODE' -Fallback $defaultSmsSelectionMode -UseFallbackWhenBlank
 $resolvedSmsBusinessPoliciesJson = Resolve-EnvValue -ParameterName 'SmsBusinessPoliciesJson' -RuntimeKey 'REGISTER_SMS_BUSINESS_POLICIES_JSON' -Fallback $defaultSmsBusinessPoliciesJson -UseFallbackWhenBlank
 $resolvedSmsTerminalInvalidPhoneBlacklistSeconds = Resolve-EnvValue -ParameterName 'SmsTerminalInvalidPhoneBlacklistSeconds' -RuntimeKey 'REGISTER_SMS_TERMINAL_INVALID_PHONE_BLACKLIST_SECONDS' -Fallback $defaultSmsTerminalInvalidPhoneBlacklistSeconds -UseFallbackWhenBlank
-$resolvedEasyProxyBaseUrl = Resolve-EnvValue -ParameterName 'EasyProxyBaseUrl' -RuntimeKey 'EASY_PROXY_BASE_URL' -Fallback 'http://easy-proxy:29888'
-$resolvedEasyProxyRuntimeHost = Resolve-EnvValue -ParameterName 'EasyProxyRuntimeHost' -RuntimeKey 'EASY_PROXY_RUNTIME_HOST' -Fallback 'easy-proxy' -UseFallbackWhenBlank
-$resolvedEasyProxyApiKey = Resolve-EnvValue -ParameterName 'EasyProxyApiKey' -RuntimeKey 'EASY_PROXY_API_KEY' -Fallback ''
-$resolvedEasyProxyManagementUsername = Resolve-EnvValue -ParameterName 'EasyProxyManagementUsername' -RuntimeKey 'EASY_PROXY_MANAGEMENT_USERNAME' -Fallback 'easyproxy' -UseFallbackWhenBlank
-$resolvedEasyProxyManagementPassword = Resolve-EnvValue -ParameterName 'EasyProxyManagementPassword' -RuntimeKey 'EASY_PROXY_MANAGEMENT_PASSWORD' -Fallback $resolvedEasyProxyApiKey
+$resolvedEasyProxyBaseUrl = Resolve-EnvValue -ParameterName 'EasyProxyBaseUrl' -RuntimeKey 'EASY_PROXY_BASE_URL' -ReadProcessEnvironment -Fallback 'http://192.168.15.201:29888'
+$resolvedEasyProxyRuntimeHost = Resolve-EnvValue -ParameterName 'EasyProxyRuntimeHost' -RuntimeKey 'EASY_PROXY_RUNTIME_HOST' -ReadProcessEnvironment -Fallback '192.168.15.201' -UseFallbackWhenBlank
+$resolvedEasyProxyApiKey = Resolve-EnvValue -ParameterName 'EasyProxyApiKey' -RuntimeKey 'EASY_PROXY_API_KEY' -ReadProcessEnvironment -Fallback ''
+$resolvedEasyProxyManagementUsername = Resolve-EnvValue -ParameterName 'EasyProxyManagementUsername' -RuntimeKey 'EASY_PROXY_MANAGEMENT_USERNAME' -ReadProcessEnvironment -Fallback 'easyproxy' -UseFallbackWhenBlank
+$resolvedEasyProxyManagementPassword = Resolve-EnvValue -ParameterName 'EasyProxyManagementPassword' -RuntimeKey 'EASY_PROXY_MANAGEMENT_PASSWORD' -ReadProcessEnvironment -Fallback $resolvedEasyProxyApiKey
 $resolvedWorkerCount = Resolve-EnvValue -ParameterName 'WorkerCount' -RuntimeKey 'REGISTER_WORKER_COUNT' -Fallback '10'
 $resolvedMainConcurrencyLimit = Resolve-EnvValue -ParameterName 'MainConcurrencyLimit' -RuntimeKey 'REGISTER_MAIN_CONCURRENCY_LIMIT' -Fallback '5'
 $resolvedContinueConcurrencyLimit = Resolve-EnvValue -ParameterName 'ContinueConcurrencyLimit' -RuntimeKey 'REGISTER_CONTINUE_CONCURRENCY_LIMIT' -Fallback '2'

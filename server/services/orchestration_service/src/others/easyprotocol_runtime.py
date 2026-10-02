@@ -13,6 +13,7 @@ from typing import Any
 
 from others import runtime_sms
 from others.common import json_log
+from others.error_runtime import ProtocolRuntimeError
 from others.config_env import (
     account_audit_protocol_timeout_seconds as _account_audit_protocol_timeout_seconds,
 )
@@ -646,6 +647,26 @@ def _load_latest_phone_wall_artifact_payload(step_input: dict[str, Any]) -> dict
     return None
 
 
+def _easyprotocol_response_error(payload: object, *, fallback: str) -> RuntimeError:
+    if not isinstance(payload, dict):
+        return RuntimeError(fallback)
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return RuntimeError(str(error or payload.get("message") or fallback).strip() or fallback)
+    message = str(error.get("message") or fallback).strip() or fallback
+    details = error.get("details")
+    protocol_error = details.get("protocol_error") if isinstance(details, dict) else None
+    if isinstance(protocol_error, dict):
+        return ProtocolRuntimeError(
+            str(protocol_error.get("error") or message),
+            stage=str(protocol_error.get("stage") or "stage_other"),
+            detail=str(protocol_error.get("detail") or "runtime_error"),
+            category=str(protocol_error.get("category") or ""),
+            code=str(protocol_error.get("code") or ""),
+        )
+    return RuntimeError(message)
+
+
 def invoke_easyprotocol(
     *,
     step_type: str,
@@ -685,8 +706,7 @@ def invoke_easyprotocol(
             parsed = json.loads(raw)
         except Exception:
             raise RuntimeError(f"easyprotocol_http_{exc.code}")
-        message = str(parsed.get("error") or parsed.get("message") or f"easyprotocol_http_{exc.code}").strip()
-        raise RuntimeError(message or f"easyprotocol_http_{exc.code}")
+        raise _easyprotocol_response_error(parsed, fallback=f"easyprotocol_http_{exc.code}") from exc
     except Exception as exc:
         raise RuntimeError(f"easyprotocol_transport_failed:{exc}") from exc
 
@@ -696,9 +716,7 @@ def invoke_easyprotocol(
         raise RuntimeError(f"easyprotocol_invalid_json:{exc}") from exc
 
     if str(payload.get("status") or "").strip().lower() == "failed":
-        error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
-        message = str(error.get("message") or "").strip() or "easyprotocol_failed"
-        raise RuntimeError(message)
+        raise _easyprotocol_response_error(payload, fallback="easyprotocol_failed")
 
     result = payload.get("result")
     if not isinstance(result, dict):

@@ -639,6 +639,7 @@ def validate_free_personal_oauth(*, step_input: dict[str, Any]) -> dict[str, Any
             "organizations": organizations,
         }
 
+    # Phone verification progress cannot replace the required personal OAuth claims.
     oauth_result_dict = oauth_result if isinstance(oauth_result, dict) else {}
     terminal_code = str(oauth_result_dict.get("phoneVerificationTerminalCode") or "").strip()
     if bool(oauth_result_dict.get("phoneVerificationTerminal")) and terminal_code in {
@@ -647,7 +648,7 @@ def validate_free_personal_oauth(*, step_input: dict[str, Any]) -> dict[str, Any
         "rate_limit_exceeded",
     }:
         return {
-            "ok": True,
+            "ok": False,
             "status": "phone_verification_terminal_small_success",
             "code": terminal_code,
             "detail": "phone_verification_terminal_small_success",
@@ -664,7 +665,7 @@ def validate_free_personal_oauth(*, step_input: dict[str, Any]) -> dict[str, Any
         }
     if bool(oauth_result_dict.get("phoneVerificationSubmitted")):
         return {
-            "ok": True,
+            "ok": False,
             "status": "phone_verification_submitted_small_success",
             "code": "phone_verification_submitted_small_success",
             "detail": "phone_verification_submitted_small_success",
@@ -682,7 +683,7 @@ def validate_free_personal_oauth(*, step_input: dict[str, Any]) -> dict[str, Any
         }
     if bool(oauth_result_dict.get("phoneVerificationAttempted")):
         return {
-            "ok": True,
+            "ok": False,
             "status": "phone_verification_attempted_small_success",
             "code": ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS,
             "detail": "phone_verification_attempted_small_success",

@@ -1,5 +1,9 @@
 # PC2 EasyEmail investigation, 2026-09-08
 
+The subsequent message-ID collision repair, current deployed image, disk-state
+verification, and remaining business failures are recorded in
+[the 2026-09-11 follow-up](pc2-easyemail-message-identity-2026-09-11.md).
+
 ## Latest outcome: transport recovery deployed at 11:50 UTC
 
 New production diagnostics identified NAS-to-upstream connection timeouts and

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import ipaddress
 import json
 import os
@@ -15,7 +16,7 @@ from typing import Any
 
 
 EASY_PROXY_BASE_URL = (
-    os.environ.get("EASY_PROXY_BASE_URL") or "http://127.0.0.1:29888"
+    os.environ.get("EASY_PROXY_BASE_URL") or "http://192.168.15.201:29888"
 ).strip()
 EASY_PROXY_API_KEY = (
     os.environ.get("EASY_PROXY_MANAGEMENT_PASSWORD")
@@ -198,7 +199,7 @@ def _management_headers(
     credential: str | None = None,
 ) -> dict[str, str]:
     discovery = discovery if discovery is not None else _discover_management_auth(base_url, opener)
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "Accept-Encoding": "gzip"}
     if bool(discovery.get("no_password")):
         return headers
     effective_key = (credential if credential is not None else (api_key or EASY_PROXY_API_KEY)).strip()
@@ -268,7 +269,11 @@ def _api_request(
     api_key: str = "",
     wait_for_ready: bool = True,
 ) -> dict[str, Any]:
-    effective_base = (base_url or EASY_PROXY_BASE_URL).rstrip("/")
+    effective_base = (
+        base_url.strip()
+        or str(os.environ.get("EASY_PROXY_BASE_URL") or "").strip()
+        or EASY_PROXY_BASE_URL
+    ).rstrip("/")
     if wait_for_ready and _should_wait_for_easy_proxy(path):
         _wait_easy_proxy_ready(effective_base, api_key=api_key)
     url = f"{effective_base}{path}"
@@ -297,7 +302,10 @@ def _api_request(
 
 def _read_json_response(opener: urllib.request.OpenerDirector, req: urllib.request.Request) -> dict[str, Any]:
     with opener.open(req, timeout=_resolve_api_timeout_seconds()) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        body = resp.read()
+        if str(resp.headers.get("Content-Encoding") or "").strip().lower() == "gzip":
+            body = gzip.decompress(body)
+        return json.loads(body.decode("utf-8"))
 
 
 def _should_wait_for_easy_proxy(path: str) -> bool:
@@ -428,6 +436,7 @@ def checkout_proxy(
         "bindingMode": "shared-instance",
         "protocol": "http",
         "ttlMinutes": ttl_minutes or EASY_PROXY_TTL_MINUTES,
+        "requireDedicatedNode": require_dedicated_node,
         "metadata": metadata or {"source": "python-protocol-buy-service"},
     }
     result: dict[str, Any] | None = None
@@ -566,6 +575,8 @@ def checkout_random_node_proxy(
     excluded_proxy_urls: set[str] | None = None,
 ) -> dict[str, Any]:
     settings = get_settings(base_url=base_url, api_key=api_key)
+    if str(settings.get("mode") or "").strip().lower() == "pool":
+        raise RuntimeError("EasyProxy random node checkout requires per-node listeners; use strict lease checkout in pool mode")
     nodes = list_available_nodes(base_url=base_url, api_key=api_key, only_available=True, prefer_available=True)
     if not nodes:
         raise RuntimeError("EasyProxy random node checkout found no available nodes")
@@ -603,6 +614,8 @@ def checkout_random_node_proxy(
     host = _resolve_runtime_host(base_url=base_url, runtime_host=runtime_host)
 
     for node in candidates:
+        if str(node.get("mode") or "").strip().lower() == "pool":
+            continue
         try:
             port = int(node.get("port") or 0)
         except Exception:
@@ -781,6 +794,21 @@ def _validate_checkout_lease(
     selected_mode = str(metadata.get("selectedNodeMode") or "").strip().lower()
     selected_port = _coerce_port(metadata.get("selectedNodePort") or lease.get("port"))
     lease_port = _coerce_port(lease.get("port"))
+    if selected_mode == "pinned-node":
+        selected_tag = str(metadata.get("selectedNodeTag") or "").strip()
+        parsed = urllib.parse.urlsplit(str(lease.get("proxyUrl") or ""))
+        tokens = urllib.parse.unquote(parsed.username or "").split("+")[1:]
+        strict_tags = [token[len("pin-strict="):] for token in tokens if token.startswith("pin-strict=")]
+        if (
+            not selected_tag
+            or strict_tags != [selected_tag]
+            or "nosplit" not in tokens
+            or selected_port <= 0
+            or selected_port != lease_port
+            or parsed.port != lease_port
+        ):
+            raise RuntimeError("EasyProxy checkout returned invalid strict node binding")
+        return
     if selected_mode and selected_mode != "dedicated-node":
         raise RuntimeError(
             f"EasyProxy checkout returned non-dedicated route: {selected_mode or 'unknown'}"

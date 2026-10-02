@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from others.dst_flow_support import step_always_run
 from others.dst_flow_support import step_error_details
 from others.dst_flow_support import step_output_ok
 from others.dst_flow_support import step_retry_policy
+from others.mailbox_account_risk import account_risk_output_scope, resolve_account_risk_domain_state_path
 
 
 def _normalize_mailbox_provider(provider: Any) -> str:
@@ -488,6 +490,11 @@ def should_retry_step(*, statement: DstStatement, error_details: dict[str, Any],
     if attempt_index >= max_attempts:
         return False
     error_code = str(error_details.get("code") or "").strip().lower()
+    if (
+        error_code in {ErrorCodes.BROWSER_VERIFICATION_REQUIRED, ErrorCodes.ACCOUNT_UNAVAILABLE}
+        or error_details.get("detail") == "email_otp_resend"
+    ):
+        return False
     if str(statement.step_type or "").strip() == "obtain_codex_oauth" and error_code in {
         ErrorCodes.PHONE_VERIFICATION_ATTEMPTED_SMALL_SUCCESS,
         ErrorCodes.PHONE_VERIFICATION_SUBMITTED_SMALL_SUCCESS,
@@ -838,6 +845,11 @@ def should_retry_task(
 ) -> bool:
     if attempt_index >= task_retry_max_attempts(plan, override):
         return False
+    if (
+        str(error_details.get("code") or "").strip().lower() in {ErrorCodes.BROWSER_VERIFICATION_REQUIRED, ErrorCodes.ACCOUNT_UNAVAILABLE}
+        or error_details.get("detail") == "email_otp_resend"
+    ):
+        return False
     retry = task_retry_policy(plan)
     retry_steps = retry.get("retryOnSteps")
     if isinstance(retry_steps, list) and retry_steps:
@@ -863,6 +875,7 @@ def _defer_cleanup_for_task_retry(*, statement: DstStatement, state: dict[str, A
     return bool(task.get("willRetry"))
 
 
+@account_risk_output_scope
 def run_dst_flow_once(
     *,
     output_dir: str | None = None,
@@ -913,6 +926,7 @@ def run_dst_flow_once(
         "flowPath": resolved_flow_path,
         "platform": str(plan.platform or "").strip(),
         "mailboxBusinessKey": resolved_mailbox_business_key,
+        "accountRiskDomainStatePath": str(resolve_account_risk_domain_state_path(Path.cwd() / "others" / "register-mailbox-domain-state.json")),
         "inputSourceDir": str(input_source_dir or env_config.input_source_dir or "").strip(),
         "inputClaimsDir": str(input_claims_dir or env_config.input_claims_dir or "").strip(),
         "loginEntryUrl": str(login_entry_url or env_config.login_entry_url or "").strip(),
@@ -1028,6 +1042,7 @@ def run_dst_flow_once(
             task_context={
                 **base_task_context,
                 "taskAttempt": task_attempt,
+                "accountRiskObservationId": uuid.uuid4().hex,
             },
         )
         flow_failed = False
@@ -1144,6 +1159,18 @@ def run_dst_flow_once(
                         flow_failed = True
                     break
         result.ok = not flow_failed
+        # Observe each completed task attempt, including standalone canaries.
+        # The recorder deduplicates accounts; the supervisor can report the
+        # same result without multiplying the post-registration ban streak.
+        from others.runner_mailbox import record_post_registration_account_domain_outcome
+        from others.paths import resolve_shared_root
+
+        account_risk_outcome = record_post_registration_account_domain_outcome(
+            shared_root=resolve_shared_root(str(os.environ.get("REGISTER_OUTPUT_ROOT") or Path.cwd())),
+            result_payload_value=result.to_dict(),
+        )
+        if account_risk_outcome:
+            result.outputs["post-registration-account-domain-outcome"] = account_risk_outcome
         last_result = result
         if result.ok:
             return result

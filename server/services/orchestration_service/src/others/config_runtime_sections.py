@@ -756,6 +756,7 @@ class MailboxRuntimeConfig:
     blacklist_min_attempts: int
     blacklist_failure_rate_percent: float
     consecutive_failure_blacklist_threshold: int
+    post_registration_ban_threshold: int = 5
 
     @classmethod
     def from_env(
@@ -801,6 +802,9 @@ class MailboxRuntimeConfig:
                     "REGISTER_MAILBOX_DOMAIN_CONSECUTIVE_FAILURE_BLACKLIST_THRESHOLD",
                     default_consecutive_failure_blacklist_threshold,
                 ),
+            ),
+            post_registration_ban_threshold=max(
+                1, env_int("REGISTER_MAILBOX_DOMAIN_POST_REGISTRATION_BAN_THRESHOLD", 5),
             ),
         )
 
@@ -976,18 +980,20 @@ class SmsRuntimeConfig:
         resolved_country_id = policy.country_id if policy.country_id is not None else self.country_id
         resolved_max_price = policy.max_price if policy.max_price is not None else self.max_price
         resolved_business_key = business_key or policy.business_key
+        resolved_allow_paid = self.allow_paid and policy.allow_paid
         if (
             resolved_business_key == policy.business_key
             and resolved_country_codes == policy.country_codes
             and resolved_country_id == policy.country_id
             and resolved_max_price == policy.max_price
+            and resolved_allow_paid == policy.allow_paid
         ):
             return policy
         return SmsBusinessPolicy(
             business_key=resolved_business_key,
             enabled=policy.enabled,
             explicit_blacklist_providers=policy.explicit_blacklist_providers,
-            allow_paid=policy.allow_paid,
+            allow_paid=resolved_allow_paid,
             allow_reuse=policy.allow_reuse,
             max_bindings_per_phone=policy.max_bindings_per_phone,
             country_codes=resolved_country_codes,
@@ -1009,7 +1015,11 @@ class SmsRuntimeConfig:
                 )
         return SmsBusinessPolicy(
             business_key=resolved_business_key,
-            enabled=False,
+            # The global SMS settings are the opt-in switch when no
+            # business-specific policy map was supplied.  Leaving this false
+            # made REGISTER_SMS_ALLOW_PAID=true ineffective in compose
+            # deployments that omitted REGISTER_SMS_BUSINESS_POLICIES_JSON.
+            enabled=True,
             explicit_blacklist_providers=self.explicit_blacklist_providers,
             allow_paid=self.allow_paid,
             allow_reuse=self.allow_reuse,

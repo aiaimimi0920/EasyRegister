@@ -165,7 +165,10 @@ def extra_failure_cooldown_seconds(*, result: Any) -> float:
             return cleanup_config.sms_no_selection_cooldown_seconds
         if result_error_matches(payload, ErrorCodes.AUTHORIZE_CONTINUE_RATE_LIMITED, step_id=error_step):
             return cleanup_config.oauth_rate_limit_cooldown_seconds
-        if result_error_matches(payload, ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, step_id=error_step):
+        if result_error_matches(
+            payload, ErrorCodes.AUTHORIZE_CONTINUE_BLOCKED, ErrorCodes.BROWSER_VERIFICATION_REQUIRED,
+            step_id=error_step,
+        ):
             return cleanup_config.oauth_blocked_cooldown_seconds
         if result_error_matches(payload, ErrorCodes.AUTHORIZE_MISSING_LOGIN_SESSION, step_id=error_step):
             return cleanup_config.oauth_missing_session_cooldown_seconds

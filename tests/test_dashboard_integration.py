@@ -94,7 +94,11 @@ class DashboardIntegrationTests(unittest.TestCase):
                 server.start()
                 try:
                     port = int(server._httpd.server_address[1])
-                    with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=5) as response:
+                    request = urllib.request.Request(
+                        f"http://127.0.0.1:{port}/api/status",
+                        headers={"Authorization": "Bearer secure-token"},
+                    )
+                    with urllib.request.urlopen(request, timeout=5) as response:
                         payload = json.loads(response.read().decode("utf-8"))
                 finally:
                     server.stop()
@@ -131,7 +135,11 @@ class DashboardIntegrationTests(unittest.TestCase):
                 server.start()
                 try:
                     port = int(server._httpd.server_address[1])
-                    with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
+                    request = urllib.request.Request(
+                        f"http://127.0.0.1:{port}/",
+                        headers={"Authorization": "Bearer secure-token"},
+                    )
+                    with urllib.request.urlopen(request, timeout=5) as response:
                         page = response.read().decode("utf-8")
                 finally:
                     server.stop()
@@ -148,8 +156,7 @@ class DashboardIntegrationTests(unittest.TestCase):
             self.assertNotIn(fragment, page, f"unescaped interpolation still present: {fragment}")
 
     def test_dashboard_status_masks_account_emails_in_object_keys(self) -> None:
-        """The status endpoint is unauthenticated and listens on 0.0.0.0 by default,
-        so object keys must not publish the account emails they are named after."""
+        """Authenticated status responses still redact emails in artifact names."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_root = Path(tmp_dir) / "shared"
             output_root = Path(tmp_dir) / "output"
@@ -193,7 +200,11 @@ class DashboardIntegrationTests(unittest.TestCase):
                 server.start()
                 try:
                     port = int(server._httpd.server_address[1])
-                    with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=5) as response:
+                    request = urllib.request.Request(
+                        f"http://127.0.0.1:{port}/api/status",
+                        headers={"Authorization": "Bearer secure-token"},
+                    )
+                    with urllib.request.urlopen(request, timeout=5) as response:
                         raw = response.read().decode("utf-8")
                 finally:
                     server.stop()

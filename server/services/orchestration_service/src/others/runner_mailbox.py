@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,8 +12,10 @@ from errors import ErrorCodes, result_error_matches, result_error_message
 from others.bootstrap import ensure_local_bundle_imports
 from others.common import ensure_directory
 from others.common_runtime import validate_openai_oauth_seed_payload
+from others.artifact_pool_claim_recovery import load_openai_oauth_seed_validation
 from others.config import CleanupRuntimeConfig, MailboxRuntimeConfig, env_float, env_int
 from others.file_lock import release_lock, try_acquire_lock
+from others.mailbox_account_risk import post_registration_account_verdict, record_account_verdict, resolve_account_risk_domain_state_path
 from others.result_artifacts import FREE_OPENAI_OAUTH_SOURCE_CANDIDATES, all_output_texts, output_dict
 
 ensure_local_bundle_imports()
@@ -695,8 +698,13 @@ def extract_mailbox_business_outcome_context(*, result_payload_value: dict[str, 
         outputs = {}
     mailbox_output = outputs.get("acquire-mailbox")
     mailbox_output = mailbox_output if isinstance(mailbox_output, dict) else {}
-    create_output = outputs.get("create-openai-account")
-    create_output = create_output if isinstance(create_output, dict) else {}
+    create_output = next(
+        (outputs[key] for key in (
+            "create-openai-account", "create_openai_account", "account-registration",
+            "register-account", "create-account", "acquire-openai-oauth-artifact",
+        ) if isinstance(outputs.get(key), dict)),
+        {},
+    )
     failure_text = _mailbox_result_error_text(result_payload_value=result_payload_value)
     email = str(
         mailbox_output.get("email")
@@ -1017,6 +1025,76 @@ def _record_mailbox_attempt_outcomes(
     return recorded
 
 
+def _post_registration_account_is_proven(
+    *, result_payload_value: dict[str, Any], context: dict[str, str],
+) -> bool:
+    email = str(context.get("email") or "").strip().lower()
+    if not email:
+        return False
+    steps = result_payload_value.get("steps")
+    steps = steps if isinstance(steps, dict) else {}
+    for step_id in ("account-registration", "register-account", "create-account", "create-openai-account", "create_openai_account"):
+        output = output_dict(result_payload_value, step_id)
+        if str(output.get("email") or "").strip().lower() != email:
+            continue
+        if steps.get(step_id) != "ok":
+            continue
+        status = str(output.get("status") or output.get("outcome") or "").strip().lower()
+        page_type = str(output.get("page_type") or output.get("pageType") or "").strip().lower()
+        if status in {"registered", "completed"} or (
+            status == "small_success" and page_type in {"platform_callback", "platform_welcome", "chatgpt_callback", "registered"}
+        ):
+            return True
+    # Continued runs have no create step. Bind their preserved registration
+    # evidence to this account; do not infer registration from a generic 403.
+    for path_text in all_output_texts(result_payload_value, FREE_OPENAI_OAUTH_SOURCE_CANDIDATES):
+        valid, _, artifact = load_openai_oauth_seed_validation(
+            Path(path_text), enforce_max_age=False, allow_protocol_small_seed=True,
+        )
+        if not isinstance(artifact, dict) or str(artifact.get("email") or "").strip().lower() != email:
+            continue
+        full_valid, _ = validate_openai_oauth_seed_payload(artifact, enforce_max_age=False)
+        if not full_valid and str(artifact.get("source") or "").lower() == "protocol_small_success":
+            page_type = str(artifact.get("page_type") or artifact.get("pageType") or "").strip().lower()
+            valid = valid and page_type in {"platform_callback", "platform_welcome", "chatgpt_callback", "registered"}
+        if valid:
+            return True
+    return False
+
+
+def record_post_registration_account_domain_outcome(
+    *, shared_root: Path, result_payload_value: dict[str, Any],
+) -> dict[str, Any] | None:
+    context = extract_mailbox_business_outcome_context(result_payload_value=result_payload_value)
+    email = str(context.get("email") or "").strip().lower()
+    verdict = post_registration_account_verdict(
+        result_payload_value, email=email,
+        mailbox_ref=context.get("mailbox_ref", ""), mailbox_session_id=context.get("mailbox_session_id", ""),
+    )
+    if not verdict or not _post_registration_account_is_proven(result_payload_value=result_payload_value, context=context):
+        return None
+    config = _mailbox_runtime_config(shared_root=shared_root)
+    task_context = result_payload_value.get("taskContext")
+    task_context = task_context if isinstance(task_context, dict) else {}
+    observation_id = str(task_context.get("accountRiskObservationId") or "").strip()
+    if not observation_id:
+        # Legacy/manual callers have no attempt ID. Remove our derived output
+        # so repeated reporting of the same saved result remains idempotent.
+        observation = dict(result_payload_value)
+        observation["outputs"] = {
+            key: value for key, value in (result_payload_value.get("outputs") or {}).items()
+            if key != "post-registration-account-domain-outcome"
+        }
+        observation_id = hashlib.sha256(json.dumps(observation, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return record_account_verdict(
+        domain_state_path=resolve_account_risk_domain_state_path(
+            config.domain_state_path, preserved_path=str(task_context.get("accountRiskDomainStatePath") or ""),
+        ),
+        business_key=config.resolve_business_key(context.get("business_key")),
+        email=email, verdict=verdict, threshold=config.post_registration_ban_threshold, observation_id=observation_id,
+    )
+
+
 def record_business_mailbox_domain_outcome(
     *,
     shared_root: Path,
@@ -1027,6 +1105,9 @@ def record_business_mailbox_domain_outcome(
     normalized_role = str(instance_role or "").strip().lower()
     if normalized_role not in {"main", "continue"}:
         return None
+    account_risk_outcome = record_post_registration_account_domain_outcome(
+        shared_root=shared_root, result_payload_value=result_payload_value,
+    )
     attempt_outcomes = (
         _record_mailbox_attempt_outcomes(
             shared_root=shared_root,
@@ -1059,6 +1140,7 @@ def record_business_mailbox_domain_outcome(
             "domain": domain,
             "email": email,
             "statePath": str(mailbox_domain_stats_path(shared_root=shared_root)),
+            "postRegistrationAccountRisk": account_risk_outcome,
         }
 
     payload = load_mailbox_domain_stats_state(shared_root=shared_root)
@@ -1276,6 +1358,7 @@ def record_business_mailbox_domain_outcome(
         "failureRateThreshold": failure_rate_threshold,
         "consecutiveFailureThreshold": threshold,
         "statePath": str(mailbox_domain_stats_path(shared_root=shared_root)),
+        "postRegistrationAccountRisk": account_risk_outcome,
     }
     if attempt_outcomes:
         outcome["attemptOutcomes"] = attempt_outcomes
